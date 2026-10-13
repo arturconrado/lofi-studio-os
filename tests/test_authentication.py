@@ -156,3 +156,26 @@ def test_membership_last_owner_and_workspace_switch(client):
     assert client.post('/api/auth/workspace',json={'workspace_id':owner['workspace_id']},headers={'X-CSRF-Token':member['csrf_token']}).status_code==200
     assert client.get('/api/auth/me').json()['role']=='viewer'
     assert client.get('/api/auth/members').status_code==403
+
+
+def test_new_workspace_empty_and_legacy_preserved(client):
+    from studio.core import db, init_db
+    from studio.tenancy import WORKSPACE
+    legacy = client.get('/api/tracks',auth=('legacy-admin','legacy-local-test-password')).json()
+    assert legacy
+    _,identity=signup(client)
+    assert client.get('/api/tracks').json()==[]
+    token=WORKSPACE.set(identity['workspace_id'])
+    try:
+        init_db()  # Worker restart must not reintroduce demonstration content.
+        with db() as c:
+            for table in ('tracks','assets','jobs','production_batches','visuals','scenes','creator_plans'):
+                assert c.execute('SELECT count(*) AS n FROM '+table).fetchone()['n']==0
+            config=c.execute('SELECT * FROM studio_config WHERE id=1').fetchone()
+            assert not config['enabled'] and not config['api_key_encrypted']
+            assert config['daily_limit']==config['total_limit']==0
+    finally:
+        WORKSPACE.reset(token)
+    assert client.get('/api/channels').json()[0]['name']=='Test studio'
+    client.cookies.clear()
+    assert client.get('/api/tracks',auth=('legacy-admin','legacy-local-test-password')).json()==legacy

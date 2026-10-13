@@ -50,6 +50,8 @@ def init_db(connection=None):
     with (nullcontext(connection) if connection is not None else db()) as c:
         with c.cursor() as q:
             q.execute('SELECT pg_advisory_xact_lock(192837466)')
+            q.execute('SELECT current_schema() AS schema')
+            seed_legacy = q.fetchone()['schema'] == 'public'
             q.execute("CREATE TABLE IF NOT EXISTS production_batches(id TEXT PRIMARY KEY,state TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',seconds NUMERIC NOT NULL DEFAULT 0,completed INTEGER NOT NULL DEFAULT 0,reserved NUMERIC NOT NULL DEFAULT 0,target_seconds INTEGER NOT NULL,budget NUMERIC NOT NULL,video_key TEXT,audio_key TEXT,manifest_key TEXT,updated_at TIMESTAMPTZ NOT NULL DEFAULT now())")
             q.execute('''CREATE TABLE IF NOT EXISTS tracks (
                id VARCHAR(40) PRIMARY KEY, title TEXT NOT NULL, collection TEXT NOT NULL,
@@ -67,7 +69,7 @@ def init_db(connection=None):
             q.execute('''CREATE TABLE IF NOT EXISTS audit (
                id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, action TEXT NOT NULL,
                entity_id TEXT NOT NULL, detail TEXT, created_at TIMESTAMPTZ DEFAULT now())''')
-            for i,(title,coll,bpm,prompt) in enumerate(SEEDS,1):
+            for i,(title,coll,bpm,prompt) in enumerate(SEEDS if seed_legacy else [],1):
                 q.execute('''INSERT INTO tracks(id,title,collection,bpm,prompt)
                    VALUES(%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING''',
                     (f'LVC-{i:03}',title,coll,bpm,prompt))
@@ -132,7 +134,7 @@ def init_db(connection=None):
               'Night Shift Coding':('Neon','Moon','Skyline','Silence','Orbit','Glow','Midnight','Stars','Dream','Echo','Blue Hour','Nightfall','Horizon'),
               'Morning Coffee & Code':('Espresso','Sunrise','Toast','Daylight','Latte','Roast','Breakfast','Notebook','Breeze','Garden','Cappuccino','Weekend','Fresh Start')}
             n=11
-            for coll,titles in extras.items():
+            for coll,titles in (extras.items() if seed_legacy else []):
               for title in titles:
                 q.execute('INSERT INTO tracks(id,title,collection,bpm,prompt) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING',
                   (f'LVC-{n:03}',title,coll,74,f'Compose an original instrumental lo-fi track for {coll}. Theme: {title}. Warm Rhodes piano, relaxed jazz chords, soft drums, subtle bass. No vocals, no artist imitation. Smooth intro and outro.'))
