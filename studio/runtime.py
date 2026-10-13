@@ -4,6 +4,7 @@ from decimal import Decimal
 import httpx
 from cryptography.fernet import Fernet
 from .core import db
+from .tenancy import active_workspace
 
 MODELS = {
  'google/lyria-3-clip-preview': {'name':'Lyria Clip · 30 segundos','price':'0.04','seconds':30,'max_seconds':30,'duration_kind':'clip','format':'mp3','sample_rate':48000,'channels':2,'capabilities_verified_on':'2026-10-11','rights_status':'human_review_required','capabilities_source':'https://openrouter.ai/google/lyria-3-clip-preview','source':'https://openrouter.ai/google/lyria-3-clip-preview/pricing'},
@@ -26,11 +27,11 @@ def key():
         master=os.getenv('STUDIO_MASTER_KEY','')
         if not master:raise RuntimeError('Chave de proteção indisponível')
         return Fernet(master.encode()).decrypt(s['api_key_encrypted'].encode()).decode()
-    return os.getenv('OPENROUTER_API_KEY','')
+    return '' if active_workspace() else os.getenv('OPENROUTER_API_KEY','')
 
 def public_settings():
     s=settings()
-    return {k:s[k] for k in ('enabled','model','daily_limit','total_limit')} | {'key_configured':bool(s['api_key_encrypted'] or os.getenv('OPENROUTER_API_KEY')),'currency':'USD','max_pilot_usd':40}
+    return {k:s[k] for k in ('enabled','model','daily_limit','total_limit')} | {'key_configured':bool(s['api_key_encrypted'] or (not active_workspace() and os.getenv('OPENROUTER_API_KEY'))),'currency':'USD','max_pilot_usd':40}
 
 def availability():
     with httpx.Client(timeout=20) as client:

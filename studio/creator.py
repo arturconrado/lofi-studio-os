@@ -32,12 +32,17 @@ class PlanRequest(BaseModel):
  channel_id:uuid.UUID=uuid.UUID('00000000-0000-0000-0000-000000000001')
  theme:str=Field(min_length=3,max_length=1500)
  minutes:int=Field(default=240,ge=2,le=240)
+ confirm_cost:bool=False
 @router.post('/plan')
 def plan(body:PlanRequest):
+ if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva máxima de US$0,02 para o plano de IA')
  token=runtime.key()
  if not token:raise HTTPException(409,'Configure a chave OpenRouter no portal')
  with db() as c:
   c.execute('SELECT pg_advisory_xact_lock(192837467)')
+  if not runtime.settings(c)['enabled']:raise HTTPException(409,'Geração paga desativada')
+  from .financial import check_available
+  check_available(c,Decimal('.02'))
   previous=c.execute('SELECT * FROM creator_plans WHERE request_id=%s',(body.request_id,)).fetchone()
   if previous:
    if previous['data']:return {'id':previous['id'],'plan':previous['data'],'minutes':previous['minutes'],'reused':True}
@@ -72,7 +77,9 @@ class CreateRequest(BaseModel):
 def produce(body:CreateRequest):
  if not body.confirm_cost:raise HTTPException(422,'Confirme o teto financeiro para começar a gerar')
  with db() as c:
-  c.execute('SELECT pg_advisory_xact_lock(192837467)');p=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(body.plan_id,)).fetchone()
+  c.execute('SELECT pg_advisory_xact_lock(192837467)')
+  if not runtime.settings(c)['enabled']:raise HTTPException(409,'Geração paga desativada')
+  p=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(body.plan_id,)).fetchone()
   if not p or not p['data']:raise HTTPException(404,'Plano não encontrado')
   if p['program_id']:return {'id':p['program_id'],'reused':True}
   if c.execute("SELECT 1 FROM production_batches WHERE channel_id=%s AND state IN ('producing','waiting','queued')",(p.get('channel_id','00000000-0000-0000-0000-000000000001'),)).fetchone():raise HTTPException(409,'Este canal já tem um lote em produção ou na fila. Aguarde antes de criar outro para ele.')
@@ -110,13 +117,14 @@ def save_metadata(bid:str,body:Metadata):
 
 class PackagingRequest(BaseModel):
  request_id:uuid.UUID
+ confirm_cost:bool=False
 @router.post('/programs/{bid}/suggest')
 def suggest_metadata(bid:str,body:PackagingRequest):
  with db() as c:
   b=c.execute('SELECT * FROM production_batches WHERE id=%s',(bid,)).fetchone()
   if not b:raise HTTPException(404,'Programa não encontrado')
   m=c.execute('SELECT title,theme FROM program_metadata WHERE program_id=%s',(bid,)).fetchone() or {'title':bid,'theme':'Warm cozy lo-fi for coding and studying'}
- return plan(PlanRequest(request_id=body.request_id,channel_id=b['channel_id'],theme=(m['title']+'; '+m['theme'])[:1500],minutes=min(240,max(2,int(b['target_seconds']/60)))))
+ return plan(PlanRequest(request_id=body.request_id,channel_id=b['channel_id'],theme=(m['title']+'; '+m['theme'])[:1500],minutes=min(240,max(2,int(b['target_seconds']/60))),confirm_cost=body.confirm_cost))
 @router.post('/tracks/{tid}/suggest')
 def suggest_track(tid:str,body:PackagingRequest):
  with db() as c:
@@ -124,7 +132,7 @@ def suggest_track(tid:str,body:PackagingRequest):
   if not t:raise HTTPException(404,'Música não encontrada')
   parent=c.execute('SELECT channel_id FROM production_batches WHERE id=%s',(tid.rsplit('-',1)[0],)).fetchone()
   cid=parent['channel_id'] if parent else t['channel_id']
- return plan(PlanRequest(request_id=body.request_id,channel_id=cid,theme=('Single instrumental track: '+t['title']+'. Intended musical direction: '+t['prompt'])[:1500],minutes=2))
+ return plan(PlanRequest(request_id=body.request_id,channel_id=cid,theme=('Single instrumental track: '+t['title']+'. Intended musical direction: '+t['prompt'])[:1500],minutes=2,confirm_cost=body.confirm_cost))
 class TrackCopy(BaseModel):
  title:str=Field(min_length=1,max_length=100)
  description:str=Field(max_length=1500)

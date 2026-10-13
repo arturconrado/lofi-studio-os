@@ -5,7 +5,10 @@ from pathlib import Path
 import httpx
 from .core import db,storage,init_db,audit
 from . import runtime,scene_animation
-CACHE=Path('/cache/creator');IMAGE_MODEL='bytedance-seed/seedream-4.5'
+from .tenancy import active_workspace
+CACHE=Path('/cache/creator')
+if active_workspace():CACHE=CACHE/active_workspace()
+IMAGE_MODEL='bytedance-seed/seedream-4.5'
 def visual(bid,plan,folder):
  with httpx.Client(timeout=180) as client:
   r=client.get('https://openrouter.ai/api/v1/images/models/'+IMAGE_MODEL+'/endpoints');r.raise_for_status()
@@ -15,6 +18,8 @@ def visual(bid,plan,folder):
   task=uuid.uuid4()
   with db() as c:
    c.execute('SELECT pg_advisory_xact_lock(192837467)')
+   from .financial import check_available
+   check_available(c,Decimal('.15'))
    from .creator import usage
    if usage(c)+Decimal('.15')>runtime.settings(c)['total_limit']:raise ValueError('Limite acumulado insuficiente para o visual')
    c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,'creator_image',%s,%s,.15,'RUNNING')",(task,IMAGE_MODEL,json.dumps({'batch':bid})));c.commit()
