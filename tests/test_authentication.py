@@ -223,3 +223,14 @@ def test_private_catalog_media_and_channels_do_not_cross_workspaces(client,monke
         assert client.get(path).status_code==404,path
     assert client.get('/api/settings').json()['key_configured'] is False
     assert client.get('/api/autopilot/status').json()['key_configured'] is False
+
+
+def test_separate_login_pages_are_public_without_granting_api_access(client):
+    user=client.get('/login')
+    admin=client.get('/admin/login')
+    assert user.status_code==admin.status_code==200
+    assert 'data-access="user"' in user.text
+    assert 'data-access="admin"' in admin.text
+    assert 'Acesso administrativo' in admin.text
+    assert client.get('/api/tracks').status_code==401
+    assert client.get('/api/auth/me').status_code==401

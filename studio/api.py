@@ -28,7 +28,7 @@ async def auth(req:Request,call_next):
         allowed={str(req.base_url).rstrip('/'),os.getenv('STUDIO_PUBLIC_ORIGIN','').rstrip('/')}
         if origin and origin not in allowed:
             return JSONResponse({'detail':'Origem da requisição não autorizada'},status_code=403)
-    public=req.url.path in ('/health','/login') or req.url.path.startswith('/static/') or req.url.path in (
+    public=req.url.path in ('/health','/login','/admin/login') or req.url.path.startswith('/static/') or req.url.path in (
         '/api/auth/capabilities','/api/auth/register','/api/auth/login','/api/auth/admin-login',
         '/api/auth/verify','/api/auth/forgot-password','/api/auth/reset-password')
     if public:return await call_next(req)
@@ -380,6 +380,9 @@ app.include_router(episode_router)
 
 from .authentication import router as authentication_router
 app.include_router(authentication_router)
+
+@app.get('/admin/login')
+def admin_login_page():return FileResponse(Path(__file__).resolve().parent.parent/'web/admin-login.html')
 
 @app.get('/login')
 def login_page():return FileResponse(Path(__file__).resolve().parent.parent/'web/login.html')
