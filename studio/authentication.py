@@ -134,6 +134,9 @@ def register(body:Registration,request:Request):
             c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(wid))))
             from .core import init_db
             init_db(c)
+            from .channels import PRIMARY
+            c.execute('UPDATE radio_channels SET name=%s,niche=%s WHERE id=%s',
+                      (body.studio_name.strip(),'Configure o estilo do seu canal',PRIMARY))
             mail_token(c,{'id':uid,'email':body.email},'verify')
         elif not user['verified'] and verify(body.password,user['password_hash']):
             mail_token(c,user,'verify')
