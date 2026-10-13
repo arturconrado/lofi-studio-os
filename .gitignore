@@ -7,3 +7,8 @@ backup-*/
 node_modules/
 .env.*
 !.env.example
+
+# Private worker and tunnel runtime credentials
+workers.env
+*.token
+worker-runtime/
