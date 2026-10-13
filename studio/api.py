@@ -19,26 +19,57 @@ app.mount('/static',StaticFiles(directory=str(Path(__file__).resolve().parent.pa
 
 @app.middleware('http')
 async def auth(req:Request,call_next):
-    if req.method in ('POST','PUT','PATCH','DELETE'):
+    from .authentication import COOKIE,session,digest
+    from .tenancy import WORKSPACE
+    from fastapi.responses import JSONResponse
+    mutating=req.method in ('POST','PUT','PATCH','DELETE')
+    if mutating:
         origin=req.headers.get('origin')
-        if origin and origin not in (str(req.base_url).rstrip('/'),):
-            from fastapi.responses import JSONResponse
+        allowed={str(req.base_url).rstrip('/'),os.getenv('STUDIO_PUBLIC_ORIGIN','').rstrip('/')}
+        if origin and origin not in allowed:
             return JSONResponse({'detail':'Origem da requisição não autorizada'},status_code=403)
-    if req.url.path=='/health':return await call_next(req)
-    import fastapi.responses
-    header=req.headers.get('Authorization','')
-    authorized=False
+    public=req.url.path in ('/health','/login') or req.url.path.startswith('/static/') or req.url.path in (
+        '/api/auth/capabilities','/api/auth/register','/api/auth/login','/api/auth/admin-login',
+        '/api/auth/verify','/api/auth/forgot-password','/api/auth/reset-password')
+    if public:return await call_next(req)
+    identity=session(req.cookies.get(COOKIE))
+    if identity:
+        if mutating and not secrets.compare_digest(digest(req.headers.get('X-CSRF-Token','')),identity['csrf_hash']):
+            return JSONResponse({'detail':'Sessão inválida. Entre novamente.'},status_code=403)
+        if mutating and req.url.path not in ('/api/auth/logout','/api/auth/workspace') and identity['role']=='viewer':
+            return JSONResponse({'detail':'Seu perfil permite apenas visualização.'},status_code=403)
+        if mutating and identity['role']=='creator' and not req.url.path.startswith(('/api/tracks','/api/creator','/api/auth/')):
+            return JSONResponse({'detail':'Seu perfil não permite esta operação.'},status_code=403)
+        if (mutating and req.url.path.startswith('/api/settings') or req.url.path.startswith('/api/auth/members')) and identity['role'] not in ('workspace_owner','workspace_admin','platform_admin'):
+            return JSONResponse({'detail':'Permissão administrativa necessária.'},status_code=403)
+        if mutating and identity['role']=='operator' and not (
+            req.url.path in ('/api/auth/logout','/api/auth/workspace') or
+            req.url.path.startswith('/api/channels/') and req.url.path.endswith(('/start','/stop','/preferences')) or
+            req.url.path.startswith('/api/miniobs/') and req.url.path.endswith(('/start','/stop'))):
+            return JSONResponse({'detail':'Seu perfil permite operar as lives.'},status_code=403)
+        req.state.identity=identity
+        scope=WORKSPACE.set(str(identity['workspace_id']) if identity.get('workspace_id') else None)
+        try:return await call_next(req)
+        finally:WORKSPACE.reset(scope)
+    header=req.headers.get('Authorization','');authorized=False
     try:
         if header.startswith('Basic '):
             user,pwd=base64.b64decode(header[6:],validate=True).decode().split(':',1)
             authorized=(secrets.compare_digest(user,os.environ['STUDIO_ADMIN_USER']) and
-                      secrets.compare_digest(pwd,os.environ['STUDIO_ADMIN_PASSWORD']))
+                        secrets.compare_digest(pwd,os.environ['STUDIO_ADMIN_PASSWORD']))
     except (ValueError,KeyError,UnicodeDecodeError):pass
-    if not authorized:return fastapi.responses.Response(status_code=401,headers={'WWW-Authenticate':'Basic realm="Lo-Fi Studio"'})
+    if not authorized:
+        if req.url.path=='/':
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse('/login')
+        return JSONResponse({'detail':'Autenticação necessária'},status_code=401)
     return await call_next(req)
 
 @app.on_event('startup')
-def startup():init_db()
+def startup():
+    init_db()
+    from .authentication import initialize
+    initialize()
 
 @app.get('/health')
 def health():
@@ -236,7 +267,7 @@ def save_settings(body:SettingsBody):
         current=runtime.settings(c)
         if (daily>current['daily_limit'] or total>current['total_limit']) and not body.confirm_paid_pilot:raise HTTPException(422,'Confirme a autorização para elevar o limite de gastos')
         if combined_usage(c)>total:raise HTTPException(422,'Limite menor que as reservas já realizadas')
-        if body.enabled and not (encrypted or runtime.settings(c)['api_key_encrypted'] or os.getenv('OPENROUTER_API_KEY')):
+        if body.enabled and not (encrypted or runtime.settings(c)['api_key_encrypted'] or (not __import__('studio.tenancy',fromlist=['active_workspace']).active_workspace() and os.getenv('OPENROUTER_API_KEY'))):
             raise HTTPException(409,'Informe a chave OpenRouter para habilitar a geração')
         c.execute('UPDATE studio_config SET enabled=%s,model=%s,daily_limit=%s,total_limit=%s WHERE id=1',(body.enabled,body.model,daily,total))
         if encrypted:c.execute('UPDATE studio_config SET api_key_encrypted=%s WHERE id=1',(encrypted,))
@@ -271,8 +302,9 @@ def cancel(jid:uuid.UUID):
 @app.put('/api/tracks/{tid}')
 def edit_track(tid:str,body:Track):
     with db() as c:
-        t=c.execute('SELECT status FROM tracks WHERE id=%s FOR UPDATE',(tid,)).fetchone()
+        t=c.execute('SELECT status,channel_id FROM tracks WHERE id=%s FOR UPDATE',(tid,)).fetchone()
         if not t:raise HTTPException(404,'Faixa inexistente')
+        if str(t['channel_id'])!=str(body.channel_id):raise HTTPException(409,'Edite esta música no canal correspondente')
         if t['status']=='APPROVED' or c.execute("SELECT 1 FROM jobs WHERE track_id=%s AND status IN ('QUEUED','RUNNING')",(tid,)).fetchone():
             raise HTTPException(409,'Faixa aprovada ou em processamento; edição bloqueada')
         c.execute('UPDATE tracks SET title=%s,collection=%s,bpm=%s,prompt=%s WHERE id=%s',(body.title,body.collection,body.bpm,body.prompt,tid))
@@ -335,15 +367,6 @@ app.include_router(creator_router)
 from .channels import router as channels_router
 app.include_router(channels_router)
 
-@app.put('/api/tracks/{tid}')
-def edit_track(tid:str,body:Track):
-    with db() as c:
-        t=c.execute('SELECT channel_id FROM tracks WHERE id=%s FOR UPDATE',(tid,)).fetchone()
-        if not t:raise HTTPException(404,'Música não encontrada')
-        if str(t['channel_id'])!=str(body.channel_id):raise HTTPException(409,'Edite esta música no canal correspondente')
-        c.execute('UPDATE tracks SET title=%s,collection=%s,bpm=%s,prompt=%s WHERE id=%s',(body.title,body.collection,body.bpm,body.prompt,tid));audit(c,'TRACK_EDITED',tid);c.commit()
-    return {'ok':True}
-
 from .ambient_api import router as ambient_router
 app.include_router(ambient_router)
 
@@ -354,3 +377,18 @@ app.include_router(monetization_router)
 
 from .episode_api import router as episode_router
 app.include_router(episode_router)
+
+from .authentication import router as authentication_router
+app.include_router(authentication_router)
+
+@app.get('/login')
+def login_page():return FileResponse(Path(__file__).resolve().parent.parent/'web/login.html')
+
+from .programming import router as programming_router
+app.include_router(programming_router)
+
+from .exports import router as exports_router
+app.include_router(exports_router)
+
+from .youtube import router as youtube_router
+app.include_router(youtube_router)

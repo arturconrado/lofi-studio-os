@@ -104,6 +104,8 @@ def review_program(bid:str,body:ProgramReview):
         try:b,snapshot=program_snapshot(c,bid)
         except ValueError as e:raise HTTPException(409,str(e))
         c.execute("INSERT INTO program_reviews(program_id,snapshot_sha256,note,reviewed_by) VALUES(%s,%s,%s,%s) ON CONFLICT(program_id) DO UPDATE SET snapshot_sha256=excluded.snapshot_sha256,note=excluded.note,reviewed_by=excluded.reviewed_by,approved_at=now()",(bid,snapshot,body.note.strip() or 'Validação manual no portal: áudio, vídeo e autorização de uso confirmados.',os.environ['STUDIO_ADMIN_USER']))
+        from .programming import renew
+        renew(c,b['channel_id'],bid,snapshot)
         audit(c,'PROGRAM_MANUALLY_VALIDATED',bid,body.note);c.commit()
     return {'approved':True}
 

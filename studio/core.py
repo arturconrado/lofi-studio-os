@@ -1,6 +1,7 @@
 """Shared storage, catalog and validation functions. No secrets exposed in errors."""
 import os, uuid, json, hashlib, io, subprocess, tempfile
 from pathlib import Path
+from contextlib import nullcontext
 import boto3
 import psycopg
 import redis
@@ -20,22 +21,36 @@ SEEDS = [
  ('New Sprint','Morning Coffee & Code',86,'Original cheerful soft jazz lo-fi instrumental for coding, clean guitar, warm Rhodes, laid back drums, no vocals.')]
 
 def db():
-    return psycopg.connect(os.environ['DATABASE_URL'], autocommit=False, row_factory=dict_row, connect_timeout=5)
+    from .tenancy import active_workspace,schema_name
+    from psycopg import sql
+    c=psycopg.connect(os.environ['DATABASE_URL'], autocommit=False, row_factory=dict_row, connect_timeout=5)
+    workspace=active_workspace()
+    if workspace:
+        # No public fallback: absent tenant tables fail closed.
+        c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(workspace))))
+    return c
 
 def queue():
-    return redis.Redis.from_url(os.environ['REDIS_URL'], decode_responses=True, socket_connect_timeout=4, socket_timeout=5)
+    client=redis.Redis.from_url(os.environ['REDIS_URL'], decode_responses=True, socket_connect_timeout=4, socket_timeout=5)
+    from .tenancy import active_workspace,ScopedQueue
+    workspace=active_workspace()
+    return ScopedQueue(client,workspace) if workspace else client
 
 def storage():
-    return boto3.client('s3', endpoint_url=os.environ['S3_ENDPOINT'],
+    client=boto3.client('s3', endpoint_url=os.environ['S3_ENDPOINT'],
         aws_access_key_id=os.environ['S3_ACCESS_KEY_ID'],
         aws_secret_access_key=os.environ['S3_SECRET_ACCESS_KEY'],
         region_name=os.getenv('S3_REGION','us-east-1'),
         config=Config(signature_version='s3v4',connect_timeout=5,read_timeout=30,retries={'max_attempts':2}))
+    from .tenancy import active_workspace,ScopedStorage
+    workspace=active_workspace()
+    return ScopedStorage(client,workspace) if workspace else client
 
-def init_db():
-    with db() as c:
+def init_db(connection=None):
+    with (nullcontext(connection) if connection is not None else db()) as c:
         with c.cursor() as q:
             q.execute('SELECT pg_advisory_xact_lock(192837466)')
+            q.execute("CREATE TABLE IF NOT EXISTS production_batches(id TEXT PRIMARY KEY,state TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',seconds NUMERIC NOT NULL DEFAULT 0,completed INTEGER NOT NULL DEFAULT 0,reserved NUMERIC NOT NULL DEFAULT 0,target_seconds INTEGER NOT NULL,budget NUMERIC NOT NULL,video_key TEXT,audio_key TEXT,manifest_key TEXT,updated_at TIMESTAMPTZ NOT NULL DEFAULT now())")
             q.execute('''CREATE TABLE IF NOT EXISTS tracks (
                id VARCHAR(40) PRIMARY KEY, title TEXT NOT NULL, collection TEXT NOT NULL,
                bpm INTEGER NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'DRAFT',
@@ -124,6 +139,12 @@ def init_db():
                 n+=1
         from .creator import init as init_creator
         init_creator(c)
+        from .programming import initialize as init_programming
+        init_programming(c)
+        from .exports import initialize as init_exports
+        init_exports(c)
+        from .youtube import initialize as init_youtube
+        init_youtube(c)
         c.commit()
 
 def audit(conn,action,entity,detail=''):

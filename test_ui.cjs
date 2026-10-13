@@ -1,8 +1,8 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const elements=new Map();
 const doc={querySelector(s){if(!elements.has(s))elements.set(s,{value:'',checked:false,innerHTML:'',textContent:'',showModal(){},close(){},addEventListener(){},querySelectorAll(){return []}});return elements.get(s)},querySelectorAll(){return []},addEventListener(){}};
-const ctx=vm.createContext({document:doc,console,FormData:class {},fetch:async()=>({ok:true,json:async()=>[]}),setInterval(){},alert(m){throw Error(m)},prompt(){return 'Solicitar revisão editorial'},confirm(){return false}});
-vm.runInContext(fs.readFileSync('audit-work/web/app.js','utf8'),ctx);
+const ctx=vm.createContext({document:doc,console,URLSearchParams,location:{search:""},localStorage:{getItem(){return null},setItem(){}},FormData:class {},sessionStorage:{getItem(){return null}},fetch:async()=>({ok:true,json:async()=>[]}),setInterval(){},alert(m){throw Error(m)},prompt(){return 'Solicitar revisão editorial'},confirm(){return false}});
+vm.runInContext(fs.readFileSync(require('path').join(__dirname,'web/app.js'),'utf8'),ctx);
 vm.runInContext(`
 cache.tracks=[{id:'QA-1',title:'Synthetic QA',collection:'QA',status:'REVIEW',prompt:'QA only'}];
 var calls=[];

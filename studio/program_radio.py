@@ -48,6 +48,9 @@ def encoder_args(video,audio,url,offset=0,repeat=False,volume=1):
     return args+['-i',str(audio),'-map','0:v:0','-map','1:a:0','-c:v','copy','-af',f'volume={float(volume)}','-c:a','aac','-b:a','192k','-ar','44100','-ac','2','-shortest','-progress','pipe:1','-stats_period','5','-rw_timeout','15000000','-tls_verify','1','-f','flv',url]
 
 def transmit_program(bid):
+    if os.getenv('LOFI_CONTINUOUS_ENABLED')=='1':
+        from .continuous_radio import transmit
+        return transmit(bid)
     check(bid)
     b,snapshot=approved(bid)
     obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=b['manifest_key'])

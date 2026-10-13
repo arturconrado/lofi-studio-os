@@ -1,7 +1,11 @@
-FROM lofi-vibe-coding:f866782301118aa860027b4138e823e36aeaf7aa
-ARG SOURCE_SHA
-LABEL org.opencontainers.image.version="1.5.0" lofi.qc.version="3.0.0" lofi.source.sha256="${SOURCE_SHA}" lofi.base.revision="f866782301118aa860027b4138e823e36aeaf7aa" org.opencontainers.image.revision="qc-v3-${SOURCE_SHA}"
-COPY studio /app/studio
-COPY web /app/web
-COPY test_qc.py integration_qc.py /app/
+FROM python:3.12-slim-bookworm
+ARG SOURCE_SHA=development
+LABEL org.opencontainers.image.title="Lo-Fi Studio OS" org.opencontainers.image.revision="${SOURCE_SHA}"
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 10002 --create-home studio
+COPY studio ./studio
+COPY web ./web
 USER 10002
+CMD ["uvicorn","studio.api:app","--host","0.0.0.0","--port","8787"]

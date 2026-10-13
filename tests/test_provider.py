@@ -1,18 +1,26 @@
-import os,sys,base64,pytest
-sys.path.insert(0,os.path.dirname(os.path.dirname(__file__)))
-from studio.provider import decode_audio,generate
+import base64
+import json
+import pytest
+from studio import provider
+
 
 def test_parse_message_audio():
-    expected=b'RIFFabcdWAVE';x={'choices':[{'message':{'audio':{'data':base64.b64encode(expected).decode()}}}]}
-    assert decode_audio(x)==expected
+    expected=b'RIFFabcdWAVE'
+    message={'choices':[{'message':{'audio':{'data':base64.b64encode(expected).decode()}}}]}
+    assert provider.collect_stream(['data: '+json.dumps(message),'data: [DONE]'])[0]==expected
 
-def test_parse_content_audio_data_uri():
-    expected=b'ID3abcd';x={'choices':[{'message':{'content':[{'type':'audio','audio':{'data':'data:audio/mpeg;base64,'+base64.b64encode(expected).decode()}}]}}]}
-    assert decode_audio(x)==expected
+
+def test_parse_data_uri():
+    assert provider.decode_chunk('data:audio/mpeg;base64,'+base64.b64encode(b'ID3abcd').decode())==b'ID3abcd'
+
 
 def test_reject_text_only():
-    with pytest.raises(ValueError):decode_audio({'choices':[{'message':{'content':'Hello'}}]})
+    with pytest.raises(provider.PartialGenerationError):
+        provider.collect_stream(['data: '+json.dumps({'choices':[{'message':{'content':'Hello'}}]}),'data: [DONE]'])
+
 
 def test_paid_block(monkeypatch):
-    monkeypatch.setenv('OPENROUTER_API_KEY','test-only');monkeypatch.setenv('PAID_GENERATION_ENABLED','false')
-    with pytest.raises(RuntimeError,match='paga bloqueada'):generate('music','google/lyria-3-pro-preview')
+    monkeypatch.setattr(provider.runtime,'settings',lambda:{'enabled':False})
+    monkeypatch.setattr(provider.runtime,'key',lambda:pytest.fail('Disabled generation must not access a key'))
+    with pytest.raises(RuntimeError,match='desativada'):
+        provider.generate('music','google/lyria-3-pro-preview')

@@ -5,7 +5,9 @@ from PIL import Image
 from cryptography.fernet import Fernet
 from .core import db,storage,init_db
 
+from .tenancy import active_workspace
 CACHE=Path(os.getenv('RADIO_CACHE','/cache'))
+if active_workspace():CACHE=CACHE/('workspace-'+active_workspace())
 QUOTA=4*1024**3
 
 from .stream_errors import Stopped
