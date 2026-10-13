@@ -1,0 +1,39 @@
+name: lofi-vibe-coding
+x-common: &common
+  image: lofi-vibe-coding:local
+  build: .
+  restart: unless-stopped
+  env_file: .env
+  networks:
+    - shared
+  read_only: true
+  tmpfs:
+    - /tmp:rw,nosuid,size=192m,uid=10002,gid=10002
+  security_opt: [no-new-privileges:true]
+  pids_limit: 100
+  logging:
+    driver: json-file
+    options: {max-size: '10m', max-file: '2'}
+services:
+  studio:
+    <<: *common
+    command: [uvicorn, studio.api:app, --host, '0.0.0.0', --port, '8787', --workers, '1']
+    ports: ['127.0.0.1:18787:8787']
+    cpus: '0.40'
+    mem_limit: 420m
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+  music-worker:
+    <<: *common
+    command: [python, -m, studio.worker]
+    cpus: '0.45'
+    mem_limit: 600m
+    stop_grace_period: 30s
+networks:
+  shared:
+    external: true
+    name: ${CLIPBR_DOCKER_NETWORK:-clipbr-vps_default}
