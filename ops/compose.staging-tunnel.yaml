@@ -1,0 +1,19 @@
+name: lofi-staging-tunnel
+services:
+  connector:
+    image: cloudflare/cloudflared@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07
+    command: [tunnel, --no-autoupdate, --protocol, http2, run, --token-file, /run/lofi-token]
+    user: '65532:65532'
+    network_mode: host
+    volumes: ['./tunnel.token:/run/lofi-token:ro']
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ['/tmp:rw,nosuid,size=16m,uid=65532,gid=65532']
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: '0.15'
+    mem_limit: 192m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: {max-size: '5m', max-file: '2'}
