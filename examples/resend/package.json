@@ -1,0 +1,6 @@
+{
+  "name": "lofi-studio-os-resend-example",
+  "private": true,
+  "type": "module",
+  "dependencies": {"resend": "6.32.1"}
+}

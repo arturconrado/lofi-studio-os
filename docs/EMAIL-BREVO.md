@@ -1,4 +1,6 @@
-# E-mail gratuito do Lo-Fi Studio OS
+# Preparação anterior: Brevo
+
+**Substituída pela integração Resend.** Consulte `EMAIL-RESEND.md`. O conteúdo abaixo registra a opção anterior; não configura dois provedores simultaneamente.
 
 Provedor selecionado: Brevo Free. Domínio: `lofistudiox.com`. Remetente proposto: `Lo-Fi Studio OS <nao-responda@lofistudiox.com>`.
 

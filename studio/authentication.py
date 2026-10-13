@@ -17,6 +17,7 @@ from psycopg.rows import dict_row
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 from .tenancy import WORKSPACE, schema_name
+from .email_delivery import configured as email_configured
 
 router=APIRouter(prefix='/api/auth')
 COOKIE='lofi_session'
@@ -68,6 +69,7 @@ def initialize():
           id UUID PRIMARY KEY,recipient TEXT NOT NULL,payload JSONB NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),sent_at TIMESTAMPTZ,
           status TEXT NOT NULL DEFAULT 'pending')''')
+        c.execute('ALTER TABLE public.os_email_outbox ADD COLUMN IF NOT EXISTS provider_message_id TEXT')
         c.execute('''CREATE TABLE IF NOT EXISTS public.os_auth_audit(
           id BIGSERIAL PRIMARY KEY,user_id UUID,event TEXT NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
@@ -112,7 +114,7 @@ class Registration(Credentials):
 @router.get('/capabilities')
 def capabilities():
     return {'signup_available':os.getenv('STUDIO_SIGNUP_ENABLED')=='1' and bool(os.getenv('STUDIO_PUBLIC_ORIGIN')) and bool(os.getenv('STUDIO_MASTER_KEY')),
-            'email_delivery_configured':all(os.getenv(name) for name in ('STUDIO_SMTP_HOST','STUDIO_SMTP_USER','STUDIO_SMTP_PASSWORD','STUDIO_EMAIL_FROM'))}
+            'email_delivery_configured':email_configured()}
 
 @router.post('/register')
 def register(body:Registration,request:Request):

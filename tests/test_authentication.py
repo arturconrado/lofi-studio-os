@@ -14,6 +14,7 @@ def client(monkeypatch):
     monkeypatch.setenv('DATABASE_URL',os.environ['LOFI_TEST_DATABASE_URL'])
     monkeypatch.setenv('STUDIO_PUBLIC_ORIGIN','https://testserver')
     monkeypatch.setenv('STUDIO_SIGNUP_ENABLED','1')
+    monkeypatch.setenv('STUDIO_EMAIL_PROVIDER','smtp')
     monkeypatch.setenv('STUDIO_SMTP_HOST','unused.test')
     monkeypatch.setenv('STUDIO_MASTER_KEY','nSzKUroWUCuq_KhmQiOkLgRxML3HrIjngIv5yvtjmuk=')
     monkeypatch.setenv('STUDIO_SMTP_USER','local-test')

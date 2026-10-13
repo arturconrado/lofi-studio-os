@@ -8,7 +8,7 @@ Esta branch é uma fundação testada localmente, não um lançamento completo. 
 
 O arquivo `.env.example` contém somente nomes e placeholders. Credenciais devem entrar em arquivo `.env` excluído do Git, com permissões restritas, ou no secret manager da infraestrutura. Nunca envie senhas, chaves privadas ou refresh tokens no chat.
 
-O SMTP existente do usuário pode usar TLS direto na porta 465 ou STARTTLS na porta 587. Configurar host, porta, usuário, senha, remetente, STUDIO_MASTER_KEY e STUDIO_PUBLIC_ORIGIN. Manter STUDIO_SIGNUP_ENABLED=0 até que o email worker esteja funcionando e um e-mail real seja recebido. Envios de resultado incerto não são repetidos automaticamente.
+A opção atual é Resend, via `STUDIO_EMAIL_PROVIDER=resend` e `RESEND_API_KEY` no ambiente seguro. Consulte EMAIL-RESEND.md. SMTP permanece uma alternativa explícita e pode usar TLS direto na porta 465 ou STARTTLS na porta 587. Configurar host, porta, usuário, senha, remetente, STUDIO_MASTER_KEY e STUDIO_PUBLIC_ORIGIN. Manter STUDIO_SIGNUP_ENABLED=0 até que o email worker esteja funcionando e um e-mail real seja recebido. Envios de resultado incerto não são repetidos automaticamente.
 
 OAuth requer aplicativo Google configurado e redirect URI `<STUDIO_PUBLIC_ORIGIN>/api/youtube/oauth/callback`. Consentimento deve ocorrer pela conta autorizada do usuário. Nenhuma publicação é feita ao conectar. Não registrar query strings OAuth nos access logs.
 
