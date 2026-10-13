@@ -23,7 +23,7 @@ def target():return int(os.getenv('LOFI_AUDIO_TARGET_SECONDS','28800'))
 def status():
     with db() as c:
         f=config(c);s={k:v for k,v in f.items() if k!='fal_key_encrypted'}
-        s.update({'provider':'OpenRouter','model':MODEL,'target_seconds':target(),'audio_only':True,'key_configured':bool(runtime.settings(c)['api_key_encrypted'] or os.getenv('OPENROUTER_API_KEY')),'approved_seconds':seconds(c),'reserved_usd':usage(c),'budget_usd':runtime.settings(c)['total_limit'],'prepared_seconds':0})
+        s.update({'provider':'OpenRouter','model':MODEL,'target_seconds':target(),'audio_only':True,'key_configured':runtime.public_settings()['key_configured'],'approved_seconds':seconds(c),'reserved_usd':usage(c),'budget_usd':runtime.settings(c)['total_limit'],'prepared_seconds':0})
         s['tasks']=c.execute("SELECT id,'audio' kind,status,estimated_cost reserved_cost,detail,provider_generation_id request_id,created_at FROM jobs WHERE track_id LIKE 'OR-%' ORDER BY created_at DESC LIMIT 12").fetchall()
         s['sets']=c.execute("SELECT t.collection,count(*) tracks,sum(a.duration_seconds) seconds FROM tracks t JOIN assets a ON a.id=t.approved_asset_id WHERE t.id LIKE 'OR-%' AND t.status='APPROVED' AND a.editorial_status='APPROVED' AND (a.technical_status='PASS' OR (a.technical_status='REVIEW' AND a.technical_review_note<>'')) GROUP BY t.collection ORDER BY t.collection").fetchall()
         return s
