@@ -179,3 +179,47 @@ def test_new_workspace_empty_and_legacy_preserved(client):
     assert client.get('/api/channels').json()[0]['name']=='Test studio'
     client.cookies.clear()
     assert client.get('/api/tracks',auth=('legacy-admin','legacy-local-test-password')).json()==legacy
+
+
+def test_private_catalog_media_and_channels_do_not_cross_workspaces(client,monkeypatch):
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio import miniobs
+    monkeypatch.setenv('OPENROUTER_API_KEY','admin-only-placeholder')
+    _,owner=signup(client)
+    headers={'X-CSRF-Token':owner['csrf_token']}
+    channel=client.post('/api/channels',headers=headers,json={'name':'Private channel','niche':'Private instrumental music'}).json()['id']
+    track=client.post('/api/tracks',headers=headers,json={'title':'Private audio','collection':'Private collection','bpm':70,'prompt':'Original instrumental music for private testing'}).json()['id']
+    asset,visual,export_id=uuid.uuid4(),uuid.uuid4(),uuid.uuid4()
+    program='PRIVATE-'+uuid.uuid4().hex[:8]
+    scope=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:
+            c.execute("INSERT INTO assets(id,track_id,object_key,sha256,mime,model,qc) VALUES(%s,%s,'private/audio.mp3','test-hash','audio/mpeg','test','{}')",(asset,track))
+            c.execute("INSERT INTO visuals(id,title,object_key,rights_evidence) VALUES(%s,'Private visual','private/image.png','test-only rights evidence')",(visual,))
+            c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,audio_key,video_key) VALUES(%s,'draft',3600,0,'private/audio.mp3','private/video.mp4')",(program,))
+            c.execute("INSERT INTO export_jobs(id,request_id,program_id,snapshot_sha256,seconds,state,object_key) VALUES(%s,%s,%s,'test',3600,'completed','private/export.mp4')",(export_id,uuid.uuid4(),program))
+            c.commit()
+    finally:WORKSPACE.reset(scope)
+    accessed=[]
+    def media(request,key,mime):
+        from fastapi.responses import Response
+        accessed.append(key)
+        return Response(b'private-media',media_type=mime)
+    monkeypatch.setattr(miniobs,'media',media)
+    paths=[f'/api/assets/{asset}/audio',f'/api/miniobs/visuals/{visual}/image',f'/api/miniobs/programs/{program}/audio',f'/api/exports/{export_id}/download']
+    for path in paths:assert client.get(path).status_code==200,path
+    assert len(accessed)==4
+    client.cookies.clear()
+    _,other=signup(client)
+    for path in paths:assert client.get(path).status_code==404,path
+    assert len(accessed)==4  # Unauthorized requests never reach object storage.
+    assert client.get('/api/tracks').json()==[]
+    assert client.get('/api/miniobs/programs').json()==[]
+    assert client.get('/api/miniobs/visuals').json()==[]
+    assert client.get('/api/exports').json()['jobs']==[]
+    assert client.get('/api/tracks/'+track+'/assets').json()==[]
+    for path in (f'/api/programming/{channel}/queue',f'/api/monetization/{channel}',f'/api/growth/{channel}/snapshots'):
+        assert client.get(path).status_code==404,path
+    assert client.get('/api/settings').json()['key_configured'] is False
+    assert client.get('/api/autopilot/status').json()['key_configured'] is False
