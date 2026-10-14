@@ -137,3 +137,41 @@ def asset_inventory(plan):
     return {'ready':False,'approved_references':references,
             'required_action_clips':[t['action'] for t in compiled['asset_tasks']],
             'reason':'Reference approval does not replace action clips or timeline rendering'}
+
+
+def assembly_plan(compiled, assets):
+    """Continuous timed segments for the existing compositor; no invented clips.
+
+    Full-frame assets remain scene-bound. Character layers additionally require
+    reviewed alpha/occlusion masks and layout compatibility before any reuse.
+    """
+    tasks={t['action']:t for t in compiled['asset_tasks']}
+    segments=[];missing=set();cursor=0
+    schedule=[]
+    for e in compiled['events']:
+        if cursor<e['start']:schedule.append({'start':cursor,'end':e['start'],'action':'typing_idle'})
+        schedule.append(e);cursor=e['end']
+    if cursor<compiled['duration_seconds']:schedule.append({'start':cursor,'end':compiled['duration_seconds'],'action':'typing_idle'})
+    for event in schedule:
+        task=tasks[event['action']];duration=event['end']-event['start'];idle=event['action']=='typing_idle'
+        candidates=[a for a in assets if a.get('role')=='action_clip' and a.get('cache_fingerprint')==task['cache_fingerprint']
+                    and a.get('human_review_sha256') and a.get('human_review_sha256')==a.get('sha256')
+                    and a.get('status')=='APPROVED_ACTION' and a.get('full_decode_pass') is True
+                    and a.get('source_preserved') is True and a.get('pose_anchors_reviewed') is True
+                    and a.get('seconds',0)>0 and (idle or a['seconds']>=duration)
+                    and (not idle or a.get('loop_seam_reviewed') is True)]
+        # Deterministic variations can be selected without another provider call.
+        candidates.sort(key=lambda a:a['sha256'])
+        chosen=candidates[(event['start']//3600)%len(candidates)] if candidates else None
+        if not chosen:missing.add(event['action'])
+        segments.append({**event,'asset_sha256':chosen['sha256'] if chosen else None,
+                         'asset_key':chosen.get('video_key') if chosen else None,
+                         'repeat_short_clip':idle,'playback_rate':1,
+                         'timing':'absolute_program_clock','source_binding':task['cache_fingerprint']})
+    return {'duration_seconds':compiled['duration_seconds'],'segments':segments,
+            'planned_timeline_seconds':sum(s['end']-s['start'] for s in segments),
+            'missing_actions':sorted(missing),'assets_ready':not missing,
+            'render_started':False,'eligible_for_live':False,
+            'environment_clock':'continuous_no_hourly_reset',
+            'theme_reuse':'full_frame_same_fingerprint_only; layered_reuse_requires_separate_mask_and_layout_review',
+            'final_checks_required':['pose_boundary_transitions','continuous_lighting','full_decode','audio_duration_and_listening_review','final_artifact_review']}

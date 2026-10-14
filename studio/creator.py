@@ -166,12 +166,22 @@ def storyboard(body:StoryboardRequest):
  with db() as c:
   from .channels import profile
   profile(c,body.channel_id)
- return compile_spec(body.spec)
+  assets=[]
+  if body.draft_id:
+   prior=c.execute('SELECT data FROM creator_plans WHERE id=%s AND channel_id=%s',(body.draft_id,body.channel_id)).fetchone()
+   if not prior:raise HTTPException(404,'Roteiro não encontrado neste canal')
+   assets=list(prior['data'].get('production_assets',{}).values())
+ compiled=compile_spec(body.spec)
+ from .production_harness import assembly_plan
+ compiled['assembly']=assembly_plan(compiled,assets)
+ return compiled
 
 @router.post('/storyboard/save')
 def save_storyboard(body:StoryboardRequest):
  from .channels import profile
  compiled=compile_spec(body.spec);pid=uuid.uuid4()
+ from .production_harness import assembly_plan
+ compiled['assembly']=assembly_plan(compiled,[])
  result=CreativePlan(title='Lo-Fi · '+body.spec.scenario,description='Audiovisual production draft; not generated.',
   theme=body.spec.scenario,music_brief=compiled['audio']['prompt'],visual_prompt='Reference-conditioned character and cat actions; see production_spec.',production_spec=body.spec).model_dump()
  with db() as c:

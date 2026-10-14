@@ -283,7 +283,9 @@ def budget():
         if c.execute("SELECT to_regclass('public.creator_plans') t").fetchone()['t']:
             plans=c.execute('SELECT COALESCE(sum(GREATEST(reserved,COALESCE(actual_cost,0))),0) reserved,COALESCE(sum(actual_cost),0) reported,count(*) FILTER(WHERE actual_cost IS NULL) unconfirmed FROM creator_plans').fetchone()
             for name in ('reserved','reported','unconfirmed'):usage[name]+=plans[name]
-        usage['unconfirmed']+=c.execute("SELECT count(*) n FROM factory_tasks WHERE status NOT IN ('PLANNED')").fetchone()['n']
+        task_costs=c.execute("""SELECT COALESCE(sum(CASE WHEN jsonb_typeof(payload->'actual_cost_usd')='number' THEN (payload->>'actual_cost_usd')::numeric ELSE 0 END),0) reported,
+          count(*) FILTER(WHERE status!='PLANNED' AND jsonb_typeof(payload->'actual_cost_usd') IS DISTINCT FROM 'number') unconfirmed FROM factory_tasks""").fetchone()
+        usage['reported']+=task_costs['reported'];usage['unconfirmed']+=task_costs['unconfirmed']
     return dict(usage)|runtime.public_settings()
 
 @app.get('/api/jobs')
