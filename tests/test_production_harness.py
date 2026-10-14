@@ -93,3 +93,15 @@ def test_asset_review_is_bound_to_plan_and_never_approves_missing_actions():
     assert not asset_inventory(plan)['ready']
     plan['production_spec']['shirt_color']='pink'
     assert not asset_inventory(plan)['approved_references']
+
+
+def test_hour_compositor_covers_real_time_and_rejects_short_reference_as_action():
+    from studio.production_harness import assembly_plan
+    c=compile_spec(ProductionSpec())
+    plan=assembly_plan(c,[{'role':'interaction_reference','seconds':8}])
+    assert plan['planned_timeline_seconds']==28800
+    assert all(a['end']==b['start'] for a,b in zip(plan['segments'],plan['segments'][1:]))
+    assert plan['segments'][0]['start']==0 and plan['segments'][-1]['end']==28800
+    assert not plan['assets_ready'] and not plan['eligible_for_live']
+    assert 'pet_cat' in plan['missing_actions']
+    assert all(s['repeat_short_clip']==(s['action']=='typing_idle') for s in plan['segments'])

@@ -49,7 +49,7 @@ def public(row):
     return {'id':row['id'],'state':row['status'],'reserved_usd':row['reserved_cost'],
             'actual_cost_usd':p.get('actual_cost_usd'),'report':p.get('report'),
             'detail':row.get('detail'),'video_url':f"/api/creator/motion-validation/{row['id']}/video" if p.get('video_key') else None,
-            'plan_id':p.get('plan_id'),'role':p.get('role'),'demo_only':True,'applied_to_live':False}
+            'reference_review':p.get('reference_review','pending'),'plan_id':p.get('plan_id'),'role':p.get('role'),'demo_only':True,'applied_to_live':False}
 
 
 @router.get('/sources')
@@ -186,7 +186,7 @@ def review(tid:uuid.UUID,body:AssetReview):
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)');row=get_task(c,tid)
         p=row['payload'];report=p.get('report',{})
-        if row['status']!='COMPLETED' or report.get('sha256')!=body.sha256:raise HTTPException(409,'O arquivo atual não corresponde à revisão')
+        if row['status']!='COMPLETED' or report.get('sha256')!=body.sha256 or report.get('full_decode_pass') is not True or report.get('duration_seconds',0)<7.9:raise HTTPException(409,'O arquivo atual não corresponde à revisão')
         plan=c.execute('SELECT data FROM creator_plans WHERE id=%s FOR UPDATE',(p['plan_id'],)).fetchone()
         if not plan or hashlib.sha256(json.dumps(plan['data'].get('production_spec'),sort_keys=True).encode()).hexdigest()!=p['spec_sha256']:
             raise HTTPException(409,'O roteiro mudou. Este asset precisa ser reavaliado para a nova versão')

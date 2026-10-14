@@ -31,3 +31,11 @@ Editor: Criar → Direção de cena, ações e música. Preparar e salvar não c
 A atualização de resultado apenas consulta o mesmo job e salva o MP4 privado com hash, decodificação e indicação demo_only. Não altera cenas aplicadas, áudio ou lives. O piloto testa contato e articulação; não executa todas as ações do roteiro nem certifica anatomia ou duração de oito horas. O motor completo continua bloqueado até seus assets e integração estarem prontos.
 
 O primeiro asset é obrigatoriamente vinculado a um creator_plan com production_spec; não existe submissão sem roteiro salvo. O histórico filtra canal e plano. O resultado é incorporado em creator_plans.data.production_assets com hash do arquivo e do roteiro. A revisão confere o arquivo atual e recusa planos alterados. O Creator usa asset_inventory para distinguir referência revisada de clipes de ação ainda ausentes e não cai silenciosamente no gerador antigo de imagem estática. A interface oferece produção/revisão dentro do roteiro, sem uma página independente de experimentos.
+
+## Montagem de horas e variações de tema
+
+`assembly_plan` transforma o roteiro em trechos contíguos no relógio real do programa, preenchendo os intervalos com digitação. Só o idle pode repetir um clipe curto com emenda revisada. Ações como carinho, caminhada e celular exigem clipes completos com duração suficiente; uma referência de oito segundos não satisfaz uma ação de dez ou quinze segundos. Os trechos aceitam variações determinísticas entre horas quando existem múltiplos assets revisados compatíveis.
+
+Clipes de quadro inteiro ficam presos ao fingerprint do mesmo cenário, personagem, cor, props e ação. Reutilização entre temas precisa de camadas de personagem/gato, máscaras de alpha/oclusão e enquadramento revisados; isso ainda não está implementado. A varanda, outra perspectiva ou objetos mudando contato não podem herdar automaticamente clipes da biblioteca. Luz/chuva/estrelas seguem relógio contínuo e não reiniciam a cada hora.
+
+O compilador informa `planned_timeline_seconds`, nunca comprova horas renderizadas. Um render completo e seu relatório vinculado ao hash, transições, áudio e revisão continuam necessários. A montagem executável de todas as ações permanece bloqueada enquanto faltam assets; o planejamento não é uma certificação de vídeo.
