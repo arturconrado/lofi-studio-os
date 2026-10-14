@@ -22,3 +22,5 @@ console.log('STUDIO_INTERFACE_PASS: empty workspace, escaping, channel filtering
 assert(vm.runInContext("programCover({id:'own',thumbnail_scene_id:'first scene',title:'Own visual'})",ctx).includes('/programs/own/scenes/first%20scene/image'));
 
 assert(vm.runInContext("cache.programs=[{id:'own',video_ready:true,thumbnail_scene_id:'first scene',title:'Own'}];studioMonitor.programs=cache.programs;studioOperations()",ctx).includes('poster=\"/api/miniobs/programs/own/scenes/first%20scene/image'));
+
+let menuClosures=0;document.querySelector('aside').classList.remove=()=>menuClosures++;vm.runInContext("window.innerWidth=390;tab='channels';cache.overview={};cache.ops={};render()",ctx);assert.equal(menuClosures,0);vm.runInContext("go('channels')",ctx);assert.equal(menuClosures,1);
