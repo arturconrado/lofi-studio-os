@@ -398,3 +398,6 @@ app.include_router(youtube_router)
 
 from .youtube_publish import router as youtube_publications_router
 app.include_router(youtube_publications_router)
+
+from .live_presentation import router as live_presentation_router
+app.include_router(live_presentation_router)
