@@ -300,3 +300,22 @@ def test_saved_creative_plans_remain_workspace_private(client):
     client.cookies.clear();signup(client)
     assert str(pid) not in [r['id'] for r in client.get('/api/creator/plans').json()['plans']]
     assert client.get('/api/creator/plans?channel_id='+str(uuid.uuid4())).status_code==404
+
+
+def test_publications_are_private_to_workspace_and_require_approval(client):
+    _,identity=signup(client)
+    headers={'X-CSRF-Token':identity['csrf_token']}
+    assert client.get('/api/youtube/publications').json()==[]
+    body={'request_id':str(uuid.uuid4()),'channel_id':str(uuid.uuid4()),'export_id':str(uuid.uuid4()),'title':'First video','description':'','made_for_kids':False}
+    # Configuration is irrelevant to isolation and no external request is made.
+    from studio import youtube_publish
+    original=youtube_publish.configured
+    youtube_publish.configured=lambda:True
+    try:
+        assert client.post('/api/youtube/publications',json=body,headers=headers).status_code==422
+        body.update(confirm_review=True,confirm_rights=True)
+        assert client.post('/api/youtube/publications',json=body,headers=headers).status_code==404
+    finally:youtube_publish.configured=original
+    assert client.post('/api/youtube/publications/'+str(uuid.uuid4())+'/resume',headers=headers).status_code==409
+    client.cookies.clear();signup(client)
+    assert client.get('/api/youtube/publications').json()==[]
