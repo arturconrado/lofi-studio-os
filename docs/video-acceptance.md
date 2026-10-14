@@ -13,3 +13,13 @@ Código de saída 0: contrato atendido. Código 2: reprovação com motivos no r
 Integração atual: novos pacotes do creator registram o contrato no manifesto; a API de início manual bloqueia novos pacotes reprovados. Registros legados sem contrato conservam sua revisão histórica e NÃO estão certificados por este contrato. O motor de episódios ambient e as rotas legadas ainda precisam migrar para o contrato antes de se afirmar cobertura universal. Não migrar aprovações históricas implicitamente.
 
 A prévia de 64 segundos é um estudo acelerado. O renderizador de uma jornada real de oito horas permanece pendente; este contrato não cria esse renderizador.
+
+## Roteiro audiovisual com ações
+
+`production_harness.py` compila um roteiro gratuito de 1–8h para cidade ao entardecer, montanhas com estrelas ou varanda ao amanhecer. As pausas e interações repetem a cada hora; iluminação evolui uma vez e mantém o estado final, evitando reinício brusco. As durações não informadas no pedido ficam em `assumptions`. A blusa e a almofada usam a mesma cor. Texto da almofada é uma camada local rastreada, evitando depender de letras geradas por IA.
+
+Cada ação produz uma tarefa de clipe condicionado às referências. A chave de reutilização inclui identidade, cenário, cor e ação, mas NÃO comprova existência de cache. O executor futuro deve verificar assets no armazenamento do próprio workspace, preço atual e teto antes de enviar qualquer solicitação. O adaptador de geração de ações ainda não existe; todos os clipes são declarados ausentes. A API recusa enviar esse roteiro ao antigo renderer de chuva/vapor.
+
+`assess_delivery` exige duração visual e musical, revisão de identidade/objetos/contato, comprovação dos eventos no hash final e revisão do estilo musical. Não certifica engajamento nem retenção. As séries podem usar direção 8-bit, jazz ou livre sem o antigo prompt fixo de Rhodes. Geração completa de áudio continua sujeita ao orçamento e à duração real, sem faixas repetidas para declarar horas inéditas.
+
+Editor: Criar → Direção de cena, ações e música. Preparar e salvar não chama provedor. Roteiros são salvos em creator_plans no workspace atual e podem ser retomados/editados. Não altera live, mídia, aprovação ou agenda existentes.

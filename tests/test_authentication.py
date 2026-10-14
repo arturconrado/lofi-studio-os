@@ -443,3 +443,21 @@ def test_motion_study_media_stays_in_own_workspace(client,monkeypatch):
     client.cookies.clear();signup(client)
     assert client.get(root+'/video').status_code==404
     assert accessed==['private/study.mp4']
+
+
+def test_free_storyboard_is_saved_scoped_and_never_queues_generation(client):
+    _,identity=signup(client)
+    client.headers['X-CSRF-Token']=identity['csrf_token']
+    cid=client.get('/api/channels').json()[0]['id']
+    body={'channel_id':cid,'spec':{'hours':8,'music_style':'8bit_lofi'}}
+    r=client.post('/api/creator/storyboard/save',json=body)
+    assert r.status_code==200,r.text
+    saved=r.json()
+    assert not saved['generation_started'] and not saved['harness']['render_ready']
+    body['draft_id']=saved['id'];body['spec']['shirt_color']='pink'
+    assert client.post('/api/creator/storyboard/save',json=body).json()['id']==saved['id']
+    rows=client.get('/api/creator/plans',params={'channel_id':cid}).json()['plans']
+    assert rows[0]['plan']['production_spec']['shirt_color']=='pink'
+    assert client.post('/api/creator/produce',json={'plan_id':saved['id'],'plan':saved['plan'],'confirm_cost':True,'budget':12}).status_code==409
+    client.cookies.clear();_,other=signup(client);client.headers['X-CSRF-Token']=other['csrf_token']
+    assert client.post('/api/creator/storyboard/save',json=body).status_code==404
