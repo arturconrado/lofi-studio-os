@@ -39,3 +39,9 @@ O primeiro asset é obrigatoriamente vinculado a um creator_plan com production_
 Clipes de quadro inteiro ficam presos ao fingerprint do mesmo cenário, personagem, cor, props e ação. Reutilização entre temas precisa de camadas de personagem/gato, máscaras de alpha/oclusão e enquadramento revisados; isso ainda não está implementado. A varanda, outra perspectiva ou objetos mudando contato não podem herdar automaticamente clipes da biblioteca. Luz/chuva/estrelas seguem relógio contínuo e não reiniciam a cada hora.
 
 O compilador informa `planned_timeline_seconds`, nunca comprova horas renderizadas. Um render completo e seu relatório vinculado ao hash, transições, áudio e revisão continuam necessários. A montagem executável de todas as ações permanece bloqueada enquanto faltam assets; o planejamento não é uma certificação de vídeo.
+
+## Política padrão de custo e renderização
+
+`render_policy` define a ordem obrigatória: asset compatível e revisado no espaço atual → capacidade local realmente implementada → cotação de IA para a lacuna restante. A duração final é montada na linha do tempo local. Ausência de um rig/clip não permite declarar a ação atendida por deformação genérica da imagem. IA gera apenas bases ou ações ausentes, sem retentativa paga automática. O processamento local consome recursos do servidor e não é anunciado como custo total zero.
+
+O compilador aplica essa política aos trechos da montagem. A submissão de referências verifica o resultado já aprovado do mesmo roteiro, fonte e versão antes de consultar preço, chave ou reservar nova cobrança. Assets completos de outra cena e perspectiva continuam incompatíveis; reutilização entre planos/cenários exige implementação adicional das camadas e revisões.

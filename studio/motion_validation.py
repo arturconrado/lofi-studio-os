@@ -81,8 +81,6 @@ class Pilot(BaseModel):
 @router.post('')
 def submit(body:Pilot):
     if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva do teste de oito segundos')
-    token=runtime.key()
-    if not token:raise HTTPException(409,'Chave OpenRouter indisponível')
     # Check identity and idempotency before any external work.
     with db() as c:
         profile(c,body.channel_id)
@@ -94,16 +92,28 @@ def submit(body:Pilot):
         if not plan or not plan['data'].get('production_spec'):raise HTTPException(404,'Salve o roteiro deste programa antes de produzir seus assets')
         source=c.execute('SELECT s.image_key FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.batch_id=%s AND s.id=%s',(body.channel_id,body.batch_id,body.scene_id)).fetchone()
         if not source:raise HTTPException(404,'Referência não encontrada neste canal')
-    try:cap=catalog_quote()
-    except Exception:raise HTTPException(409,'Cotação indisponível; sem envio pago') from None
-    if cap>body.max_reservation_usd:raise HTTPException(409,'O preço aumentou; confira a cotação antes de enviar')
-    plan_cap=Decimal(str(plan['data']['production_spec'].get('asset_budget_usd',0)))
-    if cap>plan_cap:raise HTTPException(409,'A reserva supera o teto de assets deste roteiro. Ajuste e salve o roteiro antes de produzir.')
     obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=source['image_key'])
     try:raw=obj['Body'].read(10*1024*1024+1)
     finally:obj['Body'].close()
     if len(raw)>10*1024*1024:raise HTTPException(422,'Referência excede 10MB')
     image=Image.open(io.BytesIO(raw)).convert('RGB');image.thumbnail((1280,720));encoded=io.BytesIO();image.save(encoded,format='JPEG',quality=92)
+    source_sha=hashlib.sha256(raw).hexdigest()
+    spec_sha=hashlib.sha256(json.dumps(plan['data']['production_spec'],sort_keys=True).encode()).hexdigest()
+    # Reuse before reservation: a repeated request for the same approved reference
+    # must not buy the same source/brief animation again.
+    with db() as c:
+        cached=c.execute("""SELECT * FROM factory_tasks WHERE kind=%s AND status='COMPLETED'
+          AND payload->>'plan_id'=%s AND payload->>'source_sha256'=%s
+          AND payload->>'spec_sha256'=%s AND payload->>'reference_review'='approved'
+          ORDER BY created_at DESC LIMIT 1""",(KIND,str(body.plan_id),source_sha,spec_sha)).fetchone()
+        if cached:return dict(public(cached),reused=True)
+    token=runtime.key()
+    if not token:raise HTTPException(409,'Chave OpenRouter indisponível')
+    try:cap=catalog_quote()
+    except Exception:raise HTTPException(409,'Cotação indisponível; sem envio pago') from None
+    if cap>body.max_reservation_usd:raise HTTPException(409,'O preço aumentou; confira a cotação antes de enviar')
+    plan_cap=Decimal(str(plan['data']['production_spec'].get('asset_budget_usd',0)))
+    if cap>plan_cap:raise HTTPException(409,'A reserva supera o teto de assets deste roteiro. Ajuste e salve o roteiro antes de produzir.')
     payload={'plan_id':str(body.plan_id),'role':'interaction_reference','spec_sha256':hashlib.sha256(json.dumps(plan['data']['production_spec'],sort_keys=True).encode()).hexdigest(),'channel_id':str(body.channel_id),'batch_id':body.batch_id,'scene_id':body.scene_id,
              'source_sha256':hashlib.sha256(raw).hexdigest(),'prompt':PROMPT,'seconds':8,'demo_only':True}
     with db() as c:
