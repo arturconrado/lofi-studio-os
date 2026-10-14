@@ -56,9 +56,13 @@ def package(bid,folder):
  seconds=float(json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-of','json',str(audio)]))['format']['duration']);assert seconds>=b['target_seconds']
  akey=f'programs/{bid}/audio.mp3';mkey=f'programs/{bid}/manifest.json';s.upload_file(str(audio),bucket,akey,ExtraArgs={'ContentType':'audio/mpeg'})
  manifest={'batch':bid,'duration_seconds':seconds,'tracks':timeline,'audio':{'sha256':hashlib.sha256(audio.read_bytes()).hexdigest(),'bytes':audio.stat().st_size},'video':{'seconds':60,'cycle_seconds':60,'selected_scene':None,'provenance':'Original AI illustration animated locally; 20-second core repeated in a silent 60-second video'},'broadcast_started':False}
+ from .video_guardrails import assess,inspect
+ evidence=inspect(folder/'scene-loop.mp4')
+ evidence.update(demo_only=False,timeline_coverage_seconds=20,source_preserved=True)
+ manifest['video_guardrails']=assess(evidence,float(b['target_seconds']))
  s.put_object(Bucket=bucket,Key=mkey,Body=json.dumps(manifest,default=str).encode(),ContentType='application/json')
  with db() as c:
-  c.execute("UPDATE production_batches SET state='ready',audio_key=%s,manifest_key=%s,detail='Áudio e vídeo prontos para validação manual',updated_at=now() WHERE id=%s",(akey,mkey,bid));c.execute("UPDATE creator_plans SET status='ready' WHERE program_id=%s",(bid,));audit(c,'CREATOR_PROGRAM_READY',bid);c.commit()
+  c.execute("UPDATE production_batches SET state='ready',audio_key=%s,manifest_key=%s,detail='Áudio pronto; visual curto em repetição. Padrão temporal de live longa pendente',updated_at=now() WHERE id=%s",(akey,mkey,bid));c.execute("UPDATE creator_plans SET status='ready' WHERE program_id=%s",(bid,));audit(c,'CREATOR_PROGRAM_READY',bid);c.commit()
  for p in files:p.unlink()
 
 def tick():
