@@ -354,3 +354,30 @@ def test_publication_creation_is_idempotent_and_scoped(client,monkeypatch):
     body['title']='Original first video'
     assert client.post('/api/youtube/publications',json=body,headers={'X-CSRF-Token':other['csrf_token']}).status_code==404
     assert client.get('/api/youtube/publications').json()==[]
+
+
+def test_exact_library_video_publication_is_scoped_and_idempotent(client,monkeypatch):
+    import json
+    from studio import youtube_publish as yp
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    _,owner=signup(client);cid=client.get('/api/channels').json()[0]['id'];pid=uuid.uuid4()
+    marker=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:
+            report={'duration_seconds':3600,'technical_integrity':True,'full_decode_pass':True,'artifact_sha256':{'video':'a'*64}}
+            c.execute("INSERT INTO ambient_pilots(id,channel_id,title,video_key,silent_key,report,plan) VALUES(%s,%s,'Exact selected episode','episode/video.mp4','episode/silent.mp4',%s::jsonb,'{}')",(pid,cid,json.dumps(report)))
+            token=yp.cipher().encrypt(json.dumps({'scope':yp.UPLOAD_SCOPE}).encode()).decode()
+            c.execute("INSERT INTO channel_credentials(channel_id,youtube_channel_id,token_encrypted) VALUES(%s,%s,%s)",(cid,'CHANNEL-'+uuid.uuid4().hex,token));c.commit()
+    finally:WORKSPACE.reset(marker)
+    monkeypatch.setattr(yp,'configured',lambda:True)
+    assert client.get(f'/api/youtube/publications/pilots/{pid}/draft').json()['title']=='Exact selected episode'
+    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'title':'Exact selected episode','description':'','made_for_kids':False,'privacy':'public','confirm_publication':True}
+    url=f'/api/youtube/publications/pilots/{pid}';headers={'X-CSRF-Token':owner['csrf_token']}
+    first=client.post(url,json=body,headers=headers);assert first.status_code==200,first.text
+    second=client.post(url,json=body,headers=headers);assert second.status_code==200 and second.json()['id']==first.json()['id']
+    listing=client.get('/api/youtube/publications').json();assert listing[0]['pilot_id']==str(pid) and listing[0]['export_id'] is None
+    assert client.get('/api/ambient/pilots').json()[0]['status']=='review'  # Publication does not fabricate human review.
+    client.cookies.clear();_,other=signup(client)
+    assert client.get(f'/api/youtube/publications/pilots/{pid}/draft').status_code==409
+    assert client.post(url,json=body,headers={'X-CSRF-Token':other['csrf_token']}).status_code==404

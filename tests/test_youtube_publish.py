@@ -68,3 +68,9 @@ def test_completed_resumable_session_is_checked_without_new_upload(monkeypatch):
     monkeypatch.setattr(yp,'progress',lambda jid,**kw:saved.update(kw))
     assert yp.run_one()
     assert calls==['PUT'] and saved['video_id']=='abcdefghijk'
+
+
+def test_short_or_unvalidated_pilot_cannot_be_published():
+    assert not yp.ready_pilot({'report':{'duration_seconds':60,'decoded_without_errors':True,'artifact_sha256':{'video':'a'*64}}})
+    assert not yp.ready_pilot({'report':{'duration_seconds':3600,'artifact_sha256':{'video':'a'*64}}})
+    assert yp.ready_pilot({'report':{'duration_seconds':3600,'technical_integrity':True,'full_decode_pass':True,'artifact_sha256':{'video':'a'*64}}})
