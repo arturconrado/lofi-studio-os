@@ -506,5 +506,18 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     body['request_id']=str(uuid.uuid4())
     assert client.post('/api/creator/motion-validation',json=body,headers=headers).status_code==409
     assert Client.sends==3
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'approved','video_key':'cached.mp4'}),tid));c.commit()
+    finally:WORKSPACE.reset(marker)
+    def unavailable():raise AssertionError('Approved reuse must not call provider or request credentials')
+    monkeypatch.setattr(mv,'catalog_quote',unavailable)
+    monkeypatch.setattr(mv.runtime,'key',unavailable)
+    body['request_id']=str(uuid.uuid4())
+    reused=client.post('/api/creator/motion-validation',json=body,headers=headers)
+    assert reused.status_code==200,reused.text
+    assert reused.json()['reused'] and reused.json()['id']==tid
+    assert Client.sends==3
     client.cookies.clear();_,other=signup(client)
     assert client.post('/api/creator/motion-validation/'+tid+'/refresh',json={},headers={'X-CSRF-Token':other['csrf_token']}).status_code==404

@@ -76,13 +76,14 @@ def compile_spec(spec: ProductionSpec):
     tasks = []
     for action in unique:
         prompt = f'Same referenced adult girl and cat, same framing and {spec.scenario} setting, {spec.shirt_color} shirt and matching cat cushion. Action: {descriptions[action]} Natural clearly readable motion, consistent hands, face, cat anatomy, contact and occlusion. Start and finish at the specified pose anchors; no text, speech, camera cuts or added characters.'
-        tasks.append({'action':action, 'method':'reference_conditioned_ai_clip', 'status':'missing',
+        tasks.append({'action':action, 'method':'reuse_then_local_then_quoted_ai', 'ai_method_if_needed':'reference_conditioned_ai_clip', 'status':'missing',
                       'prompt':prompt, 'required_capabilities':['reference_identity','articulated_character_motion','contact_and_occlusion','pose_anchors'], 'cache_fingerprint':hashlib.sha256(json.dumps([identity,spec.scenario,action,prompt],sort_keys=True).encode()).hexdigest(),
                       'reuse_scope':'same_workspace_same_identity_scene_color_and_action', 'paid_retry':False})
     blockers = ['reference_animation_adapter_unavailable', 'action_clips_missing', 'audio_and_video_review_pending']
     if not spec.character_reference or not spec.cat_reference:blockers.append('identity_references_missing')
     if spec.asset_budget_usd == 0:blockers.append('asset_budget_not_authorized')
-    return {'spec':spec.model_dump(), 'identity':identity, 'duration_seconds':spec.hours*3600,
+    from .render_policy import defaults
+    return {'render_policy':defaults(), 'spec':spec.model_dump(), 'identity':identity, 'duration_seconds':spec.hours*3600,
             'cycle_seconds':3600, 'default_action':'typing_idle', 'events':events,
             'lighting':{'keyframes':light,'interpolation':'smoothstep','repeat_each_hour':False,
                         'after_hour_one':'hold_final_lighting','twinkle':spec.scenario=='mountain_stars',
@@ -164,7 +165,9 @@ def assembly_plan(compiled, assets):
         candidates.sort(key=lambda a:a['sha256'])
         chosen=candidates[(event['start']//3600)%len(candidates)] if candidates else None
         if not chosen:missing.add(event['action'])
-        segments.append({**event,'asset_sha256':chosen['sha256'] if chosen else None,
+        from .render_policy import choose_asset
+        decision=choose_asset(task['cache_fingerprint'],[chosen] if chosen else [])
+        segments.append({**event,'production_method':decision['method'],'asset_sha256':chosen['sha256'] if chosen else None,
                          'asset_key':chosen.get('video_key') if chosen else None,
                          'repeat_short_clip':idle,'playback_rate':1,
                          'timing':'absolute_program_clock','source_binding':task['cache_fingerprint']})
