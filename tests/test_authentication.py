@@ -381,3 +381,42 @@ def test_exact_library_video_publication_is_scoped_and_idempotent(client,monkeyp
     client.cookies.clear();_,other=signup(client)
     assert client.get(f'/api/youtube/publications/pilots/{pid}/draft').status_code==409
     assert client.post(url,json=body,headers={'X-CSRF-Token':other['csrf_token']}).status_code==404
+
+
+def test_live_presentation_reuses_own_episode_without_switching_audio(client,monkeypatch):
+    import json
+    from studio import live_presentation as lp,youtube_publish as yp
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    _,owner=signup(client);cid=client.get('/api/channels').json()[0]['id'];pid=uuid.uuid4();bid='LIVE-'+uuid.uuid4().hex[:8]
+    marker=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:
+            yp.ensure(c)
+            c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,channel_id,audio_key,video_key) VALUES(%s,'draft',3600,0,%s,'original/audio.mp3','original/video.mp4')",(bid,cid))
+            report={'duration_seconds':3600,'width':1280,'height':720,'fps':'24/1','technical_integrity':True,'full_decode_pass':True,'artifact_sha256':{'video':'a'*64},'delivery_assets':{'thumbnail1':'episode/cover.png'}}
+            c.execute("INSERT INTO ambient_pilots(id,channel_id,title,video_key,silent_key,report,plan) VALUES(%s,%s,'Greenhouse episode','episode/full.mp4','episode/silent.mp4',%s::jsonb,'{}')",(pid,cid,json.dumps(report)))
+            c.execute("INSERT INTO youtube_publications(id,request_id,channel_id,pilot_id,youtube_channel_id,title,description,privacy,made_for_kids,state) VALUES(%s,%s,%s,%s,'test-channel','Greenhouse episode','','public',false,'uploaded')",(uuid.uuid4(),uuid.uuid4(),cid,pid));c.commit()
+    finally:WORKSPACE.reset(marker)
+    class Storage:
+        def head_object(self,**kw):return {'ContentLength':1024}
+    monkeypatch.setattr(lp,'storage',Storage)
+    monkeypatch.setenv('S3_BUCKET','disposable-test')
+    root=f'/api/live-presentation/{cid}';headers={'X-CSRF-Token':owner['csrf_token']}
+    assert client.get(root+'/sources').json()[0]['pilot_id']==str(pid)
+    scene=client.post(root+'/scenes',json={'program_id':bid,'pilot_id':str(pid)},headers=headers)
+    assert scene.status_code==200,scene.text
+    assert scene.json()['audio_changed'] is False and scene.json()['selected'] is False
+    marker=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:
+            b=c.execute('SELECT audio_key,video_key FROM production_batches WHERE id=%s',(bid,)).fetchone()
+            assert b=={'audio_key':'original/audio.mp3','video_key':'original/video.mp4'}
+            assert c.execute('SELECT video_key FROM program_scenes WHERE batch_id=%s',(bid,)).fetchone()['video_key']=='episode/silent.mp4'
+    finally:WORKSPACE.reset(marker)
+    body={'program_id':bid,'title':'Lo-fi LIVE | Coding and Study','description':'Original instrumental music','confirm_review':True}
+    assert client.put(root+'/copy',json=body,headers=headers).status_code==200
+    assert client.get(root+'/copy',params={'program_id':bid}).json()['youtube_event_updated'] is False
+    client.cookies.clear();_,other=signup(client)
+    assert client.get(root+'/sources').json()==[]
+    assert client.post(root+'/scenes',json={'program_id':bid,'pilot_id':str(pid)},headers={'X-CSRF-Token':other['csrf_token']}).status_code==404
