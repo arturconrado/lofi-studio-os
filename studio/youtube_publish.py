@@ -1,5 +1,5 @@
 """Tenant-scoped reviewed MP4 publication with persisted resumable sessions."""
-import json,os,re,time,uuid
+import json,os,re,time,uuid,hashlib
 from urllib.parse import urlparse
 from datetime import datetime,timezone,timedelta
 import httpx
@@ -10,9 +10,10 @@ from .youtube import cipher,configured
 from .channels import profile
 router=APIRouter(prefix='/api/youtube/publications')
 UPLOAD_SCOPE='https://www.googleapis.com/auth/youtube.upload'
-FIELDS='id,channel_id,export_id,title,description,privacy,state,bytes_sent,total_bytes,video_id,actual_privacy,detail,created_at,updated_at'
+FIELDS='id,channel_id,export_id,pilot_id,thumbnail_detail,title,description,privacy,state,bytes_sent,total_bytes,video_id,actual_privacy,detail,created_at,updated_at'
 
 def ensure(c):
+    c.execute('SELECT pg_advisory_xact_lock(192837480)')
     c.execute('''CREATE TABLE IF NOT EXISTS youtube_publications(
       id UUID PRIMARY KEY,request_id UUID UNIQUE NOT NULL,channel_id UUID NOT NULL REFERENCES radio_channels(id),
       export_id UUID UNIQUE NOT NULL REFERENCES export_jobs(id),youtube_channel_id TEXT NOT NULL,
@@ -20,6 +21,14 @@ def ensure(c):
       state TEXT NOT NULL DEFAULT 'queued',session_encrypted TEXT,bytes_sent BIGINT NOT NULL DEFAULT 0,
       total_bytes BIGINT NOT NULL DEFAULT 0,video_id TEXT,actual_privacy TEXT,detail TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+    if not c.execute("SELECT 1 FROM pg_attribute WHERE attrelid='youtube_publications'::regclass AND attname='pilot_id' AND NOT attisdropped").fetchone():
+        c.execute('ALTER TABLE youtube_publications ALTER COLUMN export_id DROP NOT NULL')
+        c.execute('ALTER TABLE youtube_publications ADD COLUMN pilot_id UUID UNIQUE REFERENCES ambient_pilots(id)')
+        c.execute("ALTER TABLE youtube_publications ADD COLUMN thumbnail_detail TEXT NOT NULL DEFAULT ''")
+    if not c.execute("SELECT 1 FROM pg_attribute WHERE attrelid='youtube_publications'::regclass AND attname='pilot_sha256' AND NOT attisdropped").fetchone():
+        c.execute('ALTER TABLE youtube_publications ADD COLUMN pilot_sha256 TEXT')
+
+
 
 def upload_allowed(tokens):return UPLOAD_SCOPE in tokens.get('scope','').split()
 def secure_session(url):
@@ -94,7 +103,7 @@ def access_token(client,row):
     return tokens['access_token']
 
 def progress(jid,**fields):
-    assert fields.keys()<={'state','detail','session_encrypted','bytes_sent','total_bytes','video_id','actual_privacy'}
+    assert fields.keys()<={'state','detail','session_encrypted','bytes_sent','total_bytes','video_id','actual_privacy','thumbnail_detail'}
     with db() as c:c.execute('UPDATE youtube_publications SET '+','.join(k+'=%s' for k in fields)+',updated_at=now() WHERE id=%s',tuple(fields.values())+(jid,));c.commit()
 
 def accepted_offset(response,total):
@@ -115,18 +124,22 @@ def run_one():
     with db() as lock:
         ensure(lock);lock.commit()
         if not lock.execute('SELECT pg_try_advisory_lock(192837479) ok').fetchone()['ok']:return False
-        row=lock.execute("SELECT p.*,e.object_key,e.state export_state FROM youtube_publications p JOIN export_jobs e ON e.id=p.export_id WHERE p.state='queued' ORDER BY p.created_at LIMIT 1").fetchone()
+        row=lock.execute("SELECT p.*,COALESCE(e.object_key,a.video_key) object_key,CASE WHEN p.pilot_id IS NOT NULL THEN 'completed' ELSE e.state END export_state,a.report pilot_report FROM youtube_publications p LEFT JOIN export_jobs e ON e.id=p.export_id LEFT JOIN ambient_pilots a ON a.id=p.pilot_id WHERE p.state='queued' ORDER BY p.created_at LIMIT 1").fetchone()
         if not row:return False
         progress(row['id'],state='uploading');starting=False
         try:
             if row['export_state']!='completed':raise ValueError('Export unavailable')
             total=storage().head_object(Bucket=os.environ['S3_BUCKET'],Key=row['object_key'])['ContentLength'];row['total_bytes']=total;progress(row['id'],total_bytes=total)
+            if row.get('pilot_id'):verify_pilot_media(row)
             with httpx.Client(timeout=120,follow_redirects=False) as client:
                 headers={'Authorization':'Bearer '+access_token(client,row)}
                 if row['session_encrypted']:
                     url=secure_session(cipher().decrypt(row['session_encrypted'].encode()).decode())
                     r=client.put(url,headers=headers|{'Content-Length':'0','Content-Range':f'bytes */{total}'},content=b'')
-                    if r.status_code in (200,201):finish(row,r);return True
+                    if r.status_code in (200,201):
+                        finish(row,r)
+                        if row.get('pilot_id'):set_pilot_thumbnail(client,row,r.json()['id'])
+                        return True
                     if r.status_code!=308:r.raise_for_status();raise ValueError('Unexpected status')
                     offset=accepted_offset(r,total)
                 else:
@@ -140,7 +153,10 @@ def run_one():
                     finally:obj['Body'].close()
                     if len(data)!=end-offset+1:raise ValueError('Incomplete read')
                     r=client.put(url,headers={'Authorization':'Bearer '+access_token(client,row),'Content-Type':'video/mp4','Content-Length':str(len(data)),'Content-Range':f'bytes {offset}-{end}/{total}'},content=data)
-                    if r.status_code in (200,201):finish(row,r);return True
+                    if r.status_code in (200,201):
+                        finish(row,r)
+                        if row.get('pilot_id'):set_pilot_thumbnail(client,row,r.json()['id'])
+                        return True
                     if r.status_code!=308:r.raise_for_status();raise ValueError('Unexpected status')
                     next_offset=accepted_offset(r,total)
                     if next_offset<=offset or next_offset>end+1:raise ValueError('Invalid progress')
@@ -164,4 +180,75 @@ def main():
             except Exception:pass
             finally:WORKSPACE.reset(marker)
         time.sleep(3)
+
+
+def ready_pilot(row):
+    report=row['report']
+    return float(report.get('duration_seconds',0))==3600 and bool(report.get('technical_integrity') or report.get('decoded_without_errors')) and bool(report.get('full_decode_pass') or report.get('decoded_without_errors')) and re.fullmatch(r'[a-f0-9]{64}',report.get('artifact_sha256',{}).get('video','')) is not None
+
+@router.get('/pilots/{pid}/draft')
+def pilot_draft(pid:uuid.UUID):
+    with db() as c:p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s',(pid,)).fetchone()
+    if not p or not ready_pilot(p):raise HTTPException(409,'Este arquivo não é um vídeo completo de 1h validado tecnicamente.')
+    key=p['report'].get('delivery_assets',{}).get('description')
+    description='Instrumental lo-fi jazzhop for coding, study and quiet focus. Music and visuals produced with AI assistance.'
+    if key:
+        obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=key)
+        try:description=obj['Body'].read(20000).decode('utf-8')[:5000]
+        finally:obj['Body'].close()
+    return {'pilot_id':pid,'channel_id':p['channel_id'],'title':p['title'],'description':description,'seconds':3600,'thumbnail_url':f'/api/ambient/pilots/{pid}/assets/thumbnail1','video_url':f'/api/ambient/pilots/{pid}/video'}
+
+class PilotPublication(BaseModel):
+    request_id:uuid.UUID
+    channel_id:uuid.UUID
+    title:str=Field(min_length=1,max_length=100)
+    description:str=Field(max_length=5000)
+    privacy:str='public'
+    made_for_kids:bool
+    confirm_publication:bool=False
+
+@router.post('/pilots/{pid}')
+def create_pilot(pid:uuid.UUID,body:PilotPublication):
+    if not configured():raise HTTPException(503,'Configure a conexão Google.')
+    if not body.confirm_publication:raise HTTPException(422,'Confirme a publicação deste vídeo específico.')
+    if body.privacy not in ('public','private','unlisted') or not body.title.strip() or any(x in body.title+body.description for x in '<>'):raise HTTPException(422,'Texto ou visibilidade inválidos.')
+    with db() as c:
+        ensure(c);profile(c,body.channel_id);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(pid),))
+        p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(pid,body.channel_id)).fetchone()
+        if not p:raise HTTPException(404,'Vídeo inexistente neste canal.')
+        if not ready_pilot(p):raise HTTPException(409,'Vídeo completo de uma hora ainda não validado tecnicamente.')
+        old=c.execute('SELECT '+FIELDS+' FROM youtube_publications WHERE request_id=%s OR pilot_id=%s',(body.request_id,pid)).fetchone()
+        if old:
+            if old['pilot_id']!=pid or old['channel_id']!=body.channel_id or old['title']!=body.title.strip() or old['description']!=body.description or old['privacy']!=body.privacy:raise HTTPException(409,'Este vídeo já tem um envio registrado. Confira o histórico.')
+            c.commit();return old
+        cred=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s FOR UPDATE',(body.channel_id,)).fetchone()
+        if not cred or not upload_allowed(json.loads(cipher().decrypt(cred['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio pelo Google no menu Canais.')
+        jid=uuid.uuid4()
+        c.execute('''INSERT INTO youtube_publications(id,request_id,channel_id,pilot_id,youtube_channel_id,title,description,privacy,made_for_kids,pilot_sha256)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',(jid,body.request_id,body.channel_id,pid,cred['youtube_channel_id'],body.title.strip(),body.description,body.privacy,body.made_for_kids,p['report']['artifact_sha256']['video']))
+        audit(c,'PILOT_PUBLICATION_AUTHORIZED',str(jid),str(pid));c.commit()
+    return {'id':jid,'state':'queued','pilot_id':pid}
+
+def verify_pilot_media(row):
+    expected=row['pilot_sha256']
+    if row['pilot_report']['artifact_sha256']['video']!=expected:raise ValueError('Pilot changed after authorization')
+    obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=row['object_key'])
+    h=hashlib.sha256()
+    try:
+        for chunk in obj['Body'].iter_chunks(1024*1024):h.update(chunk)
+    finally:obj['Body'].close()
+    if h.hexdigest()!=expected:raise ValueError('Pilot integrity changed')
+
+def set_pilot_thumbnail(client,row,video_id):
+    try:
+        key=row['pilot_report']['delivery_assets']['thumbnail1']
+        obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=key)
+        try:
+            if obj['ContentLength']>50*1024*1024:raise ValueError('Thumbnail too large')
+            data=obj['Body'].read()
+        finally:obj['Body'].close()
+        r=client.post('https://www.googleapis.com/upload/youtube/v3/thumbnails/set',params={'videoId':video_id},headers={'Authorization':'Bearer '+access_token(client,row),'Content-Type':'image/png'},content=data)
+        r.raise_for_status();progress(row['id'],thumbnail_detail='Capa do episódio enviada ao YouTube.')
+    except Exception:progress(row['id'],thumbnail_detail='Vídeo recebido, mas a capa personalizada não foi confirmada. Confira a permissão de thumbnails do canal.')
+
 if __name__=='__main__':main()
