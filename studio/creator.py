@@ -190,3 +190,6 @@ def save_storyboard(body:StoryboardRequest):
 def music_styles():
  from .music_styles import catalog
  return catalog()
+
+from .motion_validation import router as motion_validation_router
+router.include_router(motion_validation_router)

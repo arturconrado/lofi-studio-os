@@ -64,3 +64,13 @@ def test_validation_budget_and_style_catalog():
     assert 'pulse-wave' in audio_prompt('8bit_lofi','')
     assert 'nylon-string' in audio_prompt('bossa_lofi','')
     assert compile_spec(ProductionSpec())['cost_policy']['audio_and_visual_share_validation_cap']
+
+
+def test_motion_quote_reserves_worst_sku_and_rejects_ambiguous_units():
+    import pytest
+    from decimal import Decimal
+    from studio.motion_validation import quote_model
+    m=dict(supported_durations=[8],supported_resolutions=['720p'],supported_frame_images=['first_frame'],pricing_skus={'duration_seconds_with_audio':'.08','duration_seconds_without_audio_720p':'.03'})
+    assert quote_model(m)==Decimal('.64')
+    m['pricing_skus']['tokens']='.000001'
+    with pytest.raises(ValueError):quote_model(m)

@@ -23,3 +23,9 @@ Cada ação produz uma tarefa de clipe condicionado às referências. A chave de
 `assess_delivery` exige duração visual e musical, revisão de identidade/objetos/contato, comprovação dos eventos no hash final e revisão do estilo musical. Não certifica engajamento nem retenção. As séries podem usar direção 8-bit, jazz ou livre sem o antigo prompt fixo de Rhodes. Geração completa de áudio continua sujeita ao orçamento e à duração real, sem faixas repetidas para declarar horas inéditas.
 
 Editor: Criar → Direção de cena, ações e música. Preparar e salvar não chama provedor. Roteiros são salvos em creator_plans no workspace atual e podem ser retomados/editados. Não altera live, mídia, aprovação ou agenda existentes.
+
+## Piloto de movimento no portal
+
+`motion_validation.py` disponibiliza um teste isolado de oito segundos com imagem de uma cena do próprio canal, via OpenRouter Veo 3.1 Lite. Consulta capacidades/preços atuais, reserva o maior SKU por segundo conhecido e exige confirmação do valor apresentado. O orçamento de validação desta etapa soma no máximo US$2 em reservas duráveis de factory_tasks, incluindo pedidos incertos. A reserva também passa pelo limite financeiro geral. Não há retentativa de submissão.
+
+A atualização de resultado apenas consulta o mesmo job e salva o MP4 privado com hash, decodificação e indicação demo_only. Não altera cenas aplicadas, áudio ou lives. O piloto testa contato e articulação; não executa todas as ações do roteiro nem certifica anatomia ou duração de oito horas. O motor completo continua bloqueado até seus assets e integração estarem prontos.
