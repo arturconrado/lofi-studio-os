@@ -461,3 +461,50 @@ def test_free_storyboard_is_saved_scoped_and_never_queues_generation(client):
     assert client.post('/api/creator/produce',json={'plan_id':saved['id'],'plan':saved['plan'],'confirm_cost':True,'budget':12}).status_code==409
     client.cookies.clear();_,other=signup(client);client.headers['X-CSRF-Token']=other['csrf_token']
     assert client.post('/api/creator/storyboard/save',json=body).status_code==404
+
+
+def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeypatch):
+    import json,io
+    from PIL import Image
+    from decimal import Decimal
+    from studio import motion_validation as mv
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    _,identity=signup(client);headers={'X-CSRF-Token':identity['csrf_token']}
+    cid=client.get('/api/channels').json()[0]['id'];bid='PILOT-'+uuid.uuid4().hex[:8];tid=str(uuid.uuid4())
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,channel_id) VALUES(%s,'draft',3600,0,%s)",(bid,cid))
+            c.execute("INSERT INTO program_scenes(batch_id,id,title,video_key,image_key,duration_seconds,width,height,fps,technique,position) VALUES(%s,'ref','reference','old.mp4','old.jpg',60,1280,720,30,'test',0)",(bid,));c.commit()
+    finally:WORKSPACE.reset(marker)
+    image=io.BytesIO();Image.new('RGB',(16,9)).save(image,format='JPEG')
+    class Storage:
+        def get_object(self,**kw):return {'Body':io.BytesIO(image.getvalue())}
+    class Client:
+        sends=0
+        def __init__(self,**kw):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def post(self,*args,**kw):Client.sends+=1;raise TimeoutError()
+    monkeypatch.setattr(mv,'catalog_quote',lambda:Decimal('.64'))
+    monkeypatch.setattr(mv.runtime,'key',lambda:'not-a-real-key')
+    monkeypatch.setattr(mv,'storage',Storage)
+    monkeypatch.setattr(mv.httpx,'Client',Client)
+    import studio.financial
+    monkeypatch.setattr(studio.financial,'check_available',lambda c,amount:None)
+    monkeypatch.setenv('S3_BUCKET','disposable-test')
+    saved=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':{'hours':8,'asset_budget_usd':2}},headers=headers).json()
+    body=dict(request_id=tid,plan_id=saved['id'],channel_id=cid,batch_id=bid,scene_id='ref',max_reservation_usd='.64',confirm_cost=True)
+    r=client.post('/api/creator/motion-validation',json=body,headers=headers)
+    assert r.status_code==200,r.text
+    assert r.json()['state']=='UNCERTAIN'
+    assert client.post('/api/creator/motion-validation',json=body,headers=headers).json()['state']=='UNCERTAIN'
+    assert Client.sends==1
+    for _ in range(2):
+        body['request_id']=str(uuid.uuid4());assert client.post('/api/creator/motion-validation',json=body,headers=headers).status_code==200
+    body['request_id']=str(uuid.uuid4())
+    assert client.post('/api/creator/motion-validation',json=body,headers=headers).status_code==409
+    assert Client.sends==3
+    client.cookies.clear();_,other=signup(client)
+    assert client.post('/api/creator/motion-validation/'+tid+'/refresh',json={},headers={'X-CSRF-Token':other['csrf_token']}).status_code==404

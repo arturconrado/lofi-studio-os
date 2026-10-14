@@ -122,3 +122,18 @@ def assess_delivery(compiled, receipts):
     if audio.get('style_reviewed') is not True or not audio.get('sha256') or audio.get('human_review_sha256')!=audio.get('sha256'):failures.append('audio_style_review_unbound')
     if audio.get('unique_measured_seconds',0)<compiled['duration_seconds']:failures.append('original_audio_coverage_short')
     return {'eligible':not failures,'failures':failures,'generation_started':False}
+
+
+def asset_inventory(plan):
+    """Existing engines consume only reviewed assets bound to this exact brief."""
+    spec=plan.get('production_spec')
+    if not spec:return {'ready':False,'approved_references':[],'required_action_clips':[]}
+    digest=hashlib.sha256(json.dumps(spec,sort_keys=True).encode()).hexdigest()
+    references=[a for a in plan.get('production_assets',{}).values()
+                if a.get('role')=='interaction_reference' and a.get('spec_sha256')==digest
+                and a.get('state')=='APPROVED_REFERENCE' and a.get('sha256')
+                and a.get('human_review_sha256')==a['sha256']]
+    compiled=compile_spec(ProductionSpec(**spec))
+    return {'ready':False,'approved_references':references,
+            'required_action_clips':[t['action'] for t in compiled['asset_tasks']],
+            'reason':'Reference approval does not replace action clips or timeline rendering'}

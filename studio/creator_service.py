@@ -10,6 +10,10 @@ CACHE=Path('/cache/creator')
 if active_workspace():CACHE=CACHE/active_workspace()
 IMAGE_MODEL='bytedance-seed/seedream-4.5'
 def visual(bid,plan,folder):
+ if plan.get('production_spec'):
+  from .production_harness import asset_inventory
+  inventory=asset_inventory(plan)
+  if not inventory['ready']:raise ValueError('Roteiro com ações ainda exige clipes revisados e montagem temporal; nenhuma imagem paga enviada')
  with httpx.Client(timeout=180) as client:
   r=client.get('https://openrouter.ai/api/v1/images/models/'+IMAGE_MODEL+'/endpoints');r.raise_for_status()
   endpoint=next(e for e in r.json()['endpoints'] if e['provider_tag']=='seed')

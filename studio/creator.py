@@ -177,9 +177,10 @@ def save_storyboard(body:StoryboardRequest):
  with db() as c:
   profile(c,body.channel_id)
   if body.draft_id:
-   prior=c.execute("SELECT id FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL FOR UPDATE",(body.draft_id,body.channel_id)).fetchone()
+   prior=c.execute("SELECT id,data FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL FOR UPDATE",(body.draft_id,body.channel_id)).fetchone()
    if not prior:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
    pid=body.draft_id
+   result['production_assets']=prior['data'].get('production_assets',{})
    c.execute('UPDATE creator_plans SET theme=%s,minutes=%s,data=%s WHERE id=%s',(body.spec.scenario,body.spec.hours*60,json.dumps(result,ensure_ascii=False),pid))
   else:
    c.execute("INSERT INTO creator_plans(id,request_id,theme,minutes,data,status,reserved,channel_id) VALUES(%s,%s,%s,%s,%s,'draft',0,%s)",(pid,pid,body.spec.scenario,body.spec.hours*60,json.dumps(result,ensure_ascii=False),body.channel_id))
@@ -190,3 +191,6 @@ def save_storyboard(body:StoryboardRequest):
 def music_styles():
  from .music_styles import catalog
  return catalog()
+
+from .motion_validation import router as motion_validation_router
+router.include_router(motion_validation_router)
