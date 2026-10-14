@@ -319,3 +319,38 @@ def test_publications_are_private_to_workspace_and_require_approval(client):
     assert client.post('/api/youtube/publications/'+str(uuid.uuid4())+'/resume',headers=headers).status_code==409
     client.cookies.clear();signup(client)
     assert client.get('/api/youtube/publications').json()==[]
+
+
+def test_publication_creation_is_idempotent_and_scoped(client,monkeypatch):
+    import json
+    from studio import youtube_publish as yp,miniobs
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    _,owner=signup(client)
+    cid=client.get('/api/channels').json()[0]['id']
+    eid=uuid.uuid4();bid='UPLOAD-'+uuid.uuid4().hex[:8]
+    marker=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:
+            c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,channel_id) VALUES(%s,'ready',3600,0,%s)",(bid,cid))
+            c.execute("INSERT INTO export_jobs(id,request_id,program_id,snapshot_sha256,seconds,state,object_key) VALUES(%s,%s,%s,'reviewed',3600,'completed','private/verified.mp4')",(eid,uuid.uuid4(),bid))
+            c.execute("INSERT INTO program_reviews(program_id,snapshot_sha256,note,reviewed_by) VALUES(%s,'reviewed','test','test-user')",(bid,))
+            token=yp.cipher().encrypt(json.dumps({'scope':yp.UPLOAD_SCOPE}).encode()).decode()
+            c.execute("INSERT INTO channel_credentials(channel_id,youtube_channel_id,token_encrypted) VALUES(%s,%s,%s)",(cid,'CHANNEL-'+uuid.uuid4().hex,token));c.commit()
+    finally:WORKSPACE.reset(marker)
+    monkeypatch.setattr(yp,'configured',lambda:True)
+    monkeypatch.setattr(miniobs,'program_snapshot',lambda c,b:({},'reviewed'))
+    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'export_id':str(eid),'title':'Original first video','description':'Test only','made_for_kids':False,'privacy':'public','confirm_review':True,'confirm_rights':True}
+    headers={'X-CSRF-Token':owner['csrf_token']}
+    first=client.post('/api/youtube/publications',json=body,headers=headers)
+    assert first.status_code==200,first.text
+    second=client.post('/api/youtube/publications',json=body,headers=headers)
+    assert second.status_code==200 and first.json()['id']==second.json()['id']
+    body['title']='Changed request'
+    assert client.post('/api/youtube/publications',json=body,headers=headers).status_code==409
+    listed=client.get('/api/youtube/publications').json()
+    assert len(listed)==1 and 'session_encrypted' not in listed[0]
+    client.cookies.clear();_,other=signup(client)
+    body['title']='Original first video'
+    assert client.post('/api/youtube/publications',json=body,headers={'X-CSRF-Token':other['csrf_token']}).status_code==404
+    assert client.get('/api/youtube/publications').json()==[]
