@@ -46,10 +46,33 @@ def storage():
     workspace=active_workspace()
     return ScopedStorage(client,workspace) if workspace else client
 
+def schema_revision():
+    """Hash initialization code so schema changes require a new migration."""
+    import inspect
+    from .creator import init as creator_init
+    from .channels import init as channels_init
+    from .ambient_api import init as ambient_init
+    from .growth import init as growth_init
+    from .monetization import init as monetization_init
+    from .episode_api import init as episodes_init
+    from .programming import initialize as programming_init
+    from .exports import initialize as exports_init
+    from .youtube import initialize as youtube_init
+    functions=(init_db,creator_init,channels_init,ambient_init,growth_init,
+               monetization_init,episodes_init,programming_init,exports_init,youtube_init)
+    return hashlib.sha256('\n'.join(inspect.getsource(f) for f in functions).encode()).hexdigest()
+
 def init_db(connection=None):
     with (nullcontext(connection) if connection is not None else db()) as c:
         with c.cursor() as q:
             q.execute('SELECT pg_advisory_xact_lock(192837466)')
+            revision=schema_revision()
+            q.execute('CREATE TABLE IF NOT EXISTS studio_schema_state(id INTEGER PRIMARY KEY CHECK(id=1),revision TEXT NOT NULL)')
+            q.execute('SELECT revision FROM studio_schema_state WHERE id=1')
+            applied=q.fetchone()
+            if applied and applied['revision']==revision:
+                c.commit()
+                return
             q.execute('SELECT current_schema() AS schema')
             seed_legacy = q.fetchone()['schema'] == 'public'
             q.execute("CREATE TABLE IF NOT EXISTS production_batches(id TEXT PRIMARY KEY,state TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',seconds NUMERIC NOT NULL DEFAULT 0,completed INTEGER NOT NULL DEFAULT 0,reserved NUMERIC NOT NULL DEFAULT 0,target_seconds INTEGER NOT NULL,budget NUMERIC NOT NULL,video_key TEXT,audio_key TEXT,manifest_key TEXT,updated_at TIMESTAMPTZ NOT NULL DEFAULT now())")
@@ -147,6 +170,7 @@ def init_db(connection=None):
         init_exports(c)
         from .youtube import initialize as init_youtube
         init_youtube(c)
+        c.execute('INSERT INTO studio_schema_state(id,revision) VALUES(1,%s) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision',(revision,))
         c.commit()
 
 def audit(conn,action,entity,detail=''):
