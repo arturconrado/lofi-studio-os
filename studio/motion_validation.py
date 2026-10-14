@@ -49,7 +49,7 @@ def public(row):
     return {'id':row['id'],'state':row['status'],'reserved_usd':row['reserved_cost'],
             'actual_cost_usd':p.get('actual_cost_usd'),'report':p.get('report'),
             'detail':row.get('detail'),'video_url':f"/api/creator/motion-validation/{row['id']}/video" if p.get('video_key') else None,
-            'demo_only':True,'applied_to_live':False}
+            'plan_id':p.get('plan_id'),'role':p.get('role'),'demo_only':True,'applied_to_live':False}
 
 
 @router.get('/sources')
@@ -70,6 +70,7 @@ def quote():
 
 class Pilot(BaseModel):
     request_id:uuid.UUID
+    plan_id:uuid.UUID
     channel_id:uuid.UUID
     batch_id:str=Field(max_length=40)
     scene_id:str=Field(max_length=100)
@@ -89,6 +90,8 @@ def submit(body:Pilot):
         if old:
             if old['kind']!=KIND:raise HTTPException(409,'Identificador já utilizado')
             return public(old)
+        plan=c.execute("SELECT data FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft'",(body.plan_id,body.channel_id)).fetchone()
+        if not plan or not plan['data'].get('production_spec'):raise HTTPException(404,'Salve o roteiro deste programa antes de produzir seus assets')
         source=c.execute('SELECT s.image_key FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.batch_id=%s AND s.id=%s',(body.channel_id,body.batch_id,body.scene_id)).fetchone()
         if not source:raise HTTPException(404,'Referência não encontrada neste canal')
     try:cap=catalog_quote()
@@ -99,7 +102,7 @@ def submit(body:Pilot):
     finally:obj['Body'].close()
     if len(raw)>10*1024*1024:raise HTTPException(422,'Referência excede 10MB')
     image=Image.open(io.BytesIO(raw)).convert('RGB');image.thumbnail((1280,720));encoded=io.BytesIO();image.save(encoded,format='JPEG',quality=92)
-    payload={'channel_id':str(body.channel_id),'batch_id':body.batch_id,'scene_id':body.scene_id,
+    payload={'plan_id':str(body.plan_id),'role':'interaction_reference','spec_sha256':hashlib.sha256(json.dumps(plan['data']['production_spec'],sort_keys=True).encode()).hexdigest(),'channel_id':str(body.channel_id),'batch_id':body.batch_id,'scene_id':body.scene_id,
              'source_sha256':hashlib.sha256(raw).hexdigest(),'prompt':PROMPT,'seconds':8,'demo_only':True}
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
@@ -109,7 +112,7 @@ def submit(body:Pilot):
         if spent+cap>Decimal('2'):raise HTTPException(409,'Teto total de US$2 atingido; nenhum envio feito')
         from .financial import check_available
         check_available(c,cap)
-        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'SUBMITTING','Pedido único; sem retentativa automática')",(body.request_id,KIND,MODEL,json.dumps(payload),cap));audit(c,'MOTION_PILOT_RESERVED',str(body.request_id),str(cap));c.commit()
+        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'SUBMITTING','Pedido único; sem retentativa automática')",(body.request_id,KIND,MODEL,json.dumps(payload),cap));c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',COALESCE(data->'production_assets','{}'::jsonb)||%s::jsonb) WHERE id=%s",(json.dumps({str(body.request_id):{'role':'interaction_reference','state':'SUBMITTING','spec_sha256':payload['spec_sha256']}}),body.plan_id));audit(c,'MOTION_PILOT_RESERVED',str(body.request_id),str(cap));c.commit()
     try:
         with httpx.Client(timeout=90) as client:
             r=client.post('https://openrouter.ai/api/v1/videos',headers={'Authorization':'Bearer '+token,'X-Title':'Lo-Fi Studio OS validation'},json={'model':MODEL,'prompt':PROMPT,'duration':8,'resolution':'720p','aspect_ratio':'16:9','generate_audio':False,'frame_images':[{'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+base64.b64encode(encoded.getvalue()).decode()},'frame_type':'first_frame'}],'provider':{'allow_fallbacks':False}})
@@ -150,7 +153,7 @@ def refresh(tid:uuid.UUID):
         # Never expose provider URLs or keys to the browser.
         patch={'video_key':key,'report':report,'actual_cost_usd':state.get('usage',{}).get('cost')}
     with db() as c:
-        c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Prévia de oito segundos pronta; revisão visual pendente',updated_at=now() WHERE id=%s",(json.dumps(patch),tid));audit(c,'MOTION_PILOT_COMPLETED',str(tid));c.commit();return public(get_task(c,tid))
+        c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Prévia de oito segundos pronta; revisão visual pendente',updated_at=now() WHERE id=%s",(json.dumps(patch),tid));c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',COALESCE(data->'production_assets','{}'::jsonb)||%s::jsonb) WHERE id=%s",(json.dumps({str(tid):{'role':'interaction_reference','state':'REVIEW','video_key':key,'sha256':report['sha256'],'spec_sha256':row['payload']['spec_sha256'],'seconds':report['duration_seconds'],'human_review':'pending'}}),row['payload']['plan_id']));audit(c,'MOTION_PILOT_COMPLETED',str(tid));c.commit();return public(get_task(c,tid))
 
 
 @router.get('/{tid}/video')
@@ -162,8 +165,30 @@ def video(tid:uuid.UUID,request:Request):
     return media(request,key,'video/mp4')
 
 @router.get('')
-def history(channel_id:uuid.UUID):
+def history(channel_id:uuid.UUID,plan_id:uuid.UUID):
     with db() as c:
         profile(c,channel_id)
-        rows=c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'channel_id'=%s ORDER BY created_at DESC LIMIT 10",(KIND,str(channel_id))).fetchall()
+        rows=c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'channel_id'=%s AND payload->>'plan_id'=%s ORDER BY created_at DESC LIMIT 10",(KIND,str(channel_id),str(plan_id))).fetchall()
     return [public(row) for row in rows]
+
+class AssetReview(BaseModel):
+    sha256:str=Field(pattern=r'^[a-f0-9]{64}$')
+    confirm_identity:bool=False
+    confirm_motion_contact:bool=False
+
+@router.post('/{tid}/review')
+def review(tid:uuid.UUID,body:AssetReview):
+    if not body.confirm_identity or not body.confirm_motion_contact:raise HTTPException(422,'Confira identidade, movimento e contato antes de aprovar este asset')
+    with db() as c:
+        c.execute('SELECT pg_advisory_xact_lock(192837467)');row=get_task(c,tid)
+        p=row['payload'];report=p.get('report',{})
+        if row['status']!='COMPLETED' or report.get('sha256')!=body.sha256:raise HTTPException(409,'O arquivo atual não corresponde à revisão')
+        plan=c.execute('SELECT data FROM creator_plans WHERE id=%s FOR UPDATE',(p['plan_id'],)).fetchone()
+        if not plan or hashlib.sha256(json.dumps(plan['data'].get('production_spec'),sort_keys=True).encode()).hexdigest()!=p['spec_sha256']:
+            raise HTTPException(409,'O roteiro mudou. Este asset precisa ser reavaliado para a nova versão')
+        entry=plan['data'].get('production_assets',{}).get(str(tid))
+        if not entry:raise HTTPException(409,'Asset não vinculado ao roteiro')
+        entry.update(state='APPROVED_REFERENCE',human_review='approved',human_review_sha256=body.sha256)
+        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',COALESCE(data->'production_assets','{}'::jsonb)||%s::jsonb) WHERE id=%s",(json.dumps({str(tid):entry}),p['plan_id']))
+        c.execute("UPDATE factory_tasks SET payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'approved'}),tid));audit(c,'STORYBOARD_ASSET_REVIEWED',p['plan_id'],str(tid));c.commit()
+    return {'ok':True,'asset_role':'interaction_reference','full_program_approved':False,'broadcast_started':False}

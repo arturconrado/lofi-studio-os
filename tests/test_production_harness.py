@@ -74,3 +74,22 @@ def test_motion_quote_reserves_worst_sku_and_rejects_ambiguous_units():
     assert quote_model(m)==Decimal('.64')
     m['pricing_skus']['tokens']='.000001'
     with pytest.raises(ValueError):quote_model(m)
+
+
+def test_existing_creator_cannot_fallback_to_paid_static_image_for_action_brief(monkeypatch,tmp_path):
+    import pytest
+    from studio.creator_service import visual
+    with pytest.raises(ValueError,match='clipes revisados'):
+        visual('not-submitted',{'production_spec':ProductionSpec().model_dump()},tmp_path)
+
+
+def test_asset_review_is_bound_to_plan_and_never_approves_missing_actions():
+    import hashlib,json
+    from studio.production_harness import asset_inventory
+    spec=ProductionSpec().model_dump();digest=hashlib.sha256(json.dumps(spec,sort_keys=True).encode()).hexdigest()
+    entry={'role':'interaction_reference','spec_sha256':digest,'state':'APPROVED_REFERENCE','sha256':'a'*64,'human_review_sha256':'a'*64}
+    plan={'production_spec':spec,'production_assets':{'asset':entry}}
+    assert len(asset_inventory(plan)['approved_references'])==1
+    assert not asset_inventory(plan)['ready']
+    plan['production_spec']['shirt_color']='pink'
+    assert not asset_inventory(plan)['approved_references']
