@@ -494,7 +494,7 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     import studio.financial
     monkeypatch.setattr(studio.financial,'check_available',lambda c,amount:None)
     monkeypatch.setenv('S3_BUCKET','disposable-test')
-    saved=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':{'hours':8}},headers=headers).json()
+    saved=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':{'hours':8,'asset_budget_usd':2}},headers=headers).json()
     body=dict(request_id=tid,plan_id=saved['id'],channel_id=cid,batch_id=bid,scene_id='ref',max_reservation_usd='.64',confirm_cost=True)
     r=client.post('/api/creator/motion-validation',json=body,headers=headers)
     assert r.status_code==200,r.text

@@ -97,6 +97,8 @@ def submit(body:Pilot):
     try:cap=catalog_quote()
     except Exception:raise HTTPException(409,'Cotação indisponível; sem envio pago') from None
     if cap>body.max_reservation_usd:raise HTTPException(409,'O preço aumentou; confira a cotação antes de enviar')
+    plan_cap=Decimal(str(plan['data']['production_spec'].get('asset_budget_usd',0)))
+    if cap>plan_cap:raise HTTPException(409,'A reserva supera o teto de assets deste roteiro. Ajuste e salve o roteiro antes de produzir.')
     obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=source['image_key'])
     try:raw=obj['Body'].read(10*1024*1024+1)
     finally:obj['Body'].close()
@@ -110,6 +112,8 @@ def submit(body:Pilot):
         if old:return public(old)
         spent=c.execute('SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE kind=%s',(KIND,)).fetchone()['n']
         if spent+cap>Decimal('2'):raise HTTPException(409,'Teto total de US$2 atingido; nenhum envio feito')
+        plan_spent=c.execute("SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE kind=%s AND payload->>'plan_id'=%s",(KIND,str(body.plan_id))).fetchone()['n']
+        if plan_spent+cap>plan_cap:raise HTTPException(409,'Teto de assets do roteiro atingido')
         from .financial import check_available
         check_available(c,cap)
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'SUBMITTING','Pedido único; sem retentativa automática')",(body.request_id,KIND,MODEL,json.dumps(payload),cap));c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',COALESCE(data->'production_assets','{}'::jsonb)||%s::jsonb) WHERE id=%s",(json.dumps({str(body.request_id):{'role':'interaction_reference','state':'SUBMITTING','spec_sha256':payload['spec_sha256']}}),body.plan_id));audit(c,'MOTION_PILOT_RESERVED',str(body.request_id),str(cap));c.commit()
