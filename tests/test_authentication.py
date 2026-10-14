@@ -278,3 +278,25 @@ def test_youtube_disconnect_is_scoped_confirmed_and_preserves_media(client):
     try:
         with db() as c:assert c.execute("SELECT used_at FROM youtube_oauth_states WHERE state_hash='pending-test'").fetchone()['used_at'] is not None
     finally:WORKSPACE.reset(scope)
+
+def test_admin_csrf_available_to_new_tab_without_session_storage(client):
+    r=client.post('/api/auth/admin-login',json={'username':'legacy-admin','password':'legacy-local-test-password'})
+    assert r.status_code==200
+    csrf=client.cookies.get(auth.CSRF_COOKIE)
+    assert csrf==r.json()['csrf_token']
+    cookie=next(v for v in r.headers.get_list('set-cookie') if v.startswith(auth.CSRF_COOKIE+'='))
+    assert 'Secure' in cookie and 'SameSite=strict' in cookie and 'HttpOnly' not in cookie
+    assert client.post('/api/auth/logout',json={}).status_code==403
+    assert client.post('/api/auth/logout',json={},headers={'X-CSRF-Token':csrf}).status_code==200
+    assert not client.cookies.get(auth.CSRF_COOKIE)
+
+def test_saved_creative_plans_remain_workspace_private(client):
+    _,identity=signup(client)
+    pid=uuid.uuid4();schema='ws_'+identity['workspace_id'].replace('-','')
+    with auth.connection() as c:
+        c.execute('SET search_path TO '+schema)
+        c.execute("INSERT INTO creator_plans(id,request_id,theme,minutes,data,status,channel_id) VALUES(%s,%s,'Saved theme',60,'{\"title\":\"Own saved plan\"}','draft','00000000-0000-0000-0000-000000000001')",(pid,uuid.uuid4()))
+    rows=client.get('/api/creator/plans').json()['plans'];assert str(pid) in [r['id'] for r in rows]
+    client.cookies.clear();signup(client)
+    assert str(pid) not in [r['id'] for r in client.get('/api/creator/plans').json()['plans']]
+    assert client.get('/api/creator/plans?channel_id='+str(uuid.uuid4())).status_code==404

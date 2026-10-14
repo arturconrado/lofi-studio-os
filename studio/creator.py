@@ -8,6 +8,14 @@ from .core import db,audit
 from . import runtime
 router=APIRouter(prefix='/api/creator')
 MODEL='google/gemini-2.5-flash-lite'
+@router.get('/plans')
+def saved_plans(channel_id:uuid.UUID=uuid.UUID('00000000-0000-0000-0000-000000000001')):
+ with db() as c:
+  from .channels import profile
+  profile(c,channel_id)
+  rows=c.execute("SELECT id,theme,minutes,data AS plan,status,created_at FROM creator_plans WHERE channel_id=%s AND status='draft' ORDER BY created_at DESC LIMIT 20",(channel_id,)).fetchall()
+ return {'plans':rows}
+
 def init(c):
  c.execute("CREATE TABLE IF NOT EXISTS creator_plans(id UUID PRIMARY KEY,request_id UUID UNIQUE NOT NULL,theme TEXT NOT NULL,minutes INTEGER NOT NULL,data JSONB,status TEXT NOT NULL,reserved NUMERIC NOT NULL DEFAULT .02,actual_cost NUMERIC,program_id TEXT UNIQUE,created_at TIMESTAMPTZ DEFAULT now())")
  c.execute("CREATE TABLE IF NOT EXISTS program_metadata(program_id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT NOT NULL,theme TEXT NOT NULL,updated_at TIMESTAMPTZ DEFAULT now())")

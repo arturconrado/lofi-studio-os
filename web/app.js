@@ -1,10 +1,10 @@
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const PRIMARY_CHANNEL='00000000-0000-0000-0000-000000000001';let activeChannel=typeof localStorage!=='undefined'?(localStorage.getItem('lofi-channel')||PRIMARY_CHANNEL):PRIMARY_CHANNEL;
+const PRIMARY_CHANNEL='00000000-0000-0000-0000-000000000001';let activeChannel=typeof localStorage!=='undefined'?(new URLSearchParams(location.search).get('channel')||localStorage.getItem('lofi-channel')||PRIMARY_CHANNEL):PRIMARY_CHANNEL;
 let tab=(['growth','autopilot','channels','creator','dashboard','tracks','review','catalog','miniobs','jobs','settings','operations'].includes(new URLSearchParams(location.search).get('view'))?new URLSearchParams(location.search).get('view'):'dashboard'),cache={},selectedScene='',busy=false;
 const money=x=>'US$ '+Number(x||0).toFixed(2),labels={DRAFT:'Rascunho',REVIEW:'Em revisão',APPROVED:'Aprovada',QUEUED:'Na fila',RUNNING:'Gerando',COMPLETED:'Concluída',FAILED:'Falhou',CANCELLED:'Cancelada',UNCERTAIN:'Custo incerto',PENDING:'Pendente',REJECTED:'Rejeitada'};
 const tag=x=>`<span class="tag ${esc(x)}">${esc(labels[x]||x)}</span>`;
 function notice(x){$('#notice').textContent=x||''}
-async function req(path,opt={}){const r=await fetch('/api'+path,{...opt,headers:{...(opt.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(sessionStorage.getItem('lofi_csrf')?{'X-CSRF-Token':sessionStorage.getItem('lofi_csrf')}:{}),...(opt.headers||{})}});let v;try{v=await r.json()}catch{v={}}if(!r.ok)throw Error(typeof v.detail==='string'?v.detail:'Pedido inválido (HTTP '+r.status+')');return v}
+async function req(path,opt={}){const r=await fetch('/api'+path,{...opt,headers:{...(opt.body instanceof FormData?{}:{'Content-Type':'application/json'}),...((window.studioCSRF?.()||sessionStorage.getItem('lofi_csrf'))?{'X-CSRF-Token':(window.studioCSRF?.()||sessionStorage.getItem('lofi_csrf'))}:{}),...(opt.headers||{})}});let v;try{v=await r.json()}catch{v={}}if(!r.ok)throw Error(typeof v.detail==='string'?v.detail:'Pedido inválido (HTTP '+r.status+')');return v}
 function modal(html){$('#modal-content').innerHTML=html;$('#modal-content').querySelectorAll('button').forEach(b=>b.type='button');$('#modal').showModal()}
 const close=()=>$('#modal').close();
 async function action(fn,message){if(busy)return;busy=true;try{await fn();close();await refresh();notice(message)}catch(e){alert(e.message)}finally{busy=false}}

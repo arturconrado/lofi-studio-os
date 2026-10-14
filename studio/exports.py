@@ -64,6 +64,13 @@ def download(jid:uuid.UUID,request:Request):
     return response
 
 
+@router.get('/{jid}/preview')
+def preview(jid:uuid.UUID,request:Request):
+    response=download(jid,request)
+    del response.headers['Content-Disposition']
+    return response
+
+
 def tick():
     from .program_radio import approved,fetch_file
     from .video_export import export
