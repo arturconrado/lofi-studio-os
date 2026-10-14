@@ -21,6 +21,7 @@ from .email_delivery import configured as email_configured
 
 router=APIRouter(prefix='/api/auth')
 COOKIE='lofi_session'
+CSRF_COOKIE='lofi_csrf'
 ROLES={'workspace_owner','workspace_admin','operator','creator','viewer'}
 
 def connection():
@@ -170,6 +171,7 @@ def login(body:Credentials,request:Request,response:Response):
           (digest(token),user['id'],membership['workspace_id'],digest(csrf),datetime.now(timezone.utc)+timedelta(hours=12)))
         c.execute("INSERT INTO public.os_auth_audit(user_id,event) VALUES(%s,'LOGIN_SUCCEEDED')",(user['id'],))
     response.set_cookie(COOKIE,token,httponly=True,secure=True,samesite='lax',max_age=43200,path='/')
+    response.set_cookie(CSRF_COOKIE,csrf,secure=True,httponly=False,samesite='strict',max_age=43200,path='/')
     response.headers['Cache-Control']='no-store'
     return {'csrf_token':csrf,'workspace_id':membership['workspace_id'],'role':membership['role']}
 
@@ -196,6 +198,7 @@ def logout(request:Request,response:Response):
         c.execute('DELETE FROM public.os_sessions WHERE token_hash=%s',(hashed,))
         c.execute('DELETE FROM public.os_platform_sessions WHERE token_hash=%s',(hashed,))
     response.delete_cookie(COOKIE,path='/',secure=True,httponly=True,samesite='lax')
+    response.delete_cookie(CSRF_COOKIE,path='/',secure=True,samesite='strict')
     return {'ok':True}
 
 class EmailOnly(BaseModel):
@@ -240,6 +243,7 @@ def admin_login(body:AdminCredentials,request:Request,response:Response):
                   (digest(token),digest(csrf),datetime.now(timezone.utc)+timedelta(hours=4)))
         c.execute("INSERT INTO public.os_auth_audit(event) VALUES('PLATFORM_LOGIN_SUCCEEDED')")
     response.set_cookie(COOKIE,token,secure=True,httponly=True,samesite='lax',max_age=14400,path='/')
+    response.set_cookie(CSRF_COOKIE,csrf,secure=True,httponly=False,samesite='strict',max_age=14400,path='/')
     response.headers['Cache-Control']='no-store'
     return {'role':'platform_admin','csrf_token':csrf}
 

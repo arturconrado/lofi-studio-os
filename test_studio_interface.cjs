@@ -24,3 +24,8 @@ assert(vm.runInContext("programCover({id:'own',thumbnail_scene_id:'first scene',
 assert(vm.runInContext("cache.programs=[{id:'own',video_ready:true,thumbnail_scene_id:'first scene',title:'Own'}];studioMonitor.programs=cache.programs;studioOperations()",ctx).includes('poster=\"/api/miniobs/programs/own/scenes/first%20scene/image'));
 
 let menuClosures=0;document.querySelector('aside').classList.remove=()=>menuClosures++;vm.runInContext("window.innerWidth=390;tab='channels';cache.overview={};cache.ops={};render()",ctx);assert.equal(menuClosures,0);vm.runInContext("go('channels')",ctx);assert.equal(menuClosures,1);
+vm.runInContext("cache.programs=[{id:'preview-own',channel_id:PRIMARY_CHANNEL,title:'Own <preview>',audio_ready:true,video_ready:true,playable_seconds:14400},{id:'preview-other',channel_id:'other',title:'Other channel',audio_ready:true}];previewStudioProgram('preview-own')",ctx);
+assert(elements.get('#modal-content').innerHTML.includes('/programs/preview-own/audio'));
+assert(elements.get('#modal-content').innerHTML.includes('Own &lt;preview&gt;'));
+elements.get('#modal-content').innerHTML='preserved';vm.runInContext("previewStudioProgram('preview-other')",ctx);assert.equal(elements.get('#modal-content').innerHTML,'preserved');
+document.cookie='lofi_csrf=shared_token';vm.runInContext(fs.readFileSync(__dirname+'/web/csrf.js','utf8'),ctx);assert.equal(vm.runInContext('window.studioCSRF()',ctx),'shared_token');
