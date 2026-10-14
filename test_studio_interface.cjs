@@ -18,3 +18,7 @@ vm.runInContext(`studioGrowthSummary([{video_url:'one',window:'7d',observed_date
 vm.runInContext('cache.youtubeCapabilities={oauth_available:false};cache.youtubeConnections=[]',ctx);assert(vm.runInContext('youtubeConnectionStatus({id:PRIMARY_CHANNEL})',ctx).includes('disabled'));
 vm.runInContext(`cache.youtubeCapabilities={oauth_available:true};cache.youtubeConnections=[{channel_id:PRIMARY_CHANNEL,youtube_title:'<script>private</script>'}]`,ctx);html=vm.runInContext('youtubeConnectionStatus({id:PRIMARY_CHANNEL})',ctx);assert(html.includes('&lt;script&gt;'));assert(html.includes('Desconectar deste estúdio'));assert(!html.includes('<script>private'));
 console.log('STUDIO_INTERFACE_PASS: empty workspace, escaping, channel filtering, guarded exports, queue preservation, settings contracts');
+
+assert(vm.runInContext("programCover({id:'own',thumbnail_scene_id:'first scene',title:'Own visual'})",ctx).includes('/programs/own/scenes/first%20scene/image'));
+
+assert(vm.runInContext("cache.programs=[{id:'own',video_ready:true,thumbnail_scene_id:'first scene',title:'Own'}];studioMonitor.programs=cache.programs;studioOperations()",ctx).includes('poster=\"/api/miniobs/programs/own/scenes/first%20scene/image'));

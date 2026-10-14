@@ -137,8 +137,9 @@ def programs():
             selected=c.execute('SELECT id,title FROM program_scenes WHERE batch_id=%s AND video_key=%s',(b['id'],b['video_key'])).fetchone()
             b['selected_scene_id']=selected['id'] if selected else None
             b['visual_title']=selected['title'] if selected else 'Sequência completa'
-            scenes=c.execute('SELECT title,duration_seconds FROM program_scenes WHERE batch_id=%s ORDER BY position,id',(b['id'],)).fetchall()
+            scenes=c.execute('SELECT id,title,duration_seconds FROM program_scenes WHERE batch_id=%s ORDER BY position,id',(b['id'],)).fetchall()
             b['visual_scenes']=scenes
+            b['thumbnail_scene_id']=selected['id'] if selected else (scenes[0]['id'] if scenes else None)
             b['visual_cycle_seconds']=None
             if b['manifest_key']:
                 try:
