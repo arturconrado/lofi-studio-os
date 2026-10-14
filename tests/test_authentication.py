@@ -420,3 +420,26 @@ def test_live_presentation_reuses_own_episode_without_switching_audio(client,mon
     client.cookies.clear();_,other=signup(client)
     assert client.get(root+'/sources').json()==[]
     assert client.post(root+'/scenes',json={'program_id':bid,'pilot_id':str(pid)},headers={'X-CSRF-Token':other['csrf_token']}).status_code==404
+
+
+def test_motion_study_media_stays_in_own_workspace(client,monkeypatch):
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio import miniobs
+    from fastapi.responses import Response
+    _,owner=signup(client);cid=client.get('/api/channels').json()[0]['id'];root=f'/api/live-presentation/{cid}/motion-study'
+    assert client.get(root).status_code==404
+    marker=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:
+            c.execute('CREATE TABLE live_motion_studies(channel_id UUID PRIMARY KEY,object_key TEXT,report JSONB)')
+            c.execute("INSERT INTO live_motion_studies VALUES(%s,'private/study.mp4','{\"demo_only\":true}')",(cid,));c.commit()
+    finally:WORKSPACE.reset(marker)
+    accessed=[]
+    def media(request,key,mime):accessed.append(key);return Response(b'video',media_type=mime)
+    monkeypatch.setattr(miniobs,'media',media)
+    assert client.get(root).json()['applied_to_live'] is False
+    assert client.get(root+'/video').status_code==200
+    client.cookies.clear();signup(client)
+    assert client.get(root+'/video').status_code==404
+    assert accessed==['private/study.mp4']

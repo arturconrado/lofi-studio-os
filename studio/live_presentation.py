@@ -87,3 +87,25 @@ def save_copy(cid:uuid.UUID,body:LiveCopy):
           ON CONFLICT(channel_id) DO UPDATE SET program_id=excluded.program_id,title=excluded.title,description=excluded.description,reviewed=true,updated_at=now()''',(cid,body.program_id,body.title.strip(),body.description.strip()))
         audit(c,'LIVE_COPY_REVIEWED',str(cid),body.program_id);c.commit()
     return {'saved':True,'youtube_event_updated':False}
+
+
+from fastapi import Request
+
+
+def motion_study(c,cid):
+    profile(c,cid)
+    if not c.execute("SELECT to_regclass('live_motion_studies') found").fetchone()['found']:raise HTTPException(404,'Estudo de movimento ainda não disponível.')
+    row=c.execute('SELECT object_key,report FROM live_motion_studies WHERE channel_id=%s',(cid,)).fetchone()
+    if not row:raise HTTPException(404,'Estudo de movimento ainda não disponível neste canal.')
+    return row
+
+@router.get('/{cid}/motion-study')
+def motion_study_info(cid:uuid.UUID):
+    with db() as c:row=motion_study(c,cid)
+    return {'report':row['report'],'video_url':f'/api/live-presentation/{cid}/motion-study/video','applied_to_live':False}
+
+@router.get('/{cid}/motion-study/video')
+def motion_study_video(cid:uuid.UUID,request:Request):
+    with db() as c:row=motion_study(c,cid)
+    from .miniobs import media
+    return media(request,row['object_key'],'video/mp4')
