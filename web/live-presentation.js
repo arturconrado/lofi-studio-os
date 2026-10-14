@@ -9,5 +9,6 @@
  node('live-copy-save').onclick=async()=>{try{await request('/copy',{method:'PUT',data:{program_id:programId,title:node('live-copy-title').value,description:node('live-copy-description').value,confirm_review:node('live-copy-reviewed').checked}});say('Apresentação salva. Copie os textos para o evento do YouTube antes de iniciar.');}catch(e){say(e.message);}};
  node('live-import-source').onclick=async()=>{const id=node('live-published-source').value;if(!id)return;try{const d=await request('/scenes',{data:{program_id:programId,pilot_id:id}});say(d.message);await loadScenes();previewVisual(d.scene_id);}catch(e){say(e.message);}};
  for(const [button,input] of [['live-title-copy','live-copy-title'],['live-description-copy','live-copy-description']])node(button).onclick=async()=>{try{await navigator.clipboard.writeText(node(input).value);say('Texto copiado. Cole no evento do YouTube.');}catch{say('Selecione o texto e copie manualmente.');}};
+ node('show-motion-study').onclick=async()=>{try{const d=await request('/motion-study');const video=node('motion-study-video');video.src=d.video_url;node('motion-study-dialog').showModal();await video.play();}catch(e){say(e.message);}};
  sources();prepare();
 })();
