@@ -22,4 +22,6 @@ jobs:
         env:
           LOFI_TEST_DATABASE_URL: postgresql://postgres:disposable-test-password@127.0.0.1:5432/lofi_test
       - run: node test_ui.cjs
+      - run: node test_login.cjs
+      - run: node test_studio_interface.cjs
       - run: for file in web/*.js; do node --check "$file"; done
