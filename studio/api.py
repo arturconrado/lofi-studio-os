@@ -395,3 +395,6 @@ app.include_router(exports_router)
 
 from .youtube import router as youtube_router
 app.include_router(youtube_router)
+
+from .youtube_publish import router as youtube_publications_router
+app.include_router(youtube_publications_router)
