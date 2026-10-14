@@ -127,6 +127,15 @@ def start(cid:uuid.UUID,body:Start):
   if str(b.get('channel_id',PRIMARY))!=str(cid):raise HTTPException(409,'Este programa pertence a outro canal')
   review=c.execute('SELECT snapshot_sha256 FROM program_reviews WHERE program_id=%s',(body.program_id,)).fetchone()
   if not review or review['snapshot_sha256']!=snapshot:raise HTTPException(409,'Valide o áudio e o vídeo atuais antes de iniciar')
+  # New engine outputs carry an explicit acceptance contract; legacy reviews remain intact.
+  from .core import storage
+  import json,os
+  manifest_object=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=b['manifest_key'])
+  try:manifest=json.loads(manifest_object['Body'].read())
+  finally:manifest_object['Body'].close()
+  guardrails=manifest.get('video_guardrails')
+  if guardrails is not None and not guardrails.get('eligible_for_long_live'):
+   raise HTTPException(409,'Visual ainda não aprovado para a duração e evolução temporal desta live')
   if not s['stream_key_encrypted'] or not s['ingest_url']:raise HTTPException(409,'Salve a conexão do YouTube para este canal')
   if not s['heartbeat'] or not c.execute("SELECT %s::timestamptz>now()-interval '30 seconds' ok",(s['heartbeat'],)).fetchone()['ok']:raise HTTPException(409,'Transmissor deste canal indisponível')
   count=c.execute("SELECT (SELECT count(*) FROM radio_channels WHERE desired='live')+(SELECT count(*) FROM broadcast_control WHERE desired='live') n").fetchone()['n']
