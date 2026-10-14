@@ -19,12 +19,13 @@ from .core import db,audit
 from .channels import profile,control
 
 router=APIRouter(prefix='/api/youtube')
-SCOPES=['https://www.googleapis.com/auth/youtube.readonly','https://www.googleapis.com/auth/youtube.upload']
+SCOPES=['https://www.googleapis.com/auth/youtube.readonly']
 
 def initialize(c):
     c.execute('''CREATE TABLE IF NOT EXISTS channel_credentials(
       channel_id UUID PRIMARY KEY REFERENCES radio_channels(id),youtube_channel_id TEXT UNIQUE NOT NULL,
       token_encrypted TEXT NOT NULL,updated_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+    c.execute("ALTER TABLE channel_credentials ADD COLUMN IF NOT EXISTS youtube_title TEXT NOT NULL DEFAULT ''")
     c.execute('''CREATE TABLE IF NOT EXISTS youtube_oauth_states(
       state_hash TEXT PRIMARY KEY,channel_id UUID REFERENCES radio_channels(id),user_ref TEXT NOT NULL,
       verifier_encrypted TEXT NOT NULL,expires_at TIMESTAMPTZ NOT NULL,used_at TIMESTAMPTZ)''')
@@ -88,9 +89,9 @@ def callback(request:Request,state:str='',code:str='',error:str=''):
             if not tokens.get('refresh_token') and old and old['youtube_channel_id']==items[0]['id']:
                 tokens['refresh_token']=json.loads(cipher().decrypt(old['token_encrypted'].encode())) .get('refresh_token')
             protected=cipher().encrypt(json.dumps(tokens).encode()).decode()
-            c.execute('''INSERT INTO channel_credentials(channel_id,youtube_channel_id,token_encrypted) VALUES(%s,%s,%s)
+            c.execute('''INSERT INTO channel_credentials(channel_id,youtube_channel_id,token_encrypted,youtube_title) VALUES(%s,%s,%s,%s)
               ON CONFLICT(channel_id) DO UPDATE SET youtube_channel_id=excluded.youtube_channel_id,
-              token_encrypted=excluded.token_encrypted,updated_at=now()''',(row['channel_id'],items[0]['id'],protected))
+              token_encrypted=excluded.token_encrypted,youtube_title=excluded.youtube_title,updated_at=now()''',(row['channel_id'],items[0]['id'],protected,items[0].get('snippet',{}).get('title','')))
             audit(c,'YOUTUBE_CHANNEL_CONNECTED',str(row['channel_id']),items[0]['id']);c.commit()
     except HTTPException:raise
     except Exception:raise HTTPException(502,'Não foi possível conectar o canal. Tente uma nova autorização.') from None
@@ -100,4 +101,23 @@ def callback(request:Request,state:str='',code:str='',error:str=''):
 
 @router.get('/channels')
 def connected():
-    with db() as c:return c.execute('SELECT channel_id,youtube_channel_id,updated_at FROM channel_credentials').fetchall()
+    with db() as c:return c.execute('SELECT channel_id,youtube_channel_id,youtube_title,updated_at FROM channel_credentials').fetchall()
+
+
+from pydantic import BaseModel
+
+class DisconnectRequest(BaseModel):
+    confirm_disconnect:bool=False
+
+@router.delete('/channels/{cid}')
+def disconnect(cid:uuid.UUID,body:DisconnectRequest):
+    if not body.confirm_disconnect:raise HTTPException(422,'Confirme a desconexão deste estúdio.')
+    with db() as c:
+        profile(c,cid)
+        if control(c,cid,True)['desired']=='live':
+            raise HTTPException(409,'Pare o envio antes de desconectar a conta do YouTube.')
+        c.execute('UPDATE youtube_oauth_states SET used_at=now() WHERE channel_id=%s AND used_at IS NULL',(cid,))
+        c.execute('DELETE FROM channel_credentials WHERE channel_id=%s',(cid,))
+        audit(c,'YOUTUBE_CHANNEL_DISCONNECTED',str(cid),'Local authorization removed; no media removed')
+        c.commit()
+    return {'disconnected':True,'provider_permission_revoked':False}

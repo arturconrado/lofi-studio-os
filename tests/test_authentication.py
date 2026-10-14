@@ -117,6 +117,7 @@ def test_youtube_oauth_state_pkce_encryption_and_replay(client,monkeypatch):
     assert result.status_code==200
     params=parse_qs(urlparse(result.json()['authorization_url']).query)
     assert params['code_challenge_method']==['S256']
+    assert params['scope']==['https://www.googleapis.com/auth/youtube.readonly']
     state=params['state'][0]
     def transport(request):
         if str(request.url)=='https://oauth2.googleapis.com/token':
@@ -131,6 +132,7 @@ def test_youtube_oauth_state_pkce_encryption_and_replay(client,monkeypatch):
     assert client.get(callback).status_code==400
     connected=client.get('/api/youtube/channels').json()
     assert connected[0]['youtube_channel_id']=='UC-mock-channel'
+    assert connected[0]['youtube_title']=='Mock Lo-Fi'
     assert 'mock-access' not in str(connected)
     scope=WORKSPACE.set(identity['workspace_id'])
     try:
@@ -234,3 +236,45 @@ def test_separate_login_pages_are_public_without_granting_api_access(client):
     assert 'Acesso administrativo' in admin.text
     assert client.get('/api/tracks').status_code==401
     assert client.get('/api/auth/me').status_code==401
+
+
+def test_youtube_disconnect_is_scoped_confirmed_and_preserves_media(client):
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    _,owner=signup(client);cookie=client.cookies.get(auth.COOKIE)
+    headers={'X-CSRF-Token':owner['csrf_token']}
+    channel=client.post('/api/channels',json={'name':'Own connection','niche':'Original instrumental music'},headers=headers).json()['id']
+    track=client.post('/api/tracks',json={'title':'Own music','collection':'Personal','bpm':70,'prompt':'Original instrumental composition for this studio'},headers=headers).json()['id']
+    scope=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:
+            c.execute("INSERT INTO channel_credentials(channel_id,youtube_channel_id,token_encrypted,youtube_title) VALUES(%s,'UC-test','protected-test','Private title')",(channel,))
+            c.execute("INSERT INTO youtube_oauth_states(state_hash,channel_id,user_ref,verifier_encrypted,expires_at) VALUES('pending-test',%s,'owner','protected-test',now()+interval '10 minutes')",(channel,))
+            c.commit()
+    finally:WORKSPACE.reset(scope)
+    path='/api/youtube/channels/'+channel
+    assert client.request('DELETE',path,json={'confirm_disconnect':True}).status_code==403
+    assert client.request('DELETE',path,json={'confirm_disconnect':False},headers=headers).status_code==422
+    client.cookies.clear();_,other=signup(client)
+    assert client.get('/api/youtube/channels').json()==[]
+    assert client.request('DELETE',path,json={'confirm_disconnect':True},headers={'X-CSRF-Token':other['csrf_token']}).status_code==404
+    client.cookies.clear();client.cookies.set(auth.COOKIE,cookie)
+    scope=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:c.execute("UPDATE radio_channels SET desired='live' WHERE id=%s",(channel,));c.commit()
+    finally:WORKSPACE.reset(scope)
+    assert client.request('DELETE',path,json={'confirm_disconnect':True},headers=headers).status_code==409
+    scope=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:c.execute("UPDATE radio_channels SET desired='stopped' WHERE id=%s",(channel,));c.commit()
+    finally:WORKSPACE.reset(scope)
+    r=client.request('DELETE',path,json={'confirm_disconnect':True},headers=headers)
+    assert r.status_code==200,r.text
+    assert r.json()['provider_permission_revoked'] is False
+    assert client.get('/api/youtube/channels').json()==[]
+    assert any(t['id']==track for t in client.get('/api/tracks').json())
+    assert any(c['id']==channel for c in client.get('/api/channels').json())
+    scope=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:assert c.execute("SELECT used_at FROM youtube_oauth_states WHERE state_hash='pending-test'").fetchone()['used_at'] is not None
+    finally:WORKSPACE.reset(scope)
