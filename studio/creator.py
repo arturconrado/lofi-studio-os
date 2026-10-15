@@ -86,6 +86,7 @@ class CreateRequest(BaseModel):
  plan:CreativePlan
  budget:Decimal=Field(default=12,ge=Decimal('.08'),le=12)
  confirm_cost:bool=False
+ visual_source_pilot_id:uuid.UUID|None=None
 @router.post('/produce')
 def produce(body:CreateRequest):
  if body.plan.production_spec is not None:
@@ -108,8 +109,18 @@ def produce(body:CreateRequest):
     audit(c,'CREATOR_RESUME_BEFORE_AUDIO',bid,'Existing visual; no prior audio requests');c.commit()
    return {'id':bid,'reused':True}
   if c.execute("SELECT 1 FROM production_batches WHERE channel_id=%s AND state IN ('producing','waiting','queued')",(p.get('channel_id','00000000-0000-0000-0000-000000000001'),)).fetchone():raise HTTPException(409,'Este canal já tem um lote em produção ou na fila. Aguarde antes de criar outro para ele.')
-  if body.budget<Decimal('.15')+Decimal(p['minutes'])/2*Decimal('.08'):raise HTTPException(422,'O orçamento deve cobrir a estimativa de músicas e a reserva de US$0,15 para o visual. A duração real pode exigir faixas adicionais.')
-  estimate=Decimal('.15')+Decimal(p['minutes'])/2*Decimal('.08')
+  if not body.visual_source_pilot_id:raise HTTPException(422,'Escolha um dos vídeos de 1h do canal como referência visual; nenhuma imagem nova será gerada')
+  reference=None
+  if body.visual_source_pilot_id:
+   from .youtube_publish import ready_pilot
+   source=c.execute("SELECT a.* FROM ambient_pilots a JOIN youtube_publications y ON y.pilot_id=a.id WHERE a.id=%s AND a.channel_id=%s AND y.channel_id=%s AND y.state='uploaded'",(body.visual_source_pilot_id,p['channel_id'],p['channel_id'])).fetchone()
+   if not source or not ready_pilot(source):raise HTTPException(404,'Escolha um episódio de 1h publicado neste canal')
+   reference={'pilot_id':str(source['id']),'title':source['title'],'silent_key':source['silent_key'],'report':source['report']}
+  image_reserve=Decimal('0') if reference else Decimal('.15')
+  estimate=image_reserve+Decimal(p['minutes'])/2*Decimal('.08')
+  if body.budget<estimate:raise HTTPException(422,'O teto precisa cobrir as músicas e o visual escolhido; a duração real pode exigir faixas adicionais.')
+  plan_data=body.plan.model_dump()
+  if reference:plan_data['visual_reference']=reference
   booked=c.execute("""SELECT COALESCE(sum(GREATEST(b.budget-
     COALESCE((SELECT sum(GREATEST(j.estimated_cost,COALESCE(j.actual_cost,0))) FROM jobs j WHERE j.track_id LIKE b.id||'-%'),0)-
     COALESCE((SELECT sum(f.reserved_cost) FROM factory_tasks f WHERE f.payload->>'batch'=b.id),0),0)),0) n
@@ -118,7 +129,7 @@ def produce(body:CreateRequest):
   if estimate>remaining:raise HTTPException(409,f'A estimativa de US${estimate:.2f} supera o limite disponível de US${max(remaining,Decimal(0)):.2f}. Ajuste o limite acumulado antes de produzir.')
   bid='LOFI-'+str(body.plan_id).split('-')[0].upper()
   c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,detail,channel_id) VALUES(%s,'queued',%s,%s,'Aguardando produção autorizada pelo usuário',%s)",(bid,p['minutes']*60,body.budget,p.get('channel_id','00000000-0000-0000-0000-000000000001')))
-  c.execute("UPDATE creator_plans SET program_id=%s,data=%s,status='queued' WHERE id=%s",(bid,json.dumps(body.plan.model_dump()),body.plan_id))
+  c.execute("UPDATE creator_plans SET program_id=%s,data=%s,status='queued' WHERE id=%s",(bid,json.dumps(plan_data),body.plan_id))
   c.execute('INSERT INTO program_metadata(program_id,title,description,theme,music_description,alternatives,keywords) VALUES(%s,%s,%s,%s,%s,%s,%s)',(bid,body.plan.title,body.plan.description,body.plan.theme,body.plan.music_description,json.dumps(body.plan.alternative_titles),json.dumps(body.plan.keywords)));audit(c,'CREATOR_BATCH_AUTHORIZED',bid,str(body.budget));c.commit()
  return {'id':bid}
 class Metadata(BaseModel):

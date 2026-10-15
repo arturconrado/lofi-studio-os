@@ -10,7 +10,7 @@ from studio.provider import generate, PartialGenerationError
 BATCH=os.environ['CREATOR_BATCH']
 with db() as c:
     config=c.execute('SELECT p.data,b.target_seconds,b.budget,b.channel_id FROM creator_plans p JOIN production_batches b ON b.id=p.program_id WHERE p.program_id=%s',(BATCH,)).fetchone()
-TARGET=int(config['target_seconds']);CAP=Decimal(config['budget'])-Decimal('.15')
+TARGET=int(config['target_seconds']);CAP=Decimal(config['budget'])-(Decimal('0') if config['data'].get('visual_reference') else Decimal('.15'))
 MODEL='google/lyria-3-pro-preview'
 from studio.production_harness import audio_prompt
 REFERENCE=audio_prompt('custom',config['data']['music_brief'])
