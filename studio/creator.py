@@ -96,7 +96,17 @@ def produce(body:CreateRequest):
   if not runtime.settings(c)['enabled']:raise HTTPException(409,'Geração paga desativada')
   p=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(body.plan_id,)).fetchone()
   if not p or not p['data']:raise HTTPException(404,'Plano não encontrado')
-  if p['program_id']:return {'id':p['program_id'],'reused':True}
+  if p['program_id']:
+   # Explicit portal resubmission can resume only before any audio request.
+   bid=p['program_id']
+   b=c.execute('SELECT * FROM production_batches WHERE id=%s FOR UPDATE',(bid,)).fetchone()
+   if b and b['state']=='failed' and b['video_key'] and not c.execute('SELECT 1 FROM jobs WHERE track_id LIKE %s',(bid+'-%',)).fetchone():
+    if c.execute("SELECT 1 FROM production_batches WHERE channel_id=%s AND id<>%s AND state IN ('producing','waiting','queued')",(b['channel_id'],bid)).fetchone():raise HTTPException(409,'Este canal já tem outro pedido em produção')
+    if Decimal(body.budget)!=Decimal(b['budget']):raise HTTPException(409,'Retome com o mesmo teto do pedido original')
+    c.execute("UPDATE production_batches SET state='queued',detail='Retomada autorizada no portal; visual existente preservado',updated_at=now() WHERE id=%s",(bid,))
+    c.execute("UPDATE creator_plans SET status='queued' WHERE id=%s",(p['id'],))
+    audit(c,'CREATOR_RESUME_BEFORE_AUDIO',bid,'Existing visual; no prior audio requests');c.commit()
+   return {'id':bid,'reused':True}
   if c.execute("SELECT 1 FROM production_batches WHERE channel_id=%s AND state IN ('producing','waiting','queued')",(p.get('channel_id','00000000-0000-0000-0000-000000000001'),)).fetchone():raise HTTPException(409,'Este canal já tem um lote em produção ou na fila. Aguarde antes de criar outro para ele.')
   if body.budget<Decimal('.15')+Decimal(p['minutes'])/2*Decimal('.08'):raise HTTPException(422,'O orçamento deve cobrir a estimativa de músicas e a reserva de US$0,15 para o visual. A duração real pode exigir faixas adicionais.')
   estimate=Decimal('.15')+Decimal(p['minutes'])/2*Decimal('.08')

@@ -78,7 +78,11 @@ def tick():
   bid=p['program_id'];c.execute("UPDATE creator_plans SET status='processing' WHERE id=%s",(p['id'],));c.execute("UPDATE production_batches SET state='producing',detail='Gerando imagem original e animando visual' WHERE id=%s",(bid,));c.commit()
  folder=CACHE/bid;folder.mkdir(parents=True,exist_ok=True)
  try:
-  visual(bid,p['data'],folder)
+  with db() as c:existing=c.execute('SELECT video_key FROM production_batches WHERE id=%s',(bid,)).fetchone()
+  if existing and existing['video_key']:
+   # Reuse this authorized job's completed visual; never charge for it again.
+   storage().download_file(os.environ['S3_BUCKET'],existing['video_key'],str(folder/'scene-loop.mp4'))
+  else:visual(bid,p['data'],folder)
   env=os.environ.copy();env['CREATOR_BATCH']=bid
   subprocess.run(['python','-m','studio.batch_factory'],env=env,check=True)
   package(bid,folder)
