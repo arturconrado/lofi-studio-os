@@ -1,0 +1,15 @@
+/lofi-vibe-coding-studio-1 image=lofi-studio-os:production-bf5c851 cpu=400000000 memory=440401920 readonly=true
+/lofi-vibe-coding-creator-1 image=lofi-studio-os:production-bf5c851 cpu=800000000 memory=805306368 readonly=true
+/lofi-vibe-coding-export-worker-1 image=lofi-studio-os:production-a3a08c9 cpu=200000000 memory=402653184 readonly=true
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda1       154G  135G   20G  88% /
+               total        used        free      shared  buff/cache   available
+Mem:            7941        2868         312         124        5191        5072
+Swap:           8191         635        7556
+lofi-vibe-coding-creator-1 lofi-studio-os:production-bf5c851 Up 20 hours
+lofi-vibe-coding-studio-1 lofi-studio-os:production-bf5c851 Up 20 hours (healthy)
+lofi-vibe-coding-export-worker-1 lofi-studio-os:production-a3a08c9 Up 21 hours
+lofi-vibe-coding-youtube-publisher-1 lofi-studio-os:production-63d51f3 Exited (137) 44 hours ago
+lofi-vibe-coding-channel-radio-1 lofi-studio-os:production-d877875 Up 46 hours
+lofi-vibe-coding-radio-1 lofi-studio-os:production-d877875 Up 46 hours
+lofi-vibe-coding-music-worker-1 lofi-studio-os:production-d877875 Up 46 hours

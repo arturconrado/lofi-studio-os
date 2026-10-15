@@ -1,0 +1,44 @@
+[
+  {
+    "episode": 5,
+    "kind": "source",
+    "file": "/Users/gft/Documents/Codex/2026-10-13/digitalocean-plugin-app-6a3c278c93ac8191b29768648d63a754-openai-curated-2/outputs/auditoria-sdd-v2/baseline/media/episode-05/source.png",
+    "sha256": "9991b4a2cd478bde5d84974db134e8f2a333100ebd72a627460239726bccb7aa",
+    "matches_production": true
+  },
+  {
+    "episode": 5,
+    "kind": "motion-source",
+    "file": "/Users/gft/Documents/Codex/2026-10-13/digitalocean-plugin-app-6a3c278c93ac8191b29768648d63a754-openai-curated-2/outputs/auditoria-sdd-v2/baseline/media/episode-05/motion-source.mp4",
+    "sha256": "6c954ebaf01a0fca7c6c24df93c2cab2f8de7d46320fabf9b18af20960feabbd",
+    "matches_production": true
+  },
+  {
+    "episode": 7,
+    "kind": "source",
+    "file": "/Users/gft/Documents/Codex/2026-10-13/digitalocean-plugin-app-6a3c278c93ac8191b29768648d63a754-openai-curated-2/outputs/auditoria-sdd-v2/baseline/media/episode-07/source.png",
+    "sha256": "e51e27c94d632de323af6791fbdadcdaf6147d5cd50f49b4d86600114a7f9fd1",
+    "matches_production": true
+  },
+  {
+    "episode": 7,
+    "kind": "motion-source",
+    "file": "/Users/gft/Documents/Codex/2026-10-13/digitalocean-plugin-app-6a3c278c93ac8191b29768648d63a754-openai-curated-2/outputs/auditoria-sdd-v2/baseline/media/episode-07/motion-source.mp4",
+    "sha256": "8411287e999bd6baab00b097c2298a2c85f3c745461e9356a42d2c442dcd644b",
+    "matches_production": true
+  },
+  {
+    "episode": 6,
+    "kind": "source",
+    "file": "/Users/gft/Documents/Codex/2026-10-13/digitalocean-plugin-app-6a3c278c93ac8191b29768648d63a754-openai-curated-2/outputs/auditoria-sdd-v2/baseline/media/episode-06/source.png",
+    "sha256": "0432d5b2be6470dfc4ae0435eaaca832b51eca5a5abad6fa7b7a39ad294eb9f0",
+    "matches_production": true
+  },
+  {
+    "episode": 6,
+    "kind": "motion-source",
+    "file": "/Users/gft/Documents/Codex/2026-10-13/digitalocean-plugin-app-6a3c278c93ac8191b29768648d63a754-openai-curated-2/outputs/auditoria-sdd-v2/baseline/media/episode-06/motion-source.mp4",
+    "sha256": "d41a4e07d80d7a5f780240e644e8a6bd03bf1aeaafdd5304caa66b561fd915f8",
+    "matches_production": true
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "python_tests_passed": 90,
+  "interface_checks_passed": 6,
+  "baseline_object_pairs_verified": 15,
+  "local_source_pairs_verified": 6,
+  "restored_code_files_verified": 23,
+  "credential_pattern_matches": 0,
+  "application_source_files_changed": [],
+  "no_paid_generation": true,
+  "no_new_long_render": true
+}

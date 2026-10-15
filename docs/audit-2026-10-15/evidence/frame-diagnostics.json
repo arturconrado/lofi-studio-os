@@ -1,0 +1,392 @@
+[
+  {
+    "episode": "rejected-8bit",
+    "frame": "frame-59.96.png",
+    "mean_luminance": 102.687255859375,
+    "source_frame_png_sha256": "d24716896faa6cb9f5351b40b5f8413d7e73052f3bbc6f85ca485a074a70dc05"
+  },
+  {
+    "episode": "rejected-8bit",
+    "frame": "frame-20.00.png",
+    "mean_luminance": 102.68550109863281,
+    "source_frame_png_sha256": "dbd7312a720c2b2466605b3df393724a583b3d594642fb87c0dc0b0dc27c45e5"
+  },
+  {
+    "episode": "rejected-8bit",
+    "frame": "frame-19.96.png",
+    "mean_luminance": 102.687255859375,
+    "source_frame_png_sha256": "d24716896faa6cb9f5351b40b5f8413d7e73052f3bbc6f85ca485a074a70dc05"
+  },
+  {
+    "episode": "rejected-8bit",
+    "frame": "frame-03.00.png",
+    "mean_luminance": 102.68592071533203,
+    "source_frame_png_sha256": "8d7345b2d34a26cb4c00a4c3005595e71760c8da71631a6f673223eeedeb183a"
+  },
+  {
+    "episode": "rejected-8bit",
+    "frame": "frame-00.00.png",
+    "mean_luminance": 102.68550109863281,
+    "source_frame_png_sha256": "dbd7312a720c2b2466605b3df393724a583b3d594642fb87c0dc0b0dc27c45e5"
+  },
+  {
+    "episode": "episode-06",
+    "frame": "frame-3599.70.png",
+    "mean_luminance": 97.33625030517578,
+    "source_frame_png_sha256": "d60387060b58c73fb2fcdc6b45352ac91bd8929ce76d10175cb8a1e297a86ac4"
+  },
+  {
+    "episode": "episode-06",
+    "frame": "frame-2700.00.png",
+    "mean_luminance": 97.5265121459961,
+    "source_frame_png_sha256": "f9465629868172f4bd2e726ea17a6e40cc708f50b92401622d4339b7c7cdc33b"
+  },
+  {
+    "episode": "episode-06",
+    "frame": "frame-1800.00.png",
+    "mean_luminance": 97.52664947509766,
+    "source_frame_png_sha256": "887b72f05bd5eff904be1b5dd96ad612339b2ecdbbfa899ea34c66ee1fd2b322"
+  },
+  {
+    "episode": "episode-06",
+    "frame": "frame-0900.00.png",
+    "mean_luminance": 97.52647399902344,
+    "source_frame_png_sha256": "61e8812dfd05c6e63b1aa4e4a7d625d0b79deac6065166d6bad379db1a000472"
+  },
+  {
+    "episode": "episode-06",
+    "frame": "frame-0720.00.png",
+    "mean_luminance": 97.5272216796875,
+    "source_frame_png_sha256": "93137ea450c0c99749113b9e599079f5a8d53da5561d598ccced46bdc7ac51a7"
+  },
+  {
+    "episode": "episode-06",
+    "frame": "frame-0719.96.png",
+    "mean_luminance": 97.5272216796875,
+    "source_frame_png_sha256": "93137ea450c0c99749113b9e599079f5a8d53da5561d598ccced46bdc7ac51a7"
+  },
+  {
+    "episode": "episode-06",
+    "frame": "frame-0007.50.png",
+    "mean_luminance": 97.74080657958984,
+    "source_frame_png_sha256": "2368faa46108cdc3c473c42c2d0b734fb50c8ba7f9597f7b4f34437a0df7bb95"
+  },
+  {
+    "episode": "episode-06",
+    "frame": "frame-0007.46.png",
+    "mean_luminance": 97.74080657958984,
+    "source_frame_png_sha256": "2368faa46108cdc3c473c42c2d0b734fb50c8ba7f9597f7b4f34437a0df7bb95"
+  },
+  {
+    "episode": "episode-06",
+    "frame": "frame-0003.00.png",
+    "mean_luminance": 98.6813735961914,
+    "source_frame_png_sha256": "f13435120ffe528503a4567e87459cc47b61875c2f5e8249d221e9d627f9b487"
+  },
+  {
+    "episode": "episode-06",
+    "frame": "frame-0000.00.png",
+    "mean_luminance": 97.5272216796875,
+    "source_frame_png_sha256": "93137ea450c0c99749113b9e599079f5a8d53da5561d598ccced46bdc7ac51a7"
+  },
+  {
+    "episode": "episode-06",
+    "comparison": "t0 vs frame-3599.70.png",
+    "mean_abs_pixel_delta": 3.8459367752075195,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-06",
+    "comparison": "t0 vs frame-2700.00.png",
+    "mean_abs_pixel_delta": 1.4756122827529907,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-06",
+    "comparison": "t0 vs frame-1800.00.png",
+    "mean_abs_pixel_delta": 1.4756929874420166,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-06",
+    "comparison": "t0 vs frame-0900.00.png",
+    "mean_abs_pixel_delta": 1.4754970073699951,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-06",
+    "comparison": "t0 vs frame-0720.00.png",
+    "mean_abs_pixel_delta": 0.0,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-06",
+    "comparison": "t0 vs frame-0719.96.png",
+    "mean_abs_pixel_delta": 0.0,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-06",
+    "comparison": "t0 vs frame-0007.50.png",
+    "mean_abs_pixel_delta": 2.8181517124176025,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-06",
+    "comparison": "t0 vs frame-0007.46.png",
+    "mean_abs_pixel_delta": 2.8181517124176025,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-06",
+    "comparison": "t0 vs frame-0003.00.png",
+    "mean_abs_pixel_delta": 4.915724277496338,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-06",
+    "comparison": "t0 vs frame-0000.00.png",
+    "mean_abs_pixel_delta": 0.0,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-07",
+    "frame": "frame-3599.70.png",
+    "mean_luminance": 80.91556549072266,
+    "source_frame_png_sha256": "74a63689c8c96d5f2b9c423962e73b2665cf9b4e6c442460f86ff3991b49a443"
+  },
+  {
+    "episode": "episode-07",
+    "frame": "frame-2700.00.png",
+    "mean_luminance": 80.9388427734375,
+    "source_frame_png_sha256": "89fc7d7458460d84f9da916e78f1adfd4195812914a756c2cf53790dff4034e7"
+  },
+  {
+    "episode": "episode-07",
+    "frame": "frame-1800.00.png",
+    "mean_luminance": 80.93850708007812,
+    "source_frame_png_sha256": "d8716f05bd443f65e6175830f53a342626e1deead0845f9d99d2a338933fe5a4"
+  },
+  {
+    "episode": "episode-07",
+    "frame": "frame-0900.00.png",
+    "mean_luminance": 80.93920135498047,
+    "source_frame_png_sha256": "16ef223cbae72e68ef5acc1719ca0a6e705cb90c4765f7d56202651fea2a0f14"
+  },
+  {
+    "episode": "episode-07",
+    "frame": "frame-0720.00.png",
+    "mean_luminance": 80.94398498535156,
+    "source_frame_png_sha256": "b309da44a837632c75a8afc30a46a26b159999539cf906fbb61f12c1994edeeb"
+  },
+  {
+    "episode": "episode-07",
+    "frame": "frame-0719.96.png",
+    "mean_luminance": 80.94398498535156,
+    "source_frame_png_sha256": "b309da44a837632c75a8afc30a46a26b159999539cf906fbb61f12c1994edeeb"
+  },
+  {
+    "episode": "episode-07",
+    "frame": "frame-0007.50.png",
+    "mean_luminance": 80.99539184570312,
+    "source_frame_png_sha256": "7061e6a8d2d27e581b955ac94053ecd4cc3090de1896dadb413c7cfe899bb35a"
+  },
+  {
+    "episode": "episode-07",
+    "frame": "frame-0007.46.png",
+    "mean_luminance": 80.99539184570312,
+    "source_frame_png_sha256": "7061e6a8d2d27e581b955ac94053ecd4cc3090de1896dadb413c7cfe899bb35a"
+  },
+  {
+    "episode": "episode-07",
+    "frame": "frame-0003.00.png",
+    "mean_luminance": 81.70482635498047,
+    "source_frame_png_sha256": "8db62041476ebba5590867abe87ca0f1efc4b5f964b860fbd8bbe6598165dba9"
+  },
+  {
+    "episode": "episode-07",
+    "frame": "frame-0000.00.png",
+    "mean_luminance": 80.94398498535156,
+    "source_frame_png_sha256": "b309da44a837632c75a8afc30a46a26b159999539cf906fbb61f12c1994edeeb"
+  },
+  {
+    "episode": "episode-07",
+    "comparison": "t0 vs frame-3599.70.png",
+    "mean_abs_pixel_delta": 3.2763867378234863,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-07",
+    "comparison": "t0 vs frame-2700.00.png",
+    "mean_abs_pixel_delta": 1.2367079257965088,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-07",
+    "comparison": "t0 vs frame-1800.00.png",
+    "mean_abs_pixel_delta": 1.236106038093567,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-07",
+    "comparison": "t0 vs frame-0900.00.png",
+    "mean_abs_pixel_delta": 1.2360130548477173,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-07",
+    "comparison": "t0 vs frame-0720.00.png",
+    "mean_abs_pixel_delta": 0.0,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-07",
+    "comparison": "t0 vs frame-0719.96.png",
+    "mean_abs_pixel_delta": 0.0,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-07",
+    "comparison": "t0 vs frame-0007.50.png",
+    "mean_abs_pixel_delta": 2.2263433933258057,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-07",
+    "comparison": "t0 vs frame-0007.46.png",
+    "mean_abs_pixel_delta": 2.2263433933258057,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-07",
+    "comparison": "t0 vs frame-0003.00.png",
+    "mean_abs_pixel_delta": 4.235596656799316,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-07",
+    "comparison": "t0 vs frame-0000.00.png",
+    "mean_abs_pixel_delta": 0.0,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-05",
+    "frame": "frame-3599.70.png",
+    "mean_luminance": 63.28828048706055,
+    "source_frame_png_sha256": "b7a4ddd5f80b603de7c77fb32e4cc8dcbc6da9c844607d4b62404e3b23c22a7a"
+  },
+  {
+    "episode": "episode-05",
+    "frame": "frame-2700.00.png",
+    "mean_luminance": 63.240318298339844,
+    "source_frame_png_sha256": "41265ef40b5a44b34bccd345d52a6fc308295763c78313c44b75e5233072430e"
+  },
+  {
+    "episode": "episode-05",
+    "frame": "frame-1800.00.png",
+    "mean_luminance": 63.240074157714844,
+    "source_frame_png_sha256": "8cbb9636910aabfd8315db12b78e0a97f186f241625a9c53726f511249578a93"
+  },
+  {
+    "episode": "episode-05",
+    "frame": "frame-0900.00.png",
+    "mean_luminance": 63.240291595458984,
+    "source_frame_png_sha256": "ca7961e09b1754bece2a0d521f40d773bf6b38d1d9583945e8debcf795f96c24"
+  },
+  {
+    "episode": "episode-05",
+    "frame": "frame-0720.00.png",
+    "mean_luminance": 63.235939025878906,
+    "source_frame_png_sha256": "c5bd3fb855f80b0bd16f7e5cc7c0df666ca8f0b1361cfe0731071e779f960fb9"
+  },
+  {
+    "episode": "episode-05",
+    "frame": "frame-0719.96.png",
+    "mean_luminance": 63.235939025878906,
+    "source_frame_png_sha256": "c5bd3fb855f80b0bd16f7e5cc7c0df666ca8f0b1361cfe0731071e779f960fb9"
+  },
+  {
+    "episode": "episode-05",
+    "frame": "frame-0007.50.png",
+    "mean_luminance": 63.367313385009766,
+    "source_frame_png_sha256": "49d72ade96fce63c962cb2973a0c748292820b9baf59673761c4b541f05cd0fd"
+  },
+  {
+    "episode": "episode-05",
+    "frame": "frame-0007.46.png",
+    "mean_luminance": 63.367313385009766,
+    "source_frame_png_sha256": "49d72ade96fce63c962cb2973a0c748292820b9baf59673761c4b541f05cd0fd"
+  },
+  {
+    "episode": "episode-05",
+    "frame": "frame-0003.00.png",
+    "mean_luminance": 64.073486328125,
+    "source_frame_png_sha256": "8d15ae7f7ae8af489e013e846706f3f6207049f8020d64f0684aa894cfef152a"
+  },
+  {
+    "episode": "episode-05",
+    "frame": "frame-0000.00.png",
+    "mean_luminance": 63.235939025878906,
+    "source_frame_png_sha256": "c5bd3fb855f80b0bd16f7e5cc7c0df666ca8f0b1361cfe0731071e779f960fb9"
+  },
+  {
+    "episode": "episode-05",
+    "comparison": "t0 vs frame-3599.70.png",
+    "mean_abs_pixel_delta": 3.7265870571136475,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-05",
+    "comparison": "t0 vs frame-2700.00.png",
+    "mean_abs_pixel_delta": 1.2452716827392578,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-05",
+    "comparison": "t0 vs frame-1800.00.png",
+    "mean_abs_pixel_delta": 1.2452094554901123,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-05",
+    "comparison": "t0 vs frame-0900.00.png",
+    "mean_abs_pixel_delta": 1.2451472282409668,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-05",
+    "comparison": "t0 vs frame-0720.00.png",
+    "mean_abs_pixel_delta": 0.0,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-05",
+    "comparison": "t0 vs frame-0719.96.png",
+    "mean_abs_pixel_delta": 0.0,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-05",
+    "comparison": "t0 vs frame-0007.50.png",
+    "mean_abs_pixel_delta": 2.219703435897827,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-05",
+    "comparison": "t0 vs frame-0007.46.png",
+    "mean_abs_pixel_delta": 2.219703435897827,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-05",
+    "comparison": "t0 vs frame-0003.00.png",
+    "mean_abs_pixel_delta": 6.1215596199035645,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  },
+  {
+    "episode": "episode-05",
+    "comparison": "t0 vs frame-0000.00.png",
+    "mean_abs_pixel_delta": 0.0,
+    "interpretation": "Diagnostic only; no artistic identity or time-passage certification"
+  }
+]

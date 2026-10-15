@@ -1,0 +1,359 @@
+{
+  "compiled_spec": {
+    "version": 1,
+    "hours": 1,
+    "music_style": "8bit_lofi",
+    "music_brief": "",
+    "scene_brief": "",
+    "scenario": "city_sunset",
+    "shirt_color": "violet",
+    "character_reference": "",
+    "cat_reference": "",
+    "program_budget_usd": 0,
+    "asset_budget_usd": 0
+  },
+  "event_count": 32,
+  "events": [
+    {
+      "start": 600,
+      "end": 608,
+      "action": "close_eyes_deep_satisfied_breath",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 608,
+      "end": 623,
+      "action": "look_outside_and_cat_stretch_approach",
+      "actors": [
+        "girl",
+        "cat"
+      ]
+    },
+    {
+      "start": 623,
+      "end": 633,
+      "action": "pet_cat",
+      "actors": [
+        "girl",
+        "cat"
+      ]
+    },
+    {
+      "start": 633,
+      "end": 640,
+      "action": "cat_returns_to_cushion",
+      "actors": [
+        "cat"
+      ]
+    },
+    {
+      "start": 1200,
+      "end": 1208,
+      "action": "close_eyes_deep_satisfied_breath",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 1208,
+      "end": 1223,
+      "action": "look_outside_and_cat_stretch_approach",
+      "actors": [
+        "girl",
+        "cat"
+      ]
+    },
+    {
+      "start": 1223,
+      "end": 1233,
+      "action": "pet_cat",
+      "actors": [
+        "girl",
+        "cat"
+      ]
+    },
+    {
+      "start": 1233,
+      "end": 1240,
+      "action": "cat_returns_to_cushion",
+      "actors": [
+        "cat"
+      ]
+    },
+    {
+      "start": 1500,
+      "end": 1506,
+      "action": "cat_slow_jump_exit",
+      "actors": [
+        "cat"
+      ]
+    },
+    {
+      "start": 1506,
+      "end": 1516,
+      "action": "pick_phone_scroll_messages",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 1516,
+      "end": 1526,
+      "action": "look_outside",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 1526,
+      "end": 1532,
+      "action": "cat_returns_initial_position",
+      "actors": [
+        "cat"
+      ]
+    },
+    {
+      "start": 1532,
+      "end": 1535,
+      "action": "look_at_cat",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 1535,
+      "end": 1538,
+      "action": "put_phone_on_table",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 1800,
+      "end": 1808,
+      "action": "close_eyes_deep_satisfied_breath",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 1808,
+      "end": 1823,
+      "action": "look_outside_and_cat_stretch_approach",
+      "actors": [
+        "girl",
+        "cat"
+      ]
+    },
+    {
+      "start": 1823,
+      "end": 1833,
+      "action": "pet_cat",
+      "actors": [
+        "girl",
+        "cat"
+      ]
+    },
+    {
+      "start": 1833,
+      "end": 1840,
+      "action": "cat_returns_to_cushion",
+      "actors": [
+        "cat"
+      ]
+    },
+    {
+      "start": 2400,
+      "end": 2408,
+      "action": "close_eyes_deep_satisfied_breath",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 2408,
+      "end": 2423,
+      "action": "look_outside_and_cat_stretch_approach",
+      "actors": [
+        "girl",
+        "cat"
+      ]
+    },
+    {
+      "start": 2423,
+      "end": 2433,
+      "action": "pet_cat",
+      "actors": [
+        "girl",
+        "cat"
+      ]
+    },
+    {
+      "start": 2433,
+      "end": 2440,
+      "action": "cat_returns_to_cushion",
+      "actors": [
+        "cat"
+      ]
+    },
+    {
+      "start": 2700,
+      "end": 2706,
+      "action": "cat_slow_jump_exit",
+      "actors": [
+        "cat"
+      ]
+    },
+    {
+      "start": 2706,
+      "end": 2716,
+      "action": "pick_phone_scroll_messages",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 2716,
+      "end": 2726,
+      "action": "look_outside",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 2726,
+      "end": 2732,
+      "action": "cat_returns_initial_position",
+      "actors": [
+        "cat"
+      ]
+    },
+    {
+      "start": 2732,
+      "end": 2735,
+      "action": "look_at_cat",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 2735,
+      "end": 2738,
+      "action": "put_phone_on_table",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 3000,
+      "end": 3008,
+      "action": "close_eyes_deep_satisfied_breath",
+      "actors": [
+        "girl"
+      ]
+    },
+    {
+      "start": 3008,
+      "end": 3023,
+      "action": "look_outside_and_cat_stretch_approach",
+      "actors": [
+        "girl",
+        "cat"
+      ]
+    },
+    {
+      "start": 3023,
+      "end": 3033,
+      "action": "pet_cat",
+      "actors": [
+        "girl",
+        "cat"
+      ]
+    },
+    {
+      "start": 3033,
+      "end": 3040,
+      "action": "cat_returns_to_cushion",
+      "actors": [
+        "cat"
+      ]
+    }
+  ],
+  "segments_count": 40,
+  "missing_actions": [
+    "cat_returns_initial_position",
+    "cat_returns_to_cushion",
+    "cat_slow_jump_exit",
+    "close_eyes_deep_satisfied_breath",
+    "look_at_cat",
+    "look_outside",
+    "look_outside_and_cat_stretch_approach",
+    "pet_cat",
+    "pick_phone_scroll_messages",
+    "put_phone_on_table",
+    "typing_idle"
+  ],
+  "coverage": 3600,
+  "new_markers": {
+    "900": [],
+    "1800": [
+      {
+        "start": 1800,
+        "end": 1808,
+        "action": "close_eyes_deep_satisfied_breath",
+        "actors": [
+          "girl"
+        ]
+      }
+    ],
+    "2700": [
+      {
+        "start": 2700,
+        "end": 2706,
+        "action": "cat_slow_jump_exit",
+        "actors": [
+          "cat"
+        ]
+      }
+    ]
+  },
+  "overlaps": [],
+  "lighting": {
+    "keyframes": [
+      {
+        "minute": 0,
+        "night": 0,
+        "city_lights": 0
+      },
+      {
+        "minute": 15,
+        "night": 1,
+        "city_lights": 1
+      },
+      {
+        "minute": 48,
+        "night": 1,
+        "city_lights": 1
+      },
+      {
+        "minute": 50,
+        "night": 1,
+        "city_lights": 0.5
+      },
+      {
+        "minute": 60,
+        "night": 1,
+        "city_lights": 0.5
+      }
+    ],
+    "interpolation": "smoothstep",
+    "repeat_each_hour": false,
+    "after_hour_one": "hold_final_lighting",
+    "twinkle": false,
+    "loop_boundary": "requires_reviewed_transition_no_instant_reset"
+  },
+  "paid_calls": 0,
+  "render_started": false
+}

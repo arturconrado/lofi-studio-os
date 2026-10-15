@@ -1,0 +1,56 @@
+[
+  {
+    "episode": 5,
+    "title": "Snowy Night Studio | 1 Hour of Lo-Fi Jazzhop for Coding",
+    "integrity_copies_all_equal": true,
+    "records_all_match": true,
+    "duration": "3600.000000",
+    "mean_volume_dbfs": [
+      "-18.6"
+    ],
+    "max_volume_dbfs": [
+      "-2.6"
+    ],
+    "silence_count": 29,
+    "silence_total_seconds": 71.003,
+    "silence_max_seconds": 3.23542,
+    "historical_lufs": -17.0,
+    "historical_true_peak": -2.6
+  },
+  {
+    "episode": 7,
+    "title": "Autumn Bookshop Coding | 1 Hour of Lo-Fi Jazzhop for Coding",
+    "integrity_copies_all_equal": true,
+    "records_all_match": true,
+    "duration": "3600.000000",
+    "mean_volume_dbfs": [
+      "-18.5"
+    ],
+    "max_volume_dbfs": [
+      "-3.1"
+    ],
+    "silence_count": 26,
+    "silence_total_seconds": 65.992,
+    "silence_max_seconds": 2.81542,
+    "historical_lufs": -17.0,
+    "historical_true_peak": -2.8
+  },
+  {
+    "episode": 6,
+    "title": "Greenhouse Rain Study | 1 Hour of Lo-Fi Jazzhop for Coding",
+    "integrity_copies_all_equal": true,
+    "records_all_match": true,
+    "duration": "3600.000000",
+    "mean_volume_dbfs": [
+      "-18.6"
+    ],
+    "max_volume_dbfs": [
+      "-2.2"
+    ],
+    "silence_count": 27,
+    "silence_total_seconds": 60.967,
+    "silence_max_seconds": 3.39487,
+    "historical_lufs": -17.1,
+    "historical_true_peak": -2.2
+  }
+]

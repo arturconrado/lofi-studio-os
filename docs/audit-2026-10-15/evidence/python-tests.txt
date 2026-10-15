@@ -1,0 +1,27 @@
+........................................................................ [ 80%]
+..................                                                       [100%]
+=============================== warnings summary ===============================
+../py312/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /Users/gft/Documents/Codex/2026-10-13/digitalocean-plugin-app-6a3c278c93ac8191b29768648d63a754-openai-curated-2/work/py312/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+studio/api.py:68
+  /Users/gft/Documents/Codex/2026-10-13/digitalocean-plugin-app-6a3c278c93ac8191b29768648d63a754-openai-curated-2/work/source/studio/api.py:68: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event('startup')
+
+../py312/lib/python3.12/site-packages/fastapi/applications.py:4745
+  /Users/gft/Documents/Codex/2026-10-13/digitalocean-plugin-app-6a3c278c93ac8191b29768648d63a754-openai-curated-2/work/py312/lib/python3.12/site-packages/fastapi/applications.py:4745: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+90 passed, 3 warnings in 35.39s
