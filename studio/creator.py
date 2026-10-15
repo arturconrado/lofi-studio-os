@@ -14,6 +14,9 @@ def saved_plans(channel_id:uuid.UUID=uuid.UUID('00000000-0000-0000-0000-00000000
   from .channels import profile
   profile(c,channel_id)
   rows=c.execute("SELECT id,theme,minutes,data AS plan,status,created_at FROM creator_plans WHERE channel_id=%s AND status='draft' ORDER BY created_at DESC LIMIT 20",(channel_id,)).fetchall()
+ from .production_harness import production_spec_hash
+ for row in rows:
+  if row['plan'].get('production_spec'):row['spec_sha256']=production_spec_hash(row['plan']['production_spec'])
  return {'plans':rows}
 
 def init(c):
@@ -204,3 +207,6 @@ def music_styles():
 
 from .motion_validation import router as motion_validation_router
 router.include_router(motion_validation_router)
+
+from .form_assistant import router as form_assistant_router
+router.include_router(form_assistant_router)

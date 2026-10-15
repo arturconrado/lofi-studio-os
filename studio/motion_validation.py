@@ -9,6 +9,7 @@ from pydantic import BaseModel,Field
 from .core import db,storage,audit
 from .channels import profile
 from . import runtime
+from .production_harness import production_spec_hash
 router=APIRouter(prefix='/motion-validation')
 MODEL='google/veo-3.1-lite'
 KIND='motion_validation_20261014'
@@ -64,7 +65,7 @@ def quote():
     try:cap=catalog_quote()
     except Exception:raise HTTPException(409,'Cotação indisponível. Nenhum envio pago foi feito.') from None
     with db() as c:
-        spent=c.execute('SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE kind=%s',(KIND,)).fetchone()['n']
+        spent=c.execute('SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE kind IN (%s,%s)',(KIND,'form_assist_20261014')).fetchone()['n']
     return {'model':MODEL,'seconds':8,'resolution':'720p','reservation_usd':cap,'total_limit_usd':2,'reserved_total_usd':spent,'remaining_usd':max(0,Decimal('2')-spent),'prompt':PROMPT}
 
 
@@ -98,7 +99,7 @@ def submit(body:Pilot):
     if len(raw)>10*1024*1024:raise HTTPException(422,'Referência excede 10MB')
     image=Image.open(io.BytesIO(raw)).convert('RGB');image.thumbnail((1280,720));encoded=io.BytesIO();image.save(encoded,format='JPEG',quality=92)
     source_sha=hashlib.sha256(raw).hexdigest()
-    spec_sha=hashlib.sha256(json.dumps(plan['data']['production_spec'],sort_keys=True).encode()).hexdigest()
+    spec_sha=production_spec_hash(plan['data']['production_spec'])
     # Reuse before reservation: a repeated request for the same approved reference
     # must not buy the same source/brief animation again.
     with db() as c:
@@ -114,13 +115,13 @@ def submit(body:Pilot):
     if cap>body.max_reservation_usd:raise HTTPException(409,'O preço aumentou; confira a cotação antes de enviar')
     plan_cap=Decimal(str(plan['data']['production_spec'].get('asset_budget_usd',0)))
     if cap>plan_cap:raise HTTPException(409,'A reserva supera o teto de assets deste roteiro. Ajuste e salve o roteiro antes de produzir.')
-    payload={'plan_id':str(body.plan_id),'role':'interaction_reference','spec_sha256':hashlib.sha256(json.dumps(plan['data']['production_spec'],sort_keys=True).encode()).hexdigest(),'channel_id':str(body.channel_id),'batch_id':body.batch_id,'scene_id':body.scene_id,
+    payload={'plan_id':str(body.plan_id),'role':'interaction_reference','spec_sha256':production_spec_hash(plan['data']['production_spec']),'channel_id':str(body.channel_id),'batch_id':body.batch_id,'scene_id':body.scene_id,
              'source_sha256':hashlib.sha256(raw).hexdigest(),'prompt':PROMPT,'seconds':8,'demo_only':True}
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
         old=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone()
         if old:return public(old)
-        spent=c.execute('SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE kind=%s',(KIND,)).fetchone()['n']
+        spent=c.execute('SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE kind IN (%s,%s)',(KIND,'form_assist_20261014')).fetchone()['n']
         if spent+cap>Decimal('2'):raise HTTPException(409,'Teto total de US$2 atingido; nenhum envio feito')
         plan_spent=c.execute("SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE kind=%s AND payload->>'plan_id'=%s",(KIND,str(body.plan_id))).fetchone()['n']
         if plan_spent+cap>plan_cap:raise HTTPException(409,'Teto de assets do roteiro atingido')
@@ -198,7 +199,7 @@ def review(tid:uuid.UUID,body:AssetReview):
         p=row['payload'];report=p.get('report',{})
         if row['status']!='COMPLETED' or report.get('sha256')!=body.sha256 or report.get('full_decode_pass') is not True or report.get('duration_seconds',0)<7.9:raise HTTPException(409,'O arquivo atual não corresponde à revisão')
         plan=c.execute('SELECT data FROM creator_plans WHERE id=%s FOR UPDATE',(p['plan_id'],)).fetchone()
-        if not plan or hashlib.sha256(json.dumps(plan['data'].get('production_spec'),sort_keys=True).encode()).hexdigest()!=p['spec_sha256']:
+        if not plan or production_spec_hash(plan['data'].get('production_spec'))!=p['spec_sha256']:
             raise HTTPException(409,'O roteiro mudou. Este asset precisa ser reavaliado para a nova versão')
         entry=plan['data'].get('production_assets',{}).get(str(tid))
         if not entry:raise HTTPException(409,'Asset não vinculado ao roteiro')

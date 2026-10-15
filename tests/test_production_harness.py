@@ -85,8 +85,8 @@ def test_existing_creator_cannot_fallback_to_paid_static_image_for_action_brief(
 
 def test_asset_review_is_bound_to_plan_and_never_approves_missing_actions():
     import hashlib,json
-    from studio.production_harness import asset_inventory
-    spec=ProductionSpec().model_dump();digest=hashlib.sha256(json.dumps(spec,sort_keys=True).encode()).hexdigest()
+    from studio.production_harness import asset_inventory,production_spec_hash
+    spec=ProductionSpec().model_dump();digest=production_spec_hash(spec)
     entry={'role':'interaction_reference','spec_sha256':digest,'state':'APPROVED_REFERENCE','sha256':'a'*64,'human_review_sha256':'a'*64}
     plan={'production_spec':spec,'production_assets':{'asset':entry}}
     assert len(asset_inventory(plan)['approved_references'])==1
