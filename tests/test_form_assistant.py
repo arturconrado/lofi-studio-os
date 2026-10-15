@@ -7,7 +7,7 @@ from studio.production_harness import ProductionSpec, production_spec_hash
 
 
 def test_suggestions_cannot_change_operational_controls():
-    for field in ('asset_budget_usd', 'approved', 'channel_id', 'reference_scene', 'start_live'):
+    for field in ('asset_budget_usd', 'program_budget_usd', 'approved', 'channel_id', 'reference_scene', 'start_live'):
         with pytest.raises(ValidationError):
             filter_patch({field: 'anything'}, 'all')
     with pytest.raises(ValidationError):
@@ -24,6 +24,7 @@ def test_field_assistance_only_returns_requested_field():
 def test_empty_scene_direction_preserves_existing_asset_hash():
     old = ProductionSpec().model_dump()
     old.pop('scene_brief')
+    old.pop('program_budget_usd')
     legacy = hashlib.sha256(json.dumps(old, sort_keys=True).encode()).hexdigest()
     assert production_spec_hash(old) == legacy
     assert production_spec_hash(ProductionSpec().model_dump()) == legacy

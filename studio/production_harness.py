@@ -18,6 +18,7 @@ class ProductionSpec(BaseModel):
     shirt_color: Literal['violet', 'pink', 'orange', 'green', 'royal blue'] = 'violet'
     character_reference: str = Field(default='', max_length=200)
     cat_reference: str = Field(default='', max_length=200)
+    program_budget_usd: float = Field(default=0, ge=0, le=40)
     asset_budget_usd: float = Field(default=0, ge=0, le=2)
 
 
@@ -25,6 +26,7 @@ def production_spec_hash(spec):
     # Empty optional scene direction was added after existing approved references.
     # Preserve those approvals when no creative requirement changed.
     normalized=spec.model_dump() if isinstance(spec,ProductionSpec) else dict(spec)
+    normalized.pop('program_budget_usd',None)  # Planning cap does not change creative identity.
     if not normalized.get('scene_brief'):normalized.pop('scene_brief',None)
     return hashlib.sha256(json.dumps(normalized,sort_keys=True).encode()).hexdigest()
 
@@ -101,7 +103,7 @@ def compile_spec(spec: ProductionSpec):
                      'no_track_repetition_to_claim_original_duration':True,'no_sudden_loudness_changes':True,
                      'human_listening_review_required':True,'measured_duration_required':True},
             'asset_tasks':tasks, 'local_layers':['sky_and_window_light','stars_twinkle','tracked_cushion_text'],
-            'cost_policy':{'validation_total_cap_usd':2,'asset_cap_usd':spec.asset_budget_usd,'audio_and_visual_share_validation_cap':True,'provider_quote_required':True,
+            'cost_policy':{'program_budget_proposed_usd':spec.program_budget_usd,'program_budget_is_spending_authorization':False,'validation_total_cap_usd':2,'asset_cap_usd':spec.asset_budget_usd,'audio_and_visual_share_validation_cap':True,'provider_quote_required':True,
                            'workspace_cache_lookup_required':True,'one_preview_before_batch':True,
                            'automatic_paid_retry':False,'generation_started':False},
             'render_ready':False,'blockers':blockers,
