@@ -105,3 +105,14 @@ def test_hour_compositor_covers_real_time_and_rejects_short_reference_as_action(
     assert not plan['assets_ready'] and not plan['eligible_for_live']
     assert 'pet_cat' in plan['missing_actions']
     assert all(s['repeat_short_clip']==(s['action']=='typing_idle') for s in plan['segments'])
+
+
+def test_program_budget_is_persisted_planning_not_spending_authorization():
+    from studio.production_harness import production_spec_hash
+    spec=ProductionSpec(hours=4,program_budget_usd=15)
+    p=compile_spec(spec)
+    assert p['cost_policy']['program_budget_proposed_usd']==15
+    assert p['cost_policy']['program_budget_is_spending_authorization'] is False
+    assert p['cost_policy']['validation_total_cap_usd']==2
+    assert not p['render_ready']
+    assert production_spec_hash(spec)==production_spec_hash(ProductionSpec(hours=4,program_budget_usd=0))
