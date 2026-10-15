@@ -13,7 +13,7 @@ def saved_plans(channel_id:uuid.UUID=uuid.UUID('00000000-0000-0000-0000-00000000
  with db() as c:
   from .channels import profile
   profile(c,channel_id)
-  rows=c.execute("SELECT p.id,p.theme,p.minutes,p.data AS plan,p.status,p.created_at,b.budget FROM creator_plans p LEFT JOIN production_batches b ON b.id=p.program_id WHERE p.channel_id=%s AND (p.status='draft' OR (p.status='failed' AND b.video_key IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.track_id LIKE b.id||'-%'))) ORDER BY p.created_at DESC LIMIT 20",(channel_id,)).fetchall()
+  rows=c.execute("SELECT p.id,p.theme,p.minutes,p.data AS plan,p.status,p.created_at,b.budget FROM creator_plans p LEFT JOIN production_batches b ON b.id=p.program_id WHERE p.channel_id=%s AND (p.status='draft' OR (p.status='failed' AND b.video_key IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.track_id LIKE b.id||'-%%'))) ORDER BY p.created_at DESC LIMIT 20",(channel_id,)).fetchall()
  from .production_harness import production_spec_hash
  for row in rows:
   if row['plan'].get('production_spec'):row['spec_sha256']=production_spec_hash(row['plan']['production_spec'])
