@@ -41,6 +41,8 @@ def select_program_visual(bid:str,body:ProgramVisual):
         else:
             key=b['visual_cycle_key'];title='Sequência completa';duration=None
         if not key:raise HTTPException(409,'Sequência ainda em preparação')
+        from .visual_identity import assert_usable
+        assert_usable(key)
         if b['video_key']==key:return {'changed':False}
         storage().head_object(Bucket=os.environ['S3_BUCKET'],Key=key)
         obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=b['manifest_key'])
@@ -144,8 +146,12 @@ def programs():
             if b['manifest_key']:
                 try:
                     obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=b['manifest_key'])
-                    try:visual=json.loads(obj['Body'].read()).get('video',{})
+                    try:presentation=json.loads(obj['Body'].read());visual=presentation.get('video',{})
                     finally:obj['Body'].close()
+                    if presentation.get('audio',{}).get('mix'):
+                        actual=float(presentation.get('duration_seconds',0))
+                        if 0<actual<=b['playable_seconds']+.1:
+                            b['original_audio_seconds']=b['playable_seconds'];b['playable_seconds']=actual
                     b['visual_cycle_seconds']=visual.get('seconds')
                     b['visual_title']=selected['title'] if selected else visual.get('title',b['visual_title'])
                 except Exception:pass

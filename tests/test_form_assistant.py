@@ -23,6 +23,8 @@ def test_field_assistance_only_returns_requested_field():
 
 def test_empty_scene_direction_preserves_existing_asset_hash():
     old = ProductionSpec().model_dump()
+    old.pop('niche_pack_sha256')
+    old.pop('cadence')
     old.pop('scene_brief')
     old.pop('program_budget_usd')
     legacy = hashlib.sha256(json.dumps(old, sort_keys=True).encode()).hexdigest()

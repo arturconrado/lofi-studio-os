@@ -90,7 +90,7 @@ def test_local_queue_is_idempotent_version_bound_and_cannot_review_unrendered_jo
             row=c.execute('SELECT data FROM creator_plans WHERE id=%s',(pid,)).fetchone();data=row['data'];compiled=compile_spec(ProductionSpec(**data['production_spec']));digest=production_spec_hash(data['production_spec']);sha='a'*64
             data['production_assets']={str(uuid.uuid4()):{'role':'action_clip','action':t['action'],'cache_fingerprint':t['cache_fingerprint'],'sha256':sha,'human_review_sha256':sha,'status':'APPROVED_ACTION','full_decode_pass':True,'source_preserved':True,'pose_anchors_reviewed':True,'loop_seam_reviewed':True,'seconds':minimum_seconds(compiled,t['action']),'video_key':'test-only/'+t['action']+'.mp4'} for t in compiled['asset_tasks']}
             data['assembly_audio']={'sha256':sha,'human_review_sha256':sha,'style_reviewed':True,'source_preserved':True,'spec_sha256':digest,'seconds':14400,'unique_measured_seconds':14400,'audio_key':'test-only/audio.mp3'}
-            data['assembly_environment']={'reviewed':True,'spec_sha256':digest,'sky':[[.6,0],[1,0],[1,.4]],'lights':[[.6,.4],[1,.4],[1,.6]],'cushion_box':[.1,.7,.2,.1]}
+            data['assembly_environment']={'reviewed':True,'spec_sha256':digest,'region_asset_shas':[sha],'sky':[[.6,0],[1,0],[1,.4]],'lights':[[.6,.4],[1,.4],[1,.6]],'cushion_box':[.1,.7,.2,.1]}
             c.execute('UPDATE creator_plans SET data=%s WHERE id=%s',(json.dumps(data,ensure_ascii=False),pid));heartbeat(c);c.commit()
     finally:WORKSPACE.reset(scope)
     base='/api/creator/assembly/plans/'+pid;body={'request_id':str(uuid.uuid4()),'confirm_local_render':True}
@@ -102,3 +102,34 @@ def test_local_queue_is_idempotent_version_bound_and_cannot_review_unrendered_jo
     spec['shirt_color']='pink'
     assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':pid,'spec':spec},headers=headers).status_code==200
     assert client.post(base+'/render',json=body,headers=headers).status_code==409
+
+
+def test_resume_is_explicit_scoped_and_requires_unchanged_inputs(client,monkeypatch):
+    import json
+    from studio import timeline_api
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    pid,headers,_,_=draft(client)
+    identity=client.get('/api/auth/me').json()
+    jid=uuid.uuid4()
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            row=timeline_api.get_plan(c,uuid.UUID(pid));_,result=timeline_api.materials(row)
+            fingerprint=timeline_api.inputs_hash(row,result)
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,%s,'local_ffmpeg_v1',%s,0,'INTERRUPTED')",(jid,timeline_api.KIND,json.dumps({'plan_id':pid,'input_sha256':fingerprint})))
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,%s,'local_ffmpeg_v1','{}',0,'READY')",(timeline_api.HEARTBEAT,timeline_api.WORKER));c.commit()
+    finally:WORKSPACE.reset(marker)
+    path='/api/creator/assembly/jobs/'+str(jid)+'/resume'
+    assert client.post(path).status_code==403
+    assert client.post(path,headers=headers).status_code==409  # missing reviewed inputs
+    real_materials=timeline_api.materials
+    def ready(row):
+        compiled,result=real_materials(row);result['ready']=True;return compiled,result
+    monkeypatch.setattr(timeline_api,'materials',ready)
+    response=client.post(path,headers=headers)
+    assert response.status_code==200,response.text
+    assert response.json()['paid_calls']==0
+    assert client.post(path,headers=headers).status_code==409
+    client.cookies.clear();_,other=signup(client)
+    assert client.post(path,headers={'X-CSRF-Token':other['csrf_token']}).status_code==404

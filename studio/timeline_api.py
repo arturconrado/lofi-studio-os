@@ -79,22 +79,73 @@ def identity_sources(c,row):
         for key,a in data.get('production_assets',{}).items():
             if a.get('role')=='interaction_reference' and a.get('human_review')=='approved' and a.get('sha256') and a.get('human_review_sha256')==a['sha256'] and a.get('spec_sha256')==digest:
                 sources.append({'plan_id':str(p['id']),'title':data.get('title','Referência do estúdio')+' · '+str(p['minutes'])+' min','sha256':a['sha256'],'reference_video_url':'/api/creator/motion-validation/'+str(uuid.UUID(key))+'/video'})
+    from .visual_identity import REGISTRY
+    for entry in REGISTRY['approved_episodes']:
+        owned=c.execute('SELECT id FROM ambient_pilots WHERE id=%s AND channel_id=%s',(uuid.UUID(entry['pilot_id']),row['channel_id'])).fetchone()
+        if owned:
+            sources.append({'pilot_id':entry['pilot_id'],'plan_id':'episode:'+entry['pilot_id'],'title':entry['title']+' · referência canônica','sha256':entry['files']['source']['sha256'],'canonical':True})
     return sources
 
 
 class IdentitySelection(BaseModel):
-    source_plan_id:uuid.UUID
+    source_plan_id:uuid.UUID|None=None
+    source_pilot_id:uuid.UUID|None=None
+
+    @model_validator(mode='after')
+    def one_source(self):
+        if bool(self.source_plan_id)==bool(self.source_pilot_id):raise ValueError('Escolha uma única referência')
+        return self
 
 
 @router.post('/plans/{pid}/identity')
 def select_identity(pid:uuid.UUID,body:IdentitySelection):
     with db() as c:
         row=get_plan(c,pid,True);sources=identity_sources(c,row)
-        source=next((s for s in sources if s['plan_id']==str(body.source_plan_id)),None)
+        source_id='episode:'+str(body.source_pilot_id) if body.source_pilot_id else str(body.source_plan_id)
+        source=next((s for s in sources if s['plan_id']==source_id),None)
         if not source:raise HTTPException(409,'Escolha uma referência aprovada neste canal')
         spec=dict(row['data']['production_spec']);spec.update(character_reference='reviewed:'+source['sha256']+':girl',cat_reference='reviewed:'+source['sha256']+':cat')
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_spec}',%s::jsonb) WHERE id=%s",(json.dumps(spec,ensure_ascii=False),pid));audit(c,'TIMELINE_IDENTITY_SELECTED',str(pid),str(body.source_plan_id));c.commit()
+        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_spec}',%s::jsonb) WHERE id=%s",(json.dumps(spec,ensure_ascii=False),pid));audit(c,'TIMELINE_IDENTITY_SELECTED',str(pid),source_id);c.commit()
     return {'production_spec':spec,'paid_calls':0,'reviews_must_match_new_identity':True}
+
+
+
+@router.post('/plans/{pid}/baseline-motion')
+def reuse_baseline_motion(pid:uuid.UUID,body:IdentitySelection):
+    from .visual_identity import baseline,verify_baseline
+    if not body.source_pilot_id:raise HTTPException(422,'Escolha um episódio canônico')
+    entry=baseline(body.source_pilot_id)
+    if not entry:raise HTTPException(404,'Referência canônica não encontrada')
+    with db() as c:
+        row=get_plan(c,pid);spec=row['data']['production_spec'];digest=production_spec_hash(spec)
+        if not c.execute('SELECT id FROM ambient_pilots WHERE id=%s AND channel_id=%s',(body.source_pilot_id,row['channel_id'])).fetchone():raise HTTPException(404,'Referência não encontrada neste canal')
+        expected=entry['files']['source']['sha256']
+        if spec.get('character_reference')!='reviewed:'+expected+':girl' or spec.get('cat_reference')!='reviewed:'+expected+':cat':raise HTTPException(409,'Selecione primeiro a identidade deste episódio')
+        existing=next((a for a in row['data'].get('production_assets',{}).values() if a.get('baseline_pilot_id')==str(body.source_pilot_id) and a.get('spec_sha256')==digest),None)
+        if existing:return {'reused':True,'paid_calls':0,'review_required':existing.get('status')!='APPROVED_ACTION'}
+    source=entry['files']['motion-source']
+    with tempfile.TemporaryDirectory() as tmp:
+        path=Path(tmp)/'motion.mp4';obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=source['key'])
+        try:
+            if obj['ContentLength']>64*1024**2:raise HTTPException(422,'Clipe excede limite')
+            with path.open('wb') as f:
+                count=0
+                for chunk in obj['Body'].iter_chunks(1024*1024):
+                    count+=len(chunk)
+                    if count>64*1024**2:raise HTTPException(422,'Clipe excede limite')
+                    f.write(chunk)
+        finally:obj['Body'].close()
+        sha=file_hash(path);verify_baseline(body.source_pilot_id,source['key'],sha)
+        seconds,_=measure(path,'video')
+        import subprocess
+        subprocess.run(['ffmpeg','-v','error','-xerror','-threads','1','-i',str(path),'-map','0:v:0','-an','-f','null','-'],check=True,timeout=120,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    task=next(t for t in compile_spec(ProductionSpec(**spec))['asset_tasks'] if t['action']=='typing_idle')
+    aid=str(uuid.uuid4());asset={'role':'action_clip','action':'typing_idle','video_key':source['key'],'sha256':sha,'seconds':seconds,'cache_fingerprint':task['cache_fingerprint'],'spec_sha256':digest,'status':'REVIEW','full_decode_pass':True,'source_preserved':True,'human_review_sha256':None,'baseline_pilot_id':str(body.source_pilot_id)}
+    with db() as c:
+        latest=get_plan(c,pid,True)
+        if production_spec_hash(latest['data']['production_spec'])!=digest:raise HTTPException(409,'O roteiro mudou; selecione a referência novamente')
+        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',COALESCE(data->'production_assets','{}'::jsonb)||%s::jsonb) WHERE id=%s",(json.dumps({aid:asset}),pid));audit(c,'CANONICAL_MOTION_REUSED',str(pid),str(body.source_pilot_id));c.commit()
+    return {'reused':True,'paid_calls':0,'review_required':True}
 
 
 def inputs_hash(row,result):
@@ -105,7 +156,7 @@ def public_job(row):
     p=row['payload'];return {'id':row['id'],'state':row['status'],'detail':row['detail'],
         'progress':p.get('progress'),'report':p.get('report'),'review':p.get('review'),
         'preview_url':f'/api/creator/assembly/jobs/{row["id"]}/video' if p.get('video_key') else None,
-        'paid_calls':0,'broadcast_started':False}
+        'paid_calls':0,'broadcast_started':False,'preview_only':p.get('preview_only',False)}
 
 
 @router.get('/plans/{pid}')
@@ -114,8 +165,10 @@ def status(pid:uuid.UUID):
         row=get_plan(c,pid);compiled,result=materials(row);available=compatible_assets(c,row);identities=identity_sources(c,row)
         online=bool(c.execute("SELECT 1 FROM factory_tasks WHERE id=%s AND kind=%s AND updated_at>now()-interval '45 seconds'",(HEARTBEAT,WORKER)).fetchone())
         jobs=c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'plan_id'=%s ORDER BY created_at DESC LIMIT 10",(KIND,str(pid))).fetchall()
-        scenes=c.execute('SELECT s.batch_id,s.id,s.title FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.image_key IS NOT NULL ORDER BY s.batch_id,s.position',(row['channel_id'],)).fetchall()
+        scenes=c.execute('SELECT s.batch_id,s.id,s.title,s.image_key FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.image_key IS NOT NULL ORDER BY s.batch_id,s.position',(row['channel_id'],)).fetchall()
         programs=c.execute("SELECT b.id,COALESCE(m.title,b.id) title,b.seconds FROM production_batches b LEFT JOIN program_metadata m ON m.program_id=b.id WHERE b.channel_id=%s AND b.audio_key IS NOT NULL AND b.manifest_key IS NOT NULL ORDER BY b.updated_at DESC",(row['channel_id'],)).fetchall()
+    from .visual_identity import REGISTRY
+    scenes=[{k:v for k,v in scene.items() if k!='image_key'} for scene in scenes if scene['image_key'] not in REGISTRY['rejected_keys']]
     actions=[]
     for task in compiled['asset_tasks']:
         entries=[{'id':k,'seconds':a.get('seconds'),'reviewed':a.get('status')=='APPROVED_ACTION' and a.get('human_review_sha256')==a.get('sha256'),
@@ -151,7 +204,10 @@ async def upload_clip(pid:uuid.UUID,action:str,file:UploadFile=File(...)):
             if not 12<=fps<=60:raise HTTPException(422,'Use uma taxa entre 12 e 60 quadros por segundo')
             import subprocess
             subprocess.run(['ffmpeg','-v','error','-xerror','-threads','1','-protocol_whitelist','file,pipe','-i',str(path),'-map','0:v:0','-an','-f','null','-'],check=True,timeout=180,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
-            sha=file_hash(path);key=f'creator-actions/{pid}/{cid}/{sha}.mp4'
+            sha=file_hash(path)
+            from .visual_identity import assert_usable
+            assert_usable('',sha)
+            key=f'creator-actions/{pid}/{cid}/{sha}.mp4'
             storage().upload_file(str(path),os.environ['S3_BUCKET'],key,ExtraArgs={'ContentType':'video/mp4'})
         asset={'role':'action_clip','action':action,'video_key':key,'sha256':sha,'seconds':seconds,
                'cache_fingerprint':task['cache_fingerprint'],'spec_sha256':digest,'status':'REVIEW',
@@ -228,15 +284,23 @@ class Regions(BaseModel):
     sky:list[tuple[float,float]]=Field(min_length=3,max_length=30)
     lights:list[tuple[float,float]]=Field(default_factory=list,max_length=30)
     cushion_box:tuple[float,float,float,float]
+    shirt:list[tuple[float,float]]=Field(default_factory=list,max_length=30)
+    cushion_color:list[tuple[float,float]]=Field(default_factory=list,max_length=30)
+    protected_girl:list[tuple[float,float]]=Field(default_factory=list,max_length=30)
+    protected_cat:list[tuple[float,float]]=Field(default_factory=list,max_length=30)
+    protected_hands:list[tuple[float,float]]=Field(default_factory=list,max_length=30)
+    recolor:bool=False
+    confirm_recolor_frames:bool=False
     confirm_regions:bool=False
     @model_validator(mode='after')
     def coordinates(self):
-        for polygon in (self.sky,self.lights):
+        for polygon in (self.sky,self.lights,self.shirt,self.cushion_color,self.protected_girl,self.protected_cat,self.protected_hands):
             if polygon and len(polygon)<3:raise ValueError('Marque três pontos ou mais')
             if any(not math.isfinite(v) or not 0<=v<=1 for point in polygon for v in point):raise ValueError('Área fora da imagem')
             if polygon:
                 area=abs(sum(a[0]*b[1]-b[0]*a[1] for a,b in zip(polygon,polygon[1:]+polygon[:1])))/2
                 if area<.0001:raise ValueError('Área vazia')
+        if self.recolor and (not self.confirm_recolor_frames or not all((self.shirt,self.cushion_color,self.protected_girl,self.protected_cat,self.protected_hands))):raise ValueError('Marque roupa, almofada e regiões protegidas; confira as máscaras em todos os movimentos')
         x,y,w,h=self.cushion_box
         if any(not math.isfinite(v) or not 0<=v<=1 for v in self.cushion_box) or w<=0 or h<=0 or x+w>1 or y+h>1:raise ValueError('Área da almofada inválida')
         return self
@@ -248,13 +312,21 @@ def save_regions(pid:uuid.UUID,body:Regions):
     with db() as c:
         row=get_plan(c,pid,True);spec=row['data']['production_spec']
         if spec['scenario']!='mountain_stars' and not body.lights:raise HTTPException(422,'Marque também a área das luzes')
-        value=body.model_dump(exclude={'confirm_regions'})|{'reviewed':True,'spec_sha256':production_spec_hash(spec),'scenario':spec['scenario']}
+        value=body.model_dump(exclude={'confirm_regions','confirm_recolor_frames'})|{'reviewed':True,'spec_sha256':production_spec_hash(spec),'scenario':spec['scenario']}
+        _,result=materials(row)
+        value['region_asset_shas']=sorted({s['asset_sha256'] for s in result['assembly']['segments'] if s.get('asset_sha256')})
+        if body.recolor:
+            if not result['assembly']['assets_ready']:raise HTTPException(409,'Confira todos os movimentos antes de aplicar máscaras fixas')
+            value['recolor_asset_shas']=sorted({s['asset_sha256'] for s in result['assembly']['segments']})
+            value['recolor_color']=spec['shirt_color']
         c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{assembly_environment}',%s::jsonb) WHERE id=%s",(json.dumps(value),pid));audit(c,'TIMELINE_REGIONS_REVIEWED',str(pid));c.commit()
     return {'saved':True,'paid_calls':0}
 
 
 class RenderRequest(BaseModel):
     request_id:uuid.UUID
+    preview_only:bool=False
+    preview_start_seconds:int=Field(default=0,ge=0,le=28800)
     confirm_local_render:bool=False
 
 
@@ -266,12 +338,18 @@ def enqueue(pid:uuid.UUID,body:RenderRequest):
         compiled,result=materials(row);fingerprint=inputs_hash(row,result)
         old=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone()
         if old:
-            if old['kind']!=KIND or old['payload'].get('plan_id')!=str(pid) or old['payload'].get('input_sha256')!=fingerprint:raise HTTPException(409,'Identificador já utilizado para outra versão dos materiais')
+            if old['kind']!=KIND or old['payload'].get('plan_id')!=str(pid) or old['payload'].get('input_sha256')!=fingerprint or bool(old['payload'].get('preview_only'))!=body.preview_only or old['payload'].get('preview_start_seconds',0)!=body.preview_start_seconds:raise HTTPException(409,'Identificador já utilizado para outra versão dos materiais')
             return public_job(old)
-        if not result['ready']:raise HTTPException(409,'Faltam clipes aprovados, trilha completa ou áreas da cena revisadas')
+        render_compiled,render_assembly=compiled,result['assembly']
+        if body.preview_only:
+            if any(f!='action_clips_missing' for f in result['failures']):raise HTTPException(409,'Revise a trilha e as áreas da cena antes da prévia')
+            from .timeline_preview import window
+            try:render_compiled,render_assembly=window(compiled,result['assembly'],body.preview_start_seconds)
+            except ValueError:raise HTTPException(409,'Falta um movimento aprovado nesse trecho da prévia') from None
+        elif not result['ready']:raise HTTPException(409,'Faltam clipes aprovados, trilha completa ou áreas da cena revisadas')
         if not c.execute("SELECT 1 FROM factory_tasks WHERE id=%s AND kind=%s AND updated_at>now()-interval '45 seconds'",(HEARTBEAT,WORKER)).fetchone():raise HTTPException(503,'Motor de montagem indisponível; nenhum pedido iniciado')
         if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND status IN ('QUEUED','RUNNING')",(KIND,)).fetchone():raise HTTPException(409,'Uma montagem já está em andamento neste espaço')
-        payload={'plan_id':str(pid),'input_sha256':fingerprint,'channel_id':str(row['channel_id']),'compiled':compiled,'assembly':result['assembly'],
+        payload={'plan_id':str(pid),'input_sha256':fingerprint,'channel_id':str(row['channel_id']),'compiled':render_compiled,'assembly':render_assembly,'preview_only':body.preview_only,'preview_start_seconds':body.preview_start_seconds,
                  'spec_sha256':production_spec_hash(row['data']['production_spec']),'audio':row['data']['assembly_audio'],
                  'environment':row['data']['assembly_environment'],'actual_cost_usd':0}
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_ffmpeg_v1',%s,0,'QUEUED','Aguardando montagem local; nenhuma geração paga')",(body.request_id,KIND,json.dumps(payload,ensure_ascii=False)))
@@ -285,6 +363,27 @@ def get_job(c,jid):
     if not row:raise HTTPException(404,'Montagem não encontrada neste espaço')
     get_plan(c,uuid.UUID(row['payload']['plan_id']))
     return row
+
+
+@router.post('/jobs/{jid}/resume')
+def resume(jid:uuid.UUID):
+    with db() as c:
+        c.execute('SELECT pg_advisory_xact_lock(192837472)')
+        job=get_job(c,jid)
+        if job['status'] not in ('FAILED','INTERRUPTED'):
+            raise HTTPException(409,'Só montagens pausadas podem ser retomadas')
+        row=get_plan(c,uuid.UUID(job['payload']['plan_id']),True)
+        _,result=materials(row)
+        allowed_preview=job['payload'].get('preview_only') and all(f=='action_clips_missing' for f in result['failures'])
+        if (not result['ready'] and not allowed_preview) or inputs_hash(row,result)!=job['payload']['input_sha256']:
+            raise HTTPException(409,'Materiais ou revisões mudaram; confira e solicite uma nova montagem')
+        if not c.execute("SELECT 1 FROM factory_tasks WHERE id=%s AND kind=%s AND updated_at>now()-interval '45 seconds'",(HEARTBEAT,WORKER)).fetchone():
+            raise HTTPException(503,'Motor de montagem indisponível')
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND status IN ('QUEUED','RUNNING')",(KIND,)).fetchone():
+            raise HTTPException(409,'Uma montagem já está em andamento neste espaço')
+        c.execute("UPDATE factory_tasks SET status='QUEUED',detail='Retomada solicitada; conferindo trechos preservados',updated_at=now() WHERE id=%s",(jid,))
+        audit(c,'TIMELINE_RESUME_REQUESTED',str(jid));c.commit()
+    return {'queued':True,'paid_calls':0,'broadcast_started':False}
 
 
 @router.get('/jobs/{jid}/video')
@@ -306,7 +405,9 @@ class FinalReview(BaseModel):
 def final_review(jid:uuid.UUID,body:FinalReview):
     if not all((body.confirm_actions_identity_props,body.confirm_transitions_time,body.confirm_audio_style_rights)):raise HTTPException(422,'Confira movimento, continuidade, passagem de tempo, trilha e direitos')
     with db() as c:
-        row=get_job(c,jid);p=row['payload'];plan=get_plan(c,uuid.UUID(p['plan_id']),True)
+        row=get_job(c,jid);p=row['payload']
+        if p.get('preview_only'):raise HTTPException(409,'Uma prévia não aprova o programa completo')
+        plan=get_plan(c,uuid.UUID(p['plan_id']),True)
         report=p.get('report',{});v=report.get('video',{})
         _,current_inputs=materials(plan)
         if inputs_hash(plan,current_inputs)!=p.get('input_sha256'):raise HTTPException(409,'Os materiais ou as áreas da cena mudaram; monte e revise a versão atual')

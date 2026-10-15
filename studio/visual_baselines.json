@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "approval_basis": "Owner confirmation 2026-10-15; visual identity approval only, not rights or scheduled-action certification",
+  "approved_episodes": [
+    {
+      "pilot_id": "1192acca-4cea-5d5b-9cf2-0a436909fc0e",
+      "title": "Snowy Night Studio | 1 Hour of Lo-Fi Jazzhop for Coding",
+      "files": {
+        "silent": {
+          "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/silent.mp4",
+          "sha256": "42ea47c53e993703239d56b81aa74c42e166d6a02488ee34235a8be8ad8b40b5"
+        },
+        "source": {
+          "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/source.png",
+          "sha256": "9991b4a2cd478bde5d84974db134e8f2a333100ebd72a627460239726bccb7aa"
+        },
+        "motion-source": {
+          "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/motion-source.mp4",
+          "sha256": "6c954ebaf01a0fca7c6c24df93c2cab2f8de7d46320fabf9b18af20960feabbd"
+        },
+        "video": {
+          "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/video.mp4",
+          "sha256": "3b75990c14919cdfb9fc3104009a69d88171d7f1956f25f54f9405640ff59b21"
+        }
+      }
+    },
+    {
+      "pilot_id": "277ef275-73f0-53fb-ba14-9046186151fd",
+      "title": "Autumn Bookshop Coding | 1 Hour of Lo-Fi Jazzhop for Coding",
+      "files": {
+        "silent": {
+          "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/silent.mp4",
+          "sha256": "d786e4b6ff4ef202e6642f5519ebe4dfc38e9ace7fc277b60e5c83f3b8eed6f8"
+        },
+        "source": {
+          "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/source.png",
+          "sha256": "e51e27c94d632de323af6791fbdadcdaf6147d5cd50f49b4d86600114a7f9fd1"
+        },
+        "motion-source": {
+          "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/motion-source.mp4",
+          "sha256": "8411287e999bd6baab00b097c2298a2c85f3c745461e9356a42d2c442dcd644b"
+        },
+        "video": {
+          "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/video.mp4",
+          "sha256": "8700f93594e17b13384c682b74b6b011d24c145139c5bcf6238e81e6c8cc32a9"
+        }
+      }
+    },
+    {
+      "pilot_id": "013eb0ef-06e3-578f-a9f8-a49532b5478b",
+      "title": "Greenhouse Rain Study | 1 Hour of Lo-Fi Jazzhop for Coding",
+      "files": {
+        "silent": {
+          "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/silent.mp4",
+          "sha256": "68ed43994968f608a7845f18cc7d6149e096c0db85f88e7effc2af646b7bcc8f"
+        },
+        "source": {
+          "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/source.png",
+          "sha256": "0432d5b2be6470dfc4ae0435eaaca832b51eca5a5abad6fa7b7a39ad294eb9f0"
+        },
+        "motion-source": {
+          "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/motion-source.mp4",
+          "sha256": "d41a4e07d80d7a5f780240e644e8a6bd03bf1aeaafdd5304caa66b561fd915f8"
+        },
+        "video": {
+          "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/video.mp4",
+          "sha256": "2821a23df03deed4f6cdc44351735eeba8eecd5d7d6ab823e9d3e813e8bd68f7"
+        }
+      }
+    }
+  ],
+  "rejected_keys": [
+    "programs/LOFI-3A590745/visual.mp4",
+    "programs/LOFI-3A590745/image.png",
+    "programs/LOFI-3A590745/preview.jpg"
+  ],
+  "rejected_sha256": [
+    "b45e4e427526eea270458c3a5b6f18b893a3fc98d5011a293481661e22dc3fcb",
+    "ba93cfaddcd709c46eb279fbf344285ca7189290ceadf187a314a4718cb0f79b"
+  ]
+}

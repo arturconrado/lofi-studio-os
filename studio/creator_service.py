@@ -13,7 +13,10 @@ def visual(bid,plan,folder):
  reference=plan.get('visual_reference')
  if reference:
   report=reference['report'];key=reference['silent_key']
-  storage().head_object(Bucket=os.environ['S3_BUCKET'],Key=key)
+  from .visual_identity import verify_baseline,verify_object
+  expected=report.get('artifact_sha256',{}).get('silent')
+  verify_baseline(reference['pilot_id'],key,expected)
+  verify_object(storage(),os.environ['S3_BUCKET'],key,expected)
   from fractions import Fraction
   with db() as c:
    c.execute('UPDATE production_batches SET video_key=%s,visual_cycle_key=%s WHERE id=%s',(key,key,bid))
@@ -67,7 +70,14 @@ def package(bid,folder):
   p=folder/(str(row['asset_id'])+'.mp3');s.download_file(bucket,key,str(p));assert hashlib.sha256(p.read_bytes()).hexdigest()==row['sha256'];files.append(p)
   timeline.append({**row,'start_seconds':offset});offset+=float(row['duration_seconds'])
  lst=folder/'concat.txt';lst.write_text(''.join("file '"+str(p)+"'\n" for p in files));audio=folder/'audio.mp3'
- subprocess.run(['ffmpeg','-v','error','-y','-f','concat','-safe','0','-i',str(lst),'-c:a','copy','-vn',str(audio)],check=True)
+ mix_report=None
+ fade=float(plan.get('mix_crossfade_seconds',0))
+ if fade:
+  from .audio_mix import mix
+  mix_report=mix(files,audio,fade,float(b['target_seconds']))
+  for track,measured in zip(timeline,mix_report['tracks']):track['start_seconds']=measured['start_seconds']
+ else:
+  subprocess.run(['ffmpeg','-v','error','-y','-f','concat','-safe','0','-i',str(lst),'-c:a','copy','-vn',str(audio)],check=True)
  subprocess.run(['ffmpeg','-v','error','-xerror','-i',str(audio),'-f','null','-'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
  seconds=float(json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-of','json',str(audio)]))['format']['duration']);assert seconds>=b['target_seconds']
  akey=f'programs/{bid}/audio.mp3';mkey=f'programs/{bid}/manifest.json';s.upload_file(str(audio),bucket,akey,ExtraArgs={'ContentType':'audio/mpeg'})
@@ -79,10 +89,11 @@ def package(bid,folder):
  else:
   evidence=inspect(folder/'scene-loop.mp4')
   evidence.update(demo_only=False,timeline_coverage_seconds=20,source_preserved=True)
+ if mix_report:manifest['audio']['mix']=mix_report
  manifest['video_guardrails']=assess(evidence,float(b['target_seconds']))
  s.put_object(Bucket=bucket,Key=mkey,Body=json.dumps(manifest,default=str).encode(),ContentType='application/json')
  with db() as c:
-  c.execute("UPDATE production_batches SET state='ready',audio_key=%s,manifest_key=%s,detail='Áudio pronto; visual curto em repetição. Padrão temporal de live longa pendente',updated_at=now() WHERE id=%s",(akey,mkey,bid));c.execute("UPDATE creator_plans SET status='ready' WHERE program_id=%s",(bid,));audit(c,'CREATOR_PROGRAM_READY',bid);c.commit()
+  c.execute("UPDATE production_batches SET state='ready',audio_key=%s,manifest_key=%s,seconds=%s,detail='Áudio pronto; visual curto em repetição. Padrão temporal de live longa pendente',updated_at=now() WHERE id=%s",(akey,mkey,seconds,bid));c.execute("UPDATE creator_plans SET status='ready' WHERE program_id=%s",(bid,));audit(c,'CREATOR_PROGRAM_READY',bid);c.commit()
  for p in files:p.unlink()
 
 def tick():

@@ -32,6 +32,7 @@ def usage(c):
 from .production_harness import ProductionSpec,compile_spec
 class CreativePlan(BaseModel):
  production_spec:ProductionSpec|None=None
+ mix_crossfade_seconds:float=Field(default=1.5,ge=0,le=5)
  title:str=Field(min_length=1,max_length=100)
  description:str=Field(max_length=4000)
  theme:str=Field(min_length=1,max_length=2000)
@@ -117,7 +118,8 @@ def produce(body:CreateRequest):
    if not source or not ready_pilot(source):raise HTTPException(404,'Escolha um episódio de 1h publicado neste canal')
    reference={'pilot_id':str(source['id']),'title':source['title'],'silent_key':source['silent_key'],'report':source['report']}
   image_reserve=Decimal('0') if reference else Decimal('.15')
-  estimate=image_reserve+Decimal(p['minutes'])/2*Decimal('.08')
+  from .audio_mix import estimated_tracks
+  estimate=image_reserve+Decimal(estimated_tracks(p['minutes']*60,body.plan.mix_crossfade_seconds))*Decimal('.08')
   if body.budget<estimate:raise HTTPException(422,'O teto precisa cobrir as músicas e o visual escolhido; a duração real pode exigir faixas adicionais.')
   plan_data=body.plan.model_dump()
   if reference:plan_data['visual_reference']=reference
@@ -190,6 +192,8 @@ def storyboard(body:StoryboardRequest):
  with db() as c:
   from .channels import profile
   profile(c,body.channel_id)
+  from .harness_profiles import require_version
+  require_version(c,body.channel_id,body.spec.niche_pack_sha256)
   assets=[]
   if body.draft_id:
    prior=c.execute('SELECT data FROM creator_plans WHERE id=%s AND channel_id=%s',(body.draft_id,body.channel_id)).fetchone()
@@ -210,6 +214,8 @@ def save_storyboard(body:StoryboardRequest):
   theme=body.spec.scenario,music_brief=compiled['audio']['prompt'],visual_prompt='Reference-conditioned character and cat actions; see production_spec.',production_spec=body.spec).model_dump()
  with db() as c:
   profile(c,body.channel_id)
+  from .harness_profiles import require_version
+  require_version(c,body.channel_id,body.spec.niche_pack_sha256)
   if body.draft_id:
    prior=c.execute("SELECT id,data FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL FOR UPDATE",(body.draft_id,body.channel_id)).fetchone()
    if not prior:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
@@ -237,3 +243,6 @@ router.include_router(form_assistant_router)
 
 from .timeline_api import router as timeline_router
 router.include_router(timeline_router)
+
+from .harness_profiles import router as harness_profiles_router
+router.include_router(harness_profiles_router)

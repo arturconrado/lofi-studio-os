@@ -45,3 +45,19 @@ def reprocess(aid,make_master=True):
         c.execute('INSERT INTO qc_runs(id,asset_id,source_sha256,version,policy_hash,mastering_requested,result) VALUES(%s,%s,%s,%s,%s,%s,%s)',(uuid.uuid4(),aid,a['sha256'],VERSION,spec,make_master,json.dumps(result)))
         audit(c,'QC_V3_REPROCESSED',str(aid),json.dumps({'original':q['status'],'effective':effective['status']}));c.commit()
         return result
+
+
+def inspect_original(aid):
+    """Read-only diagnosis: no mastering, approval invalidation or catalog update."""
+    with db() as c:
+        asset=c.execute('SELECT * FROM assets WHERE id=%s',(aid,)).fetchone()
+    if not asset:raise ValueError('ASSET_NOT_FOUND')
+    obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=asset['object_key'])
+    try:
+        if obj['ContentLength']>128*1024**2:raise ValueError('OBJECT_TOO_LARGE')
+        raw=obj['Body'].read(128*1024**2+1)
+    finally:obj['Body'].close()
+    if hashlib.sha256(raw).hexdigest()!=asset['sha256']:raise ValueError('SOURCE_HASH_MISMATCH')
+    result=analyze(raw,asset['model'])
+    return {'original':result,'catalog_changed':False,'master_created':False,
+            'approvals_changed':False,'paid_calls':0}
