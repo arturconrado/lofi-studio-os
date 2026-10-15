@@ -13,11 +13,20 @@ class ProductionSpec(BaseModel):
     hours: int = Field(default=8, ge=1, le=8)
     music_style: Literal['lofi_hiphop','chillhop','jazz_lofi','sleep_lofi','piano_lofi','guitar_lofi','bossa_lofi','8bit_lofi','synth_lofi','custom'] = 'jazz_lofi'
     music_brief: str = Field(default='', max_length=2000)
+    scene_brief: str = Field(default='', max_length=2000)
     scenario: Literal['city_sunset', 'mountain_stars', 'balcony_dawn'] = 'city_sunset'
     shirt_color: Literal['violet', 'pink', 'orange', 'green', 'royal blue'] = 'violet'
     character_reference: str = Field(default='', max_length=200)
     cat_reference: str = Field(default='', max_length=200)
     asset_budget_usd: float = Field(default=0, ge=0, le=2)
+
+
+def production_spec_hash(spec):
+    # Empty optional scene direction was added after existing approved references.
+    # Preserve those approvals when no creative requirement changed.
+    normalized=spec.model_dump() if isinstance(spec,ProductionSpec) else dict(spec)
+    if not normalized.get('scene_brief'):normalized.pop('scene_brief',None)
+    return hashlib.sha256(json.dumps(normalized,sort_keys=True).encode()).hexdigest()
 
 
 def compile_spec(spec: ProductionSpec):
@@ -75,7 +84,7 @@ def compile_spec(spec: ProductionSpec):
     }
     tasks = []
     for action in unique:
-        prompt = f'Same referenced adult girl and cat, same framing and {spec.scenario} setting, {spec.shirt_color} shirt and matching cat cushion. Action: {descriptions[action]} Natural clearly readable motion, consistent hands, face, cat anatomy, contact and occlusion. Start and finish at the specified pose anchors; no text, speech, camera cuts or added characters.'
+        prompt = f'Same referenced adult girl and cat, same framing and {spec.scenario} setting, {spec.shirt_color} shirt and matching cat cushion. Scene direction: {spec.scene_brief}. Action: {descriptions[action]} Natural clearly readable motion, consistent hands, face, cat anatomy, contact and occlusion. Start and finish at the specified pose anchors; no text, speech, camera cuts or added characters.'
         tasks.append({'action':action, 'method':'reuse_then_local_then_quoted_ai', 'ai_method_if_needed':'reference_conditioned_ai_clip', 'status':'missing',
                       'prompt':prompt, 'required_capabilities':['reference_identity','articulated_character_motion','contact_and_occlusion','pose_anchors'], 'cache_fingerprint':hashlib.sha256(json.dumps([identity,spec.scenario,action,prompt],sort_keys=True).encode()).hexdigest(),
                       'reuse_scope':'same_workspace_same_identity_scene_color_and_action', 'paid_retry':False})
@@ -129,7 +138,7 @@ def asset_inventory(plan):
     """Existing engines consume only reviewed assets bound to this exact brief."""
     spec=plan.get('production_spec')
     if not spec:return {'ready':False,'approved_references':[],'required_action_clips':[]}
-    digest=hashlib.sha256(json.dumps(spec,sort_keys=True).encode()).hexdigest()
+    digest=production_spec_hash(spec)
     references=[a for a in plan.get('production_assets',{}).values()
                 if a.get('role')=='interaction_reference' and a.get('spec_sha256')==digest
                 and a.get('state')=='APPROVED_REFERENCE' and a.get('sha256')
