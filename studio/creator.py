@@ -194,10 +194,13 @@ def save_storyboard(body:StoryboardRequest):
    if not prior:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
    pid=body.draft_id
    result['production_assets']=prior['data'].get('production_assets',{})
+   for key in ('assembly_audio','assembly_environment'):
+    if key in prior['data']:result[key]=prior['data'][key]
    c.execute('UPDATE creator_plans SET theme=%s,minutes=%s,data=%s WHERE id=%s',(body.spec.scenario,body.spec.hours*60,json.dumps(result,ensure_ascii=False),pid))
   else:
    c.execute("INSERT INTO creator_plans(id,request_id,theme,minutes,data,status,reserved,channel_id) VALUES(%s,%s,%s,%s,%s,'draft',0,%s)",(pid,pid,body.spec.scenario,body.spec.hours*60,json.dumps(result,ensure_ascii=False),body.channel_id))
   audit(c,'STORYBOARD_DRAFT_SAVED',str(pid),'No generation or provider calls');c.commit()
+ compiled['assembly']=assembly_plan(compiled,list(result.get('production_assets',{}).values()))
  return {'id':pid,'plan':result,'minutes':body.spec.hours*60,'harness':compiled,'generation_started':False}
 
 @router.get('/music-styles')
@@ -210,3 +213,6 @@ router.include_router(motion_validation_router)
 
 from .form_assistant import router as form_assistant_router
 router.include_router(form_assistant_router)
+
+from .timeline_api import router as timeline_router
+router.include_router(timeline_router)

@@ -77,7 +77,7 @@ def tick():
     from .radio import CACHE
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837472)')
-        if c.execute("SELECT 1 FROM export_jobs WHERE state='running'").fetchone():return False
+        if c.execute("SELECT 1 FROM export_jobs WHERE state='running'").fetchone() or c.execute("SELECT 1 FROM factory_tasks WHERE kind='timeline_render_v1' AND status='RUNNING'").fetchone():return False
         row=c.execute("UPDATE export_jobs SET state='running',updated_at=now() WHERE id=(SELECT id FROM export_jobs WHERE state='queued' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *").fetchone()
         c.commit()
     if not row:return False
@@ -113,11 +113,16 @@ def main():
     from .core import init_db
     init_db()
     with db() as c:
-        c.execute("UPDATE export_jobs SET state='interrupted',updated_at=now() WHERE state='running'");c.commit()
+        c.execute("UPDATE export_jobs SET state='interrupted',updated_at=now() WHERE state='running'")
+        from . import timeline_worker
+        timeline_worker.interrupted(c);c.commit()
     def heartbeat():
         while True:
-            with db() as c:c.execute('UPDATE export_control SET heartbeat=now() WHERE id=1');c.commit()
+            with db() as c:
+                c.execute('UPDATE export_control SET heartbeat=now() WHERE id=1');timeline_worker.heartbeat(c);c.commit()
             time.sleep(10)
     threading.Thread(target=heartbeat,daemon=True).start()
-    while True:tick();time.sleep(3)
+    while True:
+        if not timeline_worker.tick():tick()
+        time.sleep(3)
 if __name__=='__main__':main()

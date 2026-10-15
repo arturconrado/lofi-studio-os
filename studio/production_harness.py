@@ -170,7 +170,7 @@ def assembly_plan(compiled, assets):
                     and a.get('human_review_sha256') and a.get('human_review_sha256')==a.get('sha256')
                     and a.get('status')=='APPROVED_ACTION' and a.get('full_decode_pass') is True
                     and a.get('source_preserved') is True and a.get('pose_anchors_reviewed') is True
-                    and a.get('seconds',0)>0 and (idle or a['seconds']>=duration)
+                    and a.get('video_key') and a.get('seconds',0)>0 and (idle or a['seconds']>=duration)
                     and (not idle or a.get('loop_seam_reviewed') is True)]
         # Deterministic variations can be selected without another provider call.
         candidates.sort(key=lambda a:a['sha256'])
