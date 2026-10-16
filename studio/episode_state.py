@@ -41,16 +41,22 @@ def economics(c, plan, jobs):
     renders=[]
     for j in jobs:
         r=(j['payload'].get('report') or {}).get('local_resources')
-        if j['status']=='COMPLETED' and r:
-            renders.append({'job_id':str(j['id']),'preview_only':bool(j['payload'].get('preview_only')),**{k:r.get(k) for k in ('elapsed_seconds','cpu_seconds','output_bytes','scratch_peak_bytes','uploaded_bytes','infrastructure_cost_usd','per_program_hour')}})
+        # Failed and interrupted renders also consumed the machine; they count as rework.
+        if r:
+            renders.append({'job_id':str(j['id']),'status':j['status'],'preview_only':bool(j['payload'].get('preview_only')),**{k:r.get(k) for k in ('elapsed_seconds','cpu_seconds','output_bytes','scratch_peak_bytes','uploaded_bytes','infrastructure_cost_usd','per_program_hour')}})
     approved=[j for j in jobs if (j['payload'].get('review') or {}).get('eligible')]
     known=float(motion['actual'])+(audio['reserved_usd'] if audio else 0)
     infra=[r['infrastructure_cost_usd'] for r in renders]
+    infra_total=round(sum(infra),4) if infra and all(v is not None for v in infra) else None
     return {'motion_validation':{'reserved_usd':float(motion['reserved']),'provider_reported_usd':float(motion['actual']),'requests':motion['n']},
             'audio':audio,'local_renders':renders,
             'rework_renders':max(0,len([r for r in renders if not r['preview_only']])-len(approved)),
             'approved_videos':len(approved),
             'known_external_usd':round(known,4),
-            'infrastructure_usd':round(sum(infra),4) if infra and all(v is not None for v in infra) else None,
+            'infrastructure_usd':infra_total,
+            # Audit C08: the per-video figure is external cost only; the total exists only when infrastructure is measured.
             'cost_per_approved_video_usd':round(known/len(approved),4) if approved else None,
-            'note':'Audio is the batch reservation; infrastructure stays unknown until real rates are configured.'}
+            'external_cost_per_approved_video_usd':round(known/len(approved),4) if approved else None,
+            'total_cost_per_approved_video_usd':round((known+infra_total)/len(approved),4) if approved and infra_total is not None else None,
+            'coverage':'external_and_infrastructure' if infra_total is not None else 'external_only',
+            'note':'Audio is the batch reservation; previews and failed renders count as infrastructure; the total stays unknown until real rates are configured.'}

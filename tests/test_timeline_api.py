@@ -176,6 +176,7 @@ def test_status_exposes_episode_state_and_economics_without_cost_claims(client):
     assert client.get(base).json()['episode_state']['state']=='DRAFT'
     e=client.get(base+'/economics').json()
     assert e['approved_videos']==0 and e['cost_per_approved_video_usd'] is None and e['infrastructure_usd'] is None
+    assert e['total_cost_per_approved_video_usd'] is None and e['coverage']=='external_only'
     assert e['paid_calls']==0
 
 
@@ -186,3 +187,24 @@ def test_clip_briefs_cover_missing_actions_with_pose_anchors(client):
     pet=next(b for b in r['briefs'] if b['action']=='pet_cat')
     assert pet['minimum_seconds']==10 and pet['pose_before']['cat']=='near_girl' and pet['pose_after']['hands']=='cat'
     assert r['viewpoint']['safe_transform_bounds']['scale']==1.0
+
+
+def test_baseline_motion_must_come_from_the_scenario_episode(client):
+    # Audit: a Greenhouse base could be attached to a Snowy plan with the Snowy fingerprint.
+    import json
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio.ambient_api import init as init_ambient
+    _,identity=signup(client);headers={'X-CSRF-Token':identity['csrf_token']}
+    cid=client.get('/api/channels').json()[0]['id']
+    spec={'hours':1,'scenario':'snowy_night_studio','cadence':'custom_markers','markers':[{'minute':15,'sequence':'breath_pet'}]}
+    pid=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers).json()['id']
+    greenhouse='013eb0ef-06e3-578f-a9f8-a49532b5478b'
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            init_ambient(c)
+            c.execute("INSERT INTO ambient_pilots(id,channel_id,title,video_key,silent_key,report,plan) VALUES(%s,%s,'Greenhouse','v','s','{}','{}')",(greenhouse,cid));c.commit()
+    finally:WORKSPACE.reset(marker)
+    r=client.post(f'/api/creator/assembly/plans/{pid}/baseline-motion',json={'source_pilot_id':greenhouse},headers=headers)
+    assert r.status_code==409 and 'cenário' in r.text

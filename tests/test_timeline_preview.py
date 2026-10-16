@@ -58,3 +58,14 @@ def test_condensed_render_mixes_matching_audio_and_builds_storyboard(tmp_path):
     assert report['video']['full_decode_pass'] and abs(report['video']['duration_seconds']-spec['duration_seconds'])<.2
     sheet=storyboard_sheet(tmp_path/'preview.mp4',report['sample_map'],tmp_path/'storyboard.jpg')
     assert Image.open(sheet).size[0]==min(3,len(report['sample_map']))*480
+
+
+def test_condensed_preview_respects_its_duration_with_many_markers():
+    # Audit C09: twelve markers produced a 15 s "10 s" preview.
+    from studio.timeline_preview import budget
+    for markers in (0,3,12):
+        points=[0]+[60*(i+1)*4+1 for i in range(markers)]+[3300,3597]
+        kept,omitted=budget(points,10,late=3300)
+        assert len(kept)<=10 and kept[0]==0 and kept[-1]==3597 and sorted(kept+omitted)==sorted(points)
+        if markers==12:assert 3300 in omitted and len(kept)==10
+        else:assert not omitted
