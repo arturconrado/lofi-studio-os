@@ -121,7 +121,7 @@ export function Live() {
     if (!copy) return;
     const ok = await attempt(async () => {
       await put(`/api/live-presentation/${cid}/copy`, { program_id: selected, title: copy.title, description: copy.description, confirm_review: true });
-      await post(`/api/channels/${cid}/start`, { program_id: selected, confirm_start: true, repeat_program: !queue.data?.continuity_enabled || loop.length <= 1, volume });
+      await post(`/api/channels/${cid}/start`, { program_id: selected, confirm_start: true, repeat_program: true, volume });
     }, 'Início solicitado. Confirme a recepção no YouTube Studio.');
     if (ok !== undefined) { setStartOpen(false); loadChannels(); }
   };
@@ -194,7 +194,8 @@ export function Live() {
           <ul class="obs-list">{programs.map(p => (
             <li><label class="obs-check"><input type="checkbox" checked={loop.includes(p.program_id)} onChange={() => toggleLoop(p.program_id)} />
               <span class="obs-list-title">{p.title}</span>{loop.includes(p.program_id) && <span class="obs-badge">{loop.indexOf(p.program_id) + 1}</span>}</label></li>))}</ul>
-          <p class="obs-hint"><IconLoop /> {loop.length}h · cada hora volta ao fim da fila.{queue.data && !queue.data.continuity_enabled ? ' Troca automática desligada no servidor.' : ''}</p>
+          <p class="obs-hint"><IconLoop /> {loop.length}h em rotação contínua: cada hora volta ao fim da fila ao terminar; a live só para quando você mandar.</p>
+          {queue.data && !queue.data.continuity_enabled && <p class="obs-hint warn">Modo contínuo do transmissor desligado: a live repete sem parar a hora inicial, sem trocar para as próximas.</p>}
           <button class="obs-btn sm" disabled={!loop.length || !queue.data} onClick={saveLoop}>Salvar loop</button>
         </Dock>
 
