@@ -54,22 +54,32 @@ def import_scene(cid:uuid.UUID,body:VisualSource):
     return {'scene_id':sid,'selected':False,'audio_changed':False,'message':'Cena adicionada usando o visual do episódio. Confira a prévia, use a seleção na live e revise o programa.'}
 
 
-def suggestions(p):
+def suggestions(p,recipe=None):
     # Editorial structure, no paid generation or invented performance score.
     theme=(p.get('theme') or p.get('title') or 'Lo-fi').strip()
     base=(p.get('title') or 'Lo-fi music').strip()
     title=(base+' | LIVE')[:100]
     alternatives=[title,'Lo-fi Jazzhop LIVE | Music for Coding, Study & Focus','Lo-fi LIVE | Quiet Music for Coding and Deep Work']
+    if recipe:
+        # The production's recipe titles the live; no hard-coded genre.
+        from .recipes import RecipeData,render_copy
+        data=RecipeData.model_validate(recipe['data']);copy=render_copy(data,recipe.get('scenario') or data.visual.default_scenario,recipe.get('hours',1))
+        alternatives=[copy['live_title'],title,*copy['alternatives']][:3]
     description=(p.get('description') or 'Instrumental lo-fi music for coding, studying and quiet focus.').strip()
     description+='\n\nLive from our studio. Put on your headphones, settle into your workspace and enjoy instrumental music while you code, study or read.\n\nMusic and visuals produced with AI assistance. The visual animation repeats during the live.\n\nTell us what you are working on today.\n\n#lofi #coding #studymusic'
     return {'title':title,'alternatives':alternatives,'description':description[:5000],'basis':'Tema e descrição do programa; proposta editorial, sem previsão de alcance.','theme':theme}
+
+def program_recipe(cid,program_id):
+    with db() as c:
+        row=c.execute("SELECT data->'recipe' recipe FROM creator_plans WHERE program_id=%s AND channel_id=%s",(program_id,cid)).fetchone()
+    return row['recipe'] if row and row['recipe'] else None
 
 @router.get('/{cid}/copy')
 def get_copy(cid:uuid.UUID,program_id:str):
     with db() as c:
         p=program(c,cid,program_id);ensure(c)
         saved=c.execute('SELECT program_id,title,description,reviewed,updated_at FROM live_copy WHERE channel_id=%s AND program_id=%s',(cid,program_id)).fetchone();c.commit()
-    return {'suggestions':suggestions(p),'saved':saved,'youtube_event_updated':False}
+    return {'suggestions':suggestions(p,program_recipe(cid,program_id)),'saved':saved,'youtube_event_updated':False}
 
 class LiveCopy(BaseModel):
     program_id:str=Field(min_length=1,max_length=40)

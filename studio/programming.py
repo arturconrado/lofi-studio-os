@@ -89,6 +89,11 @@ def claim(cid):
 def finish(cid,qid,completed=True):
     with db() as c:
         config(c,cid)
-        c.execute("UPDATE program_queue SET state=%s WHERE id=%s AND channel_id=%s AND state='playing'",('completed' if completed else 'interrupted',qid,cid))
+        row=c.execute("UPDATE program_queue SET state=%s WHERE id=%s AND channel_id=%s AND state='playing' RETURNING program_id",('completed' if completed else 'interrupted',qid,cid)).fetchone()
         c.execute('UPDATE channel_programming SET current_program=NULL,current_started_at=NULL,updated_at=now() WHERE channel_id=%s',(cid,))
-        audit(c,'PROGRAM_BLOCK_COMPLETED' if completed else 'PROGRAM_BLOCK_INTERRUPTED',str(qid));c.commit()
+        audit(c,'PROGRAM_BLOCK_COMPLETED' if completed else 'PROGRAM_BLOCK_INTERRUPTED',str(qid))
+        if completed and row:
+            # Continuous 4h/8h loops: a finished hour goes back to the end while its review still holds.
+            try:renew(c,cid,row['program_id'],approved_snapshot(c,cid,row['program_id']))
+            except HTTPException:audit(c,'PROGRAM_RENEWAL_SKIPPED',str(qid),'Revisão atual ausente')
+        c.commit()

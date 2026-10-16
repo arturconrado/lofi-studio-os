@@ -47,3 +47,17 @@ def test_queue_rejects_invalid_or_duplicate_programs(catalog,monkeypatch):
     monkeypatch.setattr(programming,'approved_snapshot',lambda *a:(_ for _ in ()).throw(HTTPException(409,'Not approved')))
     with pytest.raises(HTTPException):programming.replace_queue(catalog,programming.QueueEdit(revision=0,programs=['first']))
     assert programming.listing(catalog)['blocks']==[]
+
+
+def test_finished_hours_rotate_back_for_continuous_loops(catalog):
+    cid=catalog
+    programming.replace_queue(cid,programming.QueueEdit(revision=0,programs=['first','second'],renewal_enabled=True))
+    order=[]
+    for _ in range(5):
+        row=programming.claim(cid);order.append(row['program_id']);programming.finish(cid,row['id'])
+    assert order==['first','second','first','second','first']
+    # Without renewal the queue plays once and empties.
+    state=programming.listing(cid)
+    programming.replace_queue(cid,programming.QueueEdit(revision=state['config']['revision'],programs=['new'],renewal_enabled=False))
+    row=programming.claim(cid);programming.finish(cid,row['id'])
+    assert programming.claim(cid) is None

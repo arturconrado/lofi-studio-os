@@ -1,4 +1,6 @@
 """Editorial style catalog, not a fabricated streaming-volume ranking."""
+from typing import Literal
+
 STYLES = [
  {'id':'lofi_hiphop','label':'Lo-fi hip-hop / study beats','group':'mainstream_reference','bpm':[65,85],'direction':'Original instrumental lo-fi hip-hop, laid-back boom-bap drums, warm bass, soft keys, dusty but clear textures and sparse motifs.','source':'https://www.youtube.com/watch?v=X4VbdwhkE10'},
  {'id':'chillhop','label':'Chillhop','group':'mainstream_reference','bpm':[70,90],'direction':'Original instrumental chillhop with warm organic keys, melodic bass, relaxed hip-hop drums, acoustic touches and clean mellow production.','source':'https://app.chillhop.com/'},
@@ -12,6 +14,8 @@ STYLES = [
  {'id':'custom','label':'Direção livre','group':'custom','bpm':None,'direction':'Follow the supplied musical brief; do not impose Rhodes, jazz harmony or chiptune instruments unless requested.','source':None},
 ]
 DIRECTIONS={s['id']:s['direction'] for s in STYLES}
+# Single source for every schema that accepts a style id.
+MusicStyle=Literal[tuple(DIRECTIONS)]
 
 def catalog():
  return {'styles':STYLES,'ranking_available':False,'note':'Referências de grandes rádios e opções editoriais. Não é um ranking global de reproduções; chuva, café, noite e coding são temas, não estilos musicais.'}

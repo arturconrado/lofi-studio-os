@@ -1,4 +1,5 @@
 """Semantic pose/resource contract. Planning validation is not visual certification."""
+from typing import Literal
 IDLE={'girl':'typing','cat':'cushion','phone':'table','hands':'keyboard'}
 TRANSITIONS={
  'close_eyes_deep_satisfied_breath':(IDLE,dict(IDLE,girl='eyes_closed',hands='resting')),
@@ -66,3 +67,8 @@ def validate(events, objects=None):
         state=event.get('pose_after',{});cursor=event['end']
     if state!=IDLE:failures.append('final_pose_not_restored')
     return sorted(set(failures))
+
+
+# Single source for every schema that accepts a marker sequence.
+SequenceName=Literal[tuple(SEQUENCES)]
+ContextualAction=Literal['lamp_on_with_gesture','lamp_glow_auto','fireplace_glow_rises']

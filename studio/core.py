@@ -30,6 +30,20 @@ def db():
         c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(workspace))))
     return c
 
+_ENSURED=set()
+
+def ensure_once(key, fn):
+    """Lazy per-schema DDL on its own committed connection, at most once per process.
+
+    New tables stay out of init_db so schema_revision (and radio restarts) are untouched.
+    """
+    from .tenancy import active_workspace
+    marker=(active_workspace() or 'public',key)
+    if marker in _ENSURED:return
+    with db() as d:
+        fn(d);d.commit()
+    _ENSURED.add(marker)
+
 def queue():
     client=redis.Redis.from_url(os.environ['REDIS_URL'], decode_responses=True, socket_connect_timeout=4, socket_timeout=5)
     from .tenancy import active_workspace,ScopedQueue

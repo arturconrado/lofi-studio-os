@@ -4,6 +4,7 @@ Objects are listed only when visible in the reviewed source. A prop that is not
 listed cannot be used by an action; adding one requires a reviewed new base.
 """
 from copy import deepcopy
+from typing import Literal
 
 LIGHT = {
     'sunset_to_night': [{'minute':0,'night':0,'city_lights':0}, {'minute':15,'night':1,'city_lights':1},
@@ -74,3 +75,7 @@ def resolve(spec):
 
 def catalog():
     return {name:{k:v for k,v in s.items()} for name,s in SCENES.items()}
+
+
+# Single source for every schema that accepts a scenario id.
+Scenario=Literal[tuple(SCENES)]

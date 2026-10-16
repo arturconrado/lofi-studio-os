@@ -11,12 +11,12 @@ from typing import Literal
 from fastapi import APIRouter,HTTPException
 from pydantic import BaseModel,Field,ConfigDict,ValidationError
 from .production_harness import ProductionSpec,compile_spec,PRESETS
-from .action_states import SEQUENCES,OCCASIONAL,CONTEXTUAL,sequence_seconds,missing_props
+from .action_states import SEQUENCES,OCCASIONAL,CONTEXTUAL,SequenceName,ContextualAction,sequence_seconds,missing_props
 from .scene_profiles import resolve
 
 router=APIRouter(prefix='/event-proposals')
 KIND='event_proposals_20261015'
-SEQUENCE_NAMES=Literal['breath_pet','phone_check','stretch_break','window_glance','cat_stretch']
+SEQUENCE_NAMES=SequenceName
 
 
 class Proposal(BaseModel):
@@ -26,7 +26,7 @@ class Proposal(BaseModel):
     kind:Literal['marker','contextual','occasional','none','new_asset']
     marker_minute:int|None=Field(default=None,ge=1,le=59)
     sequence:SEQUENCE_NAMES|None=None
-    contextual_action:Literal['lamp_on_with_gesture','lamp_glow_auto','fireplace_glow_rises']|None=None
+    contextual_action:ContextualAction|None=None
     new_action_description:str|None=Field(default=None,max_length=600)
     rationale:str=Field(default='',max_length=600)
     risks:str=Field(default='',max_length=400)

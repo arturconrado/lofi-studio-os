@@ -17,6 +17,15 @@ jobs:
         with:
           python-version: '3.12'
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - run: npx tsc --noEmit && npx vitest run && npx vite build
+        working-directory: frontend
+      # The deploy copies web/ as-is, so the committed bundle must match the source.
+      - run: git diff --exit-code -- web/app
       - run: pip install -r requirements.txt pytest
       - run: python -m pytest -q tests test_qc.py
         env:
