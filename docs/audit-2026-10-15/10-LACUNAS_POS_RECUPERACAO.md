@@ -4,6 +4,17 @@
 
 Nenhum código, banco, deploy ou geração foi alterado para produzir este levantamento.
 
+> **Atualização — branch `feat/sdd-v2-gaps`:** as lacunas que dependiam só de código foram implementadas. Detalhes em [sdd-v2-gaps](../sdd-v2-gaps/README.md).
+>
+> | Situação | Itens |
+> |---|---|
+> | Implementado e testado | 2, 3, 8, 9, 10, 11, 12, 13, 14, 15, 18, 19, 21, 22, 24, 25 |
+> | Ferramenta pronta, falta executar com acesso/decisão do responsável | 4 (backup), 5 (termos e declaração de direitos), 6 (QA do catálogo), 7 (calibração na mídia aprovada), 16 (tarifas reais), 17 (render de 1h em staging), 23 (registrar retenção) |
+> | Depende de produção paga ou revisão artística | 1 (clipes de ação; o briefing por clipe já é gerado) |
+> | Dado de produção, deploy ou já coberto | 20 (deploy), 26 (scripts preservados como evidência em `f86062f`), 27 (título do piloto) |
+>
+> Durante a implementação apareceram três defeitos que a lista original não previa: o recolor tingia o quadro inteiro, as camadas de luz vazavam cerca de 6% e a aprovação de faixas recusava o QC atual. Os três foram corrigidos.
+
 **Legenda da coluna Fonte**
 
 - **Código**: conferido em `main` (`8abef49`); referência `arquivo:linha`.

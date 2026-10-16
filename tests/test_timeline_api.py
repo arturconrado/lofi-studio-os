@@ -177,3 +177,12 @@ def test_status_exposes_episode_state_and_economics_without_cost_claims(client):
     e=client.get(base+'/economics').json()
     assert e['approved_videos']==0 and e['cost_per_approved_video_usd'] is None and e['infrastructure_usd'] is None
     assert e['paid_calls']==0
+
+
+def test_clip_briefs_cover_missing_actions_with_pose_anchors(client):
+    pid,headers,_,_=draft(client)
+    r=client.get('/api/creator/assembly/plans/'+pid+'/clip-briefs').json()
+    assert len(r['briefs'])==11 and r['paid_calls']==0
+    pet=next(b for b in r['briefs'] if b['action']=='pet_cat')
+    assert pet['minimum_seconds']==10 and pet['pose_before']['cat']=='near_girl' and pet['pose_after']['hands']=='cat'
+    assert r['viewpoint']['safe_transform_bounds']['scale']==1.0

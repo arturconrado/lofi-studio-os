@@ -203,6 +203,30 @@ def status(pid:uuid.UUID):
             'jobs':[public_job(j)|{'inputs_current':j['payload'].get('input_sha256')==inputs_hash(row,result)} for j in jobs],'reusable_clips':len(available),'identity_sources':identities,'identity_bound':bool(row['data']['production_spec'].get('character_reference') and row['data']['production_spec'].get('cat_reference')),'episode_state':state,'paid_calls':0}
 
 
+@router.get('/plans/{pid}/clip-briefs')
+def clip_briefs(pid:uuid.UUID):
+    """Production brief for every missing clip: direction, duration, pose anchors, camera and acceptance checks."""
+    from .pose_library import library,viewpoint
+    with db() as c:
+        row=get_plan(c,pid);compiled,result=materials(row)
+    lib=library();spec=row['data']['production_spec'];missing=set(result['assembly']['missing_actions'])
+    briefs=[]
+    for task in compiled['asset_tasks']:
+        if task['action'] not in missing:continue
+        contract=lib['actions'].get(task['action'],{})
+        briefs.append({'action':task['action'],'minimum_seconds':minimum_seconds(compiled,task['action']),'direction':task['prompt'],
+                       'pose_before':lib['poses'].get(contract.get('pose_before_id')),'pose_after':lib['poses'].get(contract.get('pose_after_id')),
+                       'level':contract.get('level'),'optional':bool(task.get('optional')),'new_asset_required':bool(task.get('new_asset_required')),
+                       'cache_fingerprint':task['cache_fingerprint'],
+                       'format':{'resolutions':['1280x720','1920x1080'],'fps':[12,60],'max_seconds':120,'max_mb':64},
+                       'acceptance':['mesma garota, gato, roupa e objetos da referência','câmera travada, sem cortes ou zoom',
+                                     'começa e termina nas poses indicadas','mãos, rosto e anatomia do gato coerentes',
+                                     'cobre a ação inteira sem câmera lenta' if task['action']!='typing_idle' else 'loop sem salto entre fim e início']})
+    return {'plan_id':pid,'identity':{'character_reference':spec.get('character_reference'),'cat_reference':spec.get('cat_reference')},
+            'viewpoint':viewpoint(spec['scenario']),'briefs':briefs,'paid_calls':0,
+            'note':'Produza fora ou cote no estúdio; cada clipe volta pelo envio e pela revisão normais.'}
+
+
 @router.post('/plans/{pid}/clips/{action}')
 async def upload_clip(pid:uuid.UUID,action:str,file:UploadFile=File(...)):
     with db() as c:
