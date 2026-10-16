@@ -135,14 +135,18 @@ def worker():
             with db() as c:update(c,'failed','Storage/decoding failure: '+type(e).__name__+'; originals and reservations retained');c.commit()
             raise
 
+def require(condition,message):
+    if not condition:raise RuntimeError(message)
+
 def main():
     verified=next(m for m in runtime.availability() if m['id']==MODEL)
-    assert verified['available'] and verified['price_verified']
+    # Explicit checks (not assert): spending preconditions must hold under python -O too.
+    require(verified['available'] and verified['price_verified'],'Model availability or price not verified')
     with db() as c:
-        assert original_settings(c)['enabled'], 'Paid generation disabled'
-        assert c.execute("SELECT 1 FROM creator_plans WHERE program_id=%s AND status='processing'",(BATCH,)).fetchone(), 'Authorized creator job required'
-        assert not c.execute('SELECT enabled FROM factory_control WHERE id=1').fetchone()['enabled']
-        assert not c.execute("SELECT 1 FROM jobs WHERE status IN ('QUEUED','RUNNING')").fetchone()
+        require(original_settings(c)['enabled'],'Paid generation disabled')
+        require(c.execute("SELECT 1 FROM creator_plans WHERE program_id=%s AND status='processing'",(BATCH,)).fetchone(),'Authorized creator job required')
+        require(not c.execute('SELECT enabled FROM factory_control WHERE id=1').fetchone()['enabled'],'Autopilot must be paused')
+        require(not c.execute("SELECT 1 FROM jobs WHERE status IN ('QUEUED','RUNNING')").fetchone(),'Another generation is in progress')
         c.execute("CREATE TABLE IF NOT EXISTS production_batches(id TEXT PRIMARY KEY,state TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',seconds NUMERIC NOT NULL DEFAULT 0,completed INTEGER NOT NULL DEFAULT 0,reserved NUMERIC NOT NULL DEFAULT 0,target_seconds INTEGER NOT NULL,budget NUMERIC NOT NULL,video_key TEXT,audio_key TEXT,manifest_key TEXT,updated_at TIMESTAMPTZ NOT NULL DEFAULT now())")
         c.execute("UPDATE production_batches SET state='producing',detail='Resumed with one new composition at a time' WHERE id=%s AND state='failed'",(BATCH,))
         c.execute("INSERT INTO production_batches(id,state,target_seconds,budget) VALUES(%s,'producing',%s,%s) ON CONFLICT(id) DO NOTHING",(BATCH,TARGET,CAP));c.commit()

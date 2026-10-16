@@ -43,10 +43,19 @@ def luminance_drift(full, folder, marks=MARKS):
 
 
 def noise_floor(source_png, full, folder):
-    """p99 absolute luma difference between the approved still and its encoded frame zero."""
+    """p99 luma difference the encoder alone introduces: the same still before and after encoding.
+
+    Comparing the still with the animated video would fold motion and generation drift into the
+    tolerance. The still is encoded with the compositor's settings; `full` is kept for the record.
+    """
     still=Image.open(source_png).convert('L');w,h=still.size
-    encoded=frame(full,0,folder,'zero.png',(w,h))
-    return float(np.percentile(np.abs(np.asarray(still).astype(float)-encoded),99))
+    w,h=w-w%2,h-h%2
+    clip=Path(folder)/'still-encoded.mp4'
+    subprocess.run(['ffmpeg','-v','error','-y','-loop','1','-i',str(source_png),'-t','1','-vf',f'scale={w}:{h}','-c:v','libx264','-preset','veryfast','-crf','19','-pix_fmt','yuv420p',str(clip)],
+                   check=True,timeout=120,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    encoded=frame(clip,0,folder,'zero.png',(w,h))
+    original=np.asarray(still.resize((w,h))).astype(float)
+    return float(np.percentile(np.abs(original-encoded),99))
 
 
 def loudness(full):
@@ -76,14 +85,38 @@ def calibrate(sources, marks=MARKS):
             'rule':'margins over the worst approved value; recalibrate when the approved set changes'}
 
 
-def check(thresholds, measured):
-    """Compare a new render's measurements to the calibrated limits; returns failures."""
-    t=thresholds['thresholds'];failures=[]
+# Measurements each render kind must carry; a missing one is "not measured", never a pass.
+REQUIRED={'timeline':('protected_delta_p99','integrated_lufs','true_peak_dbtp'),
+          'loop':('seam_ratio',),
+          'static_scene':('protected_delta_p99','luminance_max_step','integrated_lufs','true_peak_dbtp')}
+
+
+def check(thresholds, measured, kind='timeline'):
+    """Compare a render's measurements to the calibrated limits; returns failures.
+
+    Required metrics that were not measured are failures ('not_measured:<metric>'). Luminance
+    steps apply only to static scenes, never to intentional light progression.
+    """
+    t=thresholds['thresholds'];failures=[f'not_measured:{m}' for m in REQUIRED[kind] if measured.get(m) is None]
+    if kind=='static_scene' and measured.get('luminance_max_step') is not None and measured['luminance_max_step']>t['static_luminance_step_max']:
+        failures.append('luminance_step_above_baseline')
     if 'seam_ratio' in measured and measured['seam_ratio']>t['loop_seam_ratio_max']:failures.append('loop_seam_above_baseline')
     if 'protected_delta_p99' in measured and measured['protected_delta_p99']>t['protected_region_delta_p99_max']:failures.append('protected_region_changed')
     if 'integrated_lufs' in measured and not t['integrated_lufs_range'][0]<=measured['integrated_lufs']<=t['integrated_lufs_range'][1]:failures.append('loudness_outside_baseline')
     if 'true_peak_dbtp' in measured and measured['true_peak_dbtp']>t['true_peak_dbtp_max']:failures.append('true_peak_above_baseline')
     return failures
+
+
+def verdict(measured, kind='timeline', path=None):
+    """Calibration receipt for a review: status pass/fail/incomplete/not_calibrated, limits version and hash."""
+    import hashlib
+    path=Path(path or Path(__file__).with_name('qc_thresholds.json'))
+    if not path.exists():return {'status':'not_calibrated','failures':[],'thresholds_sha256':None,'kind':kind}
+    raw=path.read_bytes();thresholds=json.loads(raw)
+    failures=check(thresholds,measured,kind)
+    status='pass' if not failures else 'incomplete' if all(f.startswith('not_measured:') for f in failures) else 'fail'
+    return {'status':status,'failures':failures,'kind':kind,'thresholds_version':thresholds.get('version'),
+            'thresholds_sha256':hashlib.sha256(raw).hexdigest(),'measured':measured}
 
 
 def main(argv=None):

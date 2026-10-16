@@ -492,6 +492,11 @@ def final_review(jid:uuid.UUID,body:FinalReview):
         from .production_harness import assess_delivery
         review=assess_delivery(p['compiled'],receipts)
         if not review['eligible']:raise HTTPException(409,'A montagem não passou nos critérios técnicos: '+', '.join(review['failures']))
+        # Calibrated QC receipt: missing metrics stay "incomplete", never a pass; blocking is opt-in.
+        from .calibration import verdict
+        review['calibration']=verdict(report.get('qc') or {},'timeline')
+        if __import__('os').getenv('LOFI_REQUIRE_CALIBRATED_QC')=='1' and review['calibration']['status']!='pass':
+            raise HTTPException(409,'QC calibrado não aprovado ('+review['calibration']['status']+'): '+', '.join(review['calibration']['failures'] or ['limites não calibrados']))
         c.execute("UPDATE factory_tasks SET payload=payload||%s::jsonb,detail='Montagem revisada; início e publicação continuam manuais',updated_at=now() WHERE id=%s",(json.dumps({'review':review,'report':report}),jid))
         audit(c,'TIMELINE_FINAL_REVIEWED',str(jid));c.commit()
     return {'reviewed':True,'broadcast_started':False,'published_to_youtube':False}

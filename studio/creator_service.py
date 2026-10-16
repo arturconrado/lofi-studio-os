@@ -77,7 +77,8 @@ def package(bid,folder):
  s=storage();bucket=os.environ['S3_BUCKET'];files=[];timeline=[];offset=0
  for row in rows:
   with db() as c:key=c.execute('SELECT object_key FROM assets WHERE id=%s',(row['asset_id'],)).fetchone()['object_key']
-  p=folder/(str(row['asset_id'])+'.mp3');s.download_file(bucket,key,str(p));assert hashlib.sha256(p.read_bytes()).hexdigest()==row['sha256'];files.append(p)
+  p=folder/(str(row['asset_id'])+'.mp3');s.download_file(bucket,key,str(p));files.append(p)
+  if hashlib.sha256(p.read_bytes()).hexdigest()!=row['sha256']:raise ValueError('Track bytes changed since generation: '+str(row['asset_id']))
   timeline.append({**row,'start_seconds':offset});offset+=float(row['duration_seconds'])
  lst=folder/'concat.txt';lst.write_text(''.join("file '"+str(p)+"'\n" for p in files));audio=folder/'audio.mp3'
  mix_report=None
@@ -90,7 +91,8 @@ def package(bid,folder):
   subprocess.run(['ffmpeg','-v','error','-y','-f','concat','-safe','0','-i',str(lst),'-c:a','copy','-vn',str(audio)],check=True)
  ambient=apply_ambience(plan,audio,folder,bid,s,bucket)
  subprocess.run(['ffmpeg','-v','error','-xerror','-i',str(audio),'-f','null','-'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
- seconds=float(json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-of','json',str(audio)]))['format']['duration']);assert seconds>=b['target_seconds']
+ seconds=float(json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-of','json',str(audio)]))['format']['duration'])
+ if seconds<b['target_seconds']:raise ValueError('Mixed program shorter than its target duration')
  akey=f'programs/{bid}/audio.mp3';mkey=f'programs/{bid}/manifest.json';s.upload_file(str(audio),bucket,akey,ExtraArgs={'ContentType':'audio/mpeg'})
  manifest={'batch':bid,'duration_seconds':seconds,'tracks':timeline,'audio':{'sha256':hashlib.sha256(audio.read_bytes()).hexdigest(),'bytes':audio.stat().st_size},'video':{'seconds':60,'cycle_seconds':60,'selected_scene':None,'provenance':'Original AI illustration animated locally; 20-second core repeated in a silent 60-second video'},'broadcast_started':False}
  from .video_guardrails import assess,inspect
