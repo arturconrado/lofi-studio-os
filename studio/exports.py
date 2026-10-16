@@ -58,6 +58,7 @@ def download(jid:uuid.UUID,request:Request):
     with db() as c:row=c.execute('SELECT * FROM export_jobs WHERE id=%s',(jid,)).fetchone()
     if not row:raise HTTPException(404,'Exportação inexistente')
     if row['state']!='completed':raise HTTPException(409,'Exportação ainda indisponível')
+    if (row.get('report') or {}).get('media_purged'):raise HTTPException(410,'Este MP4 foi removido do servidor depois de publicado; exporte novamente se precisar do arquivo.')
     from .miniobs import media
     response=media(request,row['object_key'],'video/mp4')
     response.headers['Content-Disposition']=f'attachment; filename="lofi-{jid}.mp4"'

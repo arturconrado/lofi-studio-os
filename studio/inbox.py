@@ -140,16 +140,26 @@ def publish_items(c,channel_id):
       LEFT JOIN program_metadata m ON m.program_id=e.program_id JOIN productions p ON p.id=pb.production_id
       WHERE e.state='completed' AND p.state<>'archived' AND (%s::uuid IS NULL OR b.channel_id=%s)
       {"AND NOT EXISTS(SELECT 1 FROM youtube_publications y WHERE y.export_id=e.id)" if pubs else ""} ORDER BY e.updated_at''',(channel_id,channel_id)).fetchall()
-    return [{'id':f"publish_confirm:{r['export_id']}",'kind':'publish_confirm','priority':40,'title':f"Publicar · {r['title'] or r['program_id']}",
-             'subtitle':'Vídeo de 1h exportado; revise título e descrição e publique no YouTube','channel_id':r['channel_id'],'production_id':r['production_id'],
+    from .youtube_publish import duplicates
+    items=[]
+    for r in rows:
+        dup=duplicates(c,r['channel_id'],export_id=r['export_id'])
+        items.append(publish_item(r,dup))
+    return items
+
+
+def publish_item(r,dup):
+    warn=('Atenção: repete '+'; '.join(f"“{d['title']}” (youtu.be/{d['video_id']})" for d in dup)+'. ') if dup else ''
+    evidence_extra=[{'name':'allow_repeat_visual','type':'bool','label':'Publicar mesmo repetindo o visual de um vídeo já publicado'}] if dup and not any(d['same_audio'] for d in dup) else []
+    return {'id':f"publish_confirm:{r['export_id']}",'kind':'publish_confirm','priority':40,'title':f"Publicar · {r['title'] or r['program_id']}",
+             'duplicate_of':dup,'subtitle':warn+'Vídeo de 1h exportado; revise título e descrição e publique no YouTube','channel_id':r['channel_id'],'production_id':r['production_id'],
              'program_id':r['program_id'],'created_at':r['updated_at'],'media':{'video_url':f"/api/exports/{r['export_id']}/preview"},
              'evidence':[{'name':'title','type':'text','label':'Título','min':1,'max':100},{'name':'description','type':'text','label':'Descrição','min':0,'max':5000},
                          {'name':'privacy','type':'choice','label':'Visibilidade','options':['private','unlisted','public']},
                          {'name':'made_for_kids','type':'choice','label':'Conteúdo para crianças?','options':[False,True]},
-                         {'name':'confirm_review','type':'bool','label':'Assisti ao vídeo exportado'},{'name':'confirm_rights','type':'bool','label':'Confirmo os direitos para publicar'}],
+                         {'name':'confirm_review','type':'bool','label':'Assisti ao vídeo exportado'},{'name':'confirm_rights','type':'bool','label':'Confirmo os direitos para publicar'}]+evidence_extra,
              'prefill':{'title':r['title'] or '','description':r['description'] or '','privacy':'unlisted','made_for_kids':False},
              'action':{'method':'POST','path':'/api/youtube/publications','body':{'request_id':str(uuid.uuid5(r['export_id'],'publish')),'channel_id':str(r['channel_id']),'export_id':str(r['export_id'])},'label':'Publicar no YouTube'}}
-            for r in rows]
 
 
 def failure_items(c,channel_id):

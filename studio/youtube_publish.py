@@ -48,6 +48,52 @@ class Publication(BaseModel):
     made_for_kids:bool
     confirm_review:bool=False
     confirm_rights:bool=False
+    allow_repeat_visual:bool=False
+
+def signature(c, export_id=None, pilot=None):
+    """What a publication shows and plays: visual source tokens and audio tokens.
+
+    An exported program reusing an approved episode carries that episode's id and video key,
+    so it collides with the episode's own publication even with different music.
+    """
+    visual,audio=set(),set()
+    if export_id:
+        e=c.execute('''SELECT b.video_key,b.audio_key,p.data->'visual_reference'->>'pilot_id' pilot FROM export_jobs e
+          JOIN production_batches b ON b.id=e.program_id LEFT JOIN creator_plans p ON p.program_id=b.id WHERE e.id=%s''',(export_id,)).fetchone()
+        if e:
+            visual|={'key:'+e['video_key']} if e['video_key'] else set()
+            visual|={'pilot:'+e['pilot']} if e['pilot'] else set()
+            audio|={'key:'+e['audio_key']} if e['audio_key'] else set()
+    if pilot:
+        visual|={'pilot:'+str(pilot['id'])}|{'key:'+k for k in (pilot.get('silent_key'),pilot.get('video_key')) if k}
+        audio|={'pilot:'+str(pilot['id'])}
+    return visual,audio
+
+
+def duplicates(c, channel_id, export_id=None, pilot=None):
+    """Uploaded publications on this channel sharing the visual or the audio of the candidate."""
+    visual,audio=signature(c,export_id,pilot)
+    found=[]
+    for row in c.execute('''SELECT y.id,y.title,y.video_id,y.created_at,y.export_id,y.pilot_id FROM youtube_publications y
+      WHERE y.channel_id=%s AND y.state='uploaded' ORDER BY y.created_at''',(channel_id,)).fetchall():
+        other=c.execute('SELECT * FROM ambient_pilots WHERE id=%s',(row['pilot_id'],)).fetchone() if row['pilot_id'] else None
+        v,a=signature(c,row['export_id'],other)
+        same_audio=bool(audio&a);same_visual=bool(visual&v)
+        if same_audio or same_visual:
+            found.append({'publication_id':str(row['id']),'title':row['title'],'video_id':row['video_id'],'created_at':row['created_at'].isoformat(),
+                          'same_audio':same_audio,'same_visual':same_visual})
+    return found
+
+
+def refuse_duplicates(c, channel_id, allow_repeat_visual, export_id=None, pilot=None):
+    found=duplicates(c,channel_id,export_id,pilot)
+    def where(d):return f"“{d['title']}” (youtu.be/{d['video_id']}, {d['created_at'][:10]})"
+    audio=[d for d in found if d['same_audio']]
+    if audio:raise HTTPException(409,'Este vídeo já foi publicado neste canal com a mesma música: '+'; '.join(where(d) for d in audio)+'.')
+    if found and not allow_repeat_visual:
+        raise HTTPException(409,'Este vídeo repete o visual de '+'; '.join(where(d) for d in found)+'. Para publicar mesmo assim, confirme que quer repetir o visual.')
+    return found
+
 
 @router.get('')
 def listing():
@@ -75,9 +121,12 @@ def create(body:Publication):
         except ValueError as error:raise HTTPException(409,str(error)) from None
         review=c.execute('SELECT snapshot_sha256 FROM program_reviews WHERE program_id=%s',(e['program_id'],)).fetchone()
         if snapshot!=e['snapshot_sha256'] or not review or review['snapshot_sha256']!=snapshot:raise HTTPException(409,'O programa mudou. Revise e exporte novamente.')
+        if (e.get('report') or {}).get('media_purged'):raise HTTPException(409,'O MP4 deste programa foi removido do servidor; exporte novamente antes de publicar.')
         # Opt-in hard gate shared with pilots: provenance, reviewed terms and a rights declaration.
         from .provenance import publication_gate
         publication_gate(c,program_id=e['program_id'])
+        # Never publish the same video twice: same music is refused, a repeated visual needs explicit consent.
+        refuse_duplicates(c,body.channel_id,body.allow_repeat_visual,export_id=body.export_id)
         credential=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s FOR UPDATE',(body.channel_id,)).fetchone()
         if not credential or not upload_allowed(json.loads(cipher().decrypt(credential['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio de vídeos no menu Canais antes de publicar.')
         jid=uuid.uuid4()
@@ -87,6 +136,7 @@ def create(body:Publication):
 
 class Release(BaseModel):
     confirm_release:bool=False
+    allow_repeat_visual:bool=False
 
 
 @router.post('/{jid}/release')
@@ -95,8 +145,11 @@ def release(jid:uuid.UUID,body:Release):
     if not body.confirm_release:raise HTTPException(422,'Confirme a liberação deste envio.')
     with db() as c:
         ensure(c)
-        r=c.execute("UPDATE youtube_publications SET state='queued',detail='Liberado manualmente para envio',updated_at=now() WHERE id=%s AND state='held' RETURNING id",(jid,)).fetchone()
-        if not r:raise HTTPException(409,'Só um envio pausado pela agenda pode ser liberado.')
+        held=c.execute("SELECT * FROM youtube_publications WHERE id=%s AND state='held' FOR UPDATE",(jid,)).fetchone()
+        if not held:raise HTTPException(409,'Só um envio pausado pela agenda pode ser liberado.')
+        pilot=c.execute('SELECT * FROM ambient_pilots WHERE id=%s',(held['pilot_id'],)).fetchone() if held['pilot_id'] else None
+        refuse_duplicates(c,held['channel_id'],body.allow_repeat_visual,export_id=held['export_id'],pilot=pilot)
+        c.execute("UPDATE youtube_publications SET state='queued',detail='Liberado manualmente para envio',updated_at=now() WHERE id=%s",(jid,))
         audit(c,'YOUTUBE_PUBLICATION_RELEASED',str(jid));c.commit()
     return {'id':jid,'state':'queued'}
 
@@ -234,6 +287,7 @@ def main():
 
 def ready_pilot(row):
     report=row['report']
+    if report.get('media_purged'):return False  # files removed from the server after publication
     return float(report.get('duration_seconds',0))==3600 and bool(report.get('technical_integrity') or report.get('decoded_without_errors')) and bool(report.get('full_decode_pass') or report.get('decoded_without_errors')) and re.fullmatch(r'[a-f0-9]{64}',report.get('artifact_sha256',{}).get('video','')) is not None
 
 @router.get('/pilots/{pid}/draft')
@@ -256,6 +310,7 @@ class PilotPublication(BaseModel):
     privacy:str='public'
     made_for_kids:bool
     confirm_publication:bool=False
+    allow_repeat_visual:bool=False
 
 @router.post('/pilots/{pid}')
 def create_pilot(pid:uuid.UUID,body:PilotPublication):
@@ -273,6 +328,7 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
         if old:
             if old['pilot_id']!=pid or old['channel_id']!=body.channel_id or old['title']!=body.title.strip() or old['description']!=body.description or old['privacy']!=body.privacy:raise HTTPException(409,'Este vídeo já tem um envio registrado. Confira o histórico.')
             c.commit();return old
+        refuse_duplicates(c,body.channel_id,body.allow_repeat_visual,pilot=p)
         cred=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s FOR UPDATE',(body.channel_id,)).fetchone()
         if not cred or not upload_allowed(json.loads(cipher().decrypt(cred['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio pelo Google no menu Canais.')
         jid=uuid.uuid4()
