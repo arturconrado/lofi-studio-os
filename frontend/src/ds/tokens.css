@@ -1,0 +1,56 @@
+/* Lo-Fi Studio design tokens. Dark-first "night studio": ink background, lamp amber, dusk violet. */
+:root {
+  --font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+  --r1: 6px; --r2: 10px; --r3: 16px; --r-pill: 999px;
+  --t-xs: 12px; --t-sm: 13px; --t-md: 15px; --t-lg: 18px; --t-xl: 24px; --t-2xl: 32px;
+  --ease: cubic-bezier(.2,.7,.2,1);
+
+  --bg: #0e0d14;
+  --bg-raised: #16141f;
+  --surface: #1c1a27;
+  --surface-2: #242133;
+  --line: #2f2b42;
+  --line-strong: #463f63;
+  --text: #ece8f6;
+  --text-2: #b4adc9;
+  --text-3: #8a83a3;
+  --accent: #f2b45c;          /* desk lamp */
+  --accent-ink: #1d1406;
+  --accent-soft: rgba(242,180,92,.14);
+  --violet: #a48cff;          /* dusk */
+  --violet-soft: rgba(164,140,255,.14);
+  --focus: #ffd38f;
+
+  --ok: #6fd3a1;  --ok-soft: rgba(111,211,161,.14);
+  --warn: #f5c35b; --warn-soft: rgba(245,195,91,.14);
+  --bad: #ff7d8a; --bad-soft: rgba(255,125,138,.14);
+  --info: #7cb6ff; --info-soft: rgba(124,182,255,.14);
+  --live: #ff5d6c;
+
+  --shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 12px 32px rgba(0,0,0,.35);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f6f3ee; --bg-raised: #fffdf9; --surface: #ffffff; --surface-2: #f1ece4;
+    --line: #e4ddd1; --line-strong: #cfc4b2; --text: #1f1b2b; --text-2: #4b4560; --text-3: #6f6885;
+    --accent: #b9701a; --accent-ink: #fff8ee; --accent-soft: rgba(185,112,26,.12);
+    --violet: #6a4fd8; --violet-soft: rgba(106,79,216,.1); --focus: #8a4b00;
+    --ok: #1f8a57; --ok-soft: rgba(31,138,87,.12); --warn: #9a6a00; --warn-soft: rgba(154,106,0,.12);
+    --bad: #c23345; --bad-soft: rgba(194,51,69,.1); --info: #2363b8; --info-soft: rgba(35,99,184,.1);
+    --shadow: 0 1px 2px rgba(31,27,43,.06), 0 8px 24px rgba(31,27,43,.08);
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f6f3ee; --bg-raised: #fffdf9; --surface: #ffffff; --surface-2: #f1ece4;
+  --line: #e4ddd1; --line-strong: #cfc4b2; --text: #1f1b2b; --text-2: #4b4560; --text-3: #6f6885;
+  --accent: #b9701a; --accent-ink: #fff8ee; --accent-soft: rgba(185,112,26,.12);
+  --violet: #6a4fd8; --violet-soft: rgba(106,79,216,.1); --focus: #8a4b00;
+  --ok: #1f8a57; --ok-soft: rgba(31,138,87,.12); --warn: #9a6a00; --warn-soft: rgba(154,106,0,.12);
+  --bad: #c23345; --bad-soft: rgba(194,51,69,.1); --info: #2363b8; --info-soft: rgba(35,99,184,.1);
+  --shadow: 0 1px 2px rgba(31,27,43,.06), 0 8px 24px rgba(31,27,43,.08);
+}
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

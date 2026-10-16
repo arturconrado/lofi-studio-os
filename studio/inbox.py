@@ -51,8 +51,7 @@ def block_items(c,channel_id):
     items=[]
     for b in rows:
         tracks=tracks_of(c,b['id'])
-        hour=f" · hora {b['hour_index']+1}" if b['hour_index'] is not None else ''
-        items.append({'id':'block_review:'+b['id'],'kind':'block_review','priority':10,'title':(b['title'] or b['id'])+hour,
+        items.append({'id':'block_review:'+b['id'],'kind':'block_review','priority':10,'title':b['title'] or b['id'],
                       'subtitle':f"{len(tracks)} faixas · ouça em modo álbum, rejeite o que não servir e valide a hora",
                       'channel_id':b['channel_id'],'production_id':b['production_id'],'hour_index':b['hour_index'],'program_id':b['id'],'created_at':b['updated_at'],
                       'media':{'audio_url':f"/api/miniobs/programs/{b['id']}/audio",'video_url':f"/api/miniobs/programs/{b['id']}/video"},

@@ -61,7 +61,7 @@ async def auth(req:Request,call_next):
                         secrets.compare_digest(pwd,os.environ['STUDIO_ADMIN_PASSWORD']))
     except (ValueError,KeyError,UnicodeDecodeError):pass
     if not authorized:
-        if req.url.path=='/':
+        if req.url.path in ('/','/legacy','/studio') or req.url.path.startswith('/studio/'):
             from fastapi.responses import RedirectResponse
             return RedirectResponse('/login')
         return JSONResponse({'detail':'Autenticação necessária'},status_code=401)
@@ -81,8 +81,25 @@ def health():
         return {'status':'ok'}
     except Exception:raise HTTPException(503,'service dependencies unavailable')
 
+WEB=Path(__file__).resolve().parent.parent/'web'
+
+def app_index():
+    # New studio app by default; STUDIO_UI=legacy (or a missing build) serves the previous portal.
+    built=WEB/'app/index.html'
+    if built.exists() and os.getenv('STUDIO_UI','app')!='legacy':return FileResponse(built,headers={'Cache-Control':'no-cache'})
+    return FileResponse(WEB/'index.html')
+
 @app.get('/')
-def index():return FileResponse(Path(__file__).resolve().parent.parent/'web/index.html')
+def index():return app_index()
+
+@app.get('/studio')
+def studio_root():return app_index()
+
+@app.get('/studio/{rest:path}')
+def studio_page(rest:str):return app_index()
+
+@app.get('/legacy')
+def legacy_portal():return FileResponse(WEB/'index.html')
 
 @app.get('/api/status')
 def status():

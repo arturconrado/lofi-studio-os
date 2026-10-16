@@ -115,7 +115,7 @@ async def stream(request:Request,timeout:int=Query(default=0,ge=0,le=3600)):
     identity=getattr(request.state,'identity',None) or {}
     workspace=WORKSPACE.get()  # captured now: the middleware resets it once headers are sent
     session=str(identity.get('session_id') or identity.get('user_id') or 'basic')
-    if SESSIONS.get(session,0)>=3:
+    if SESSIONS.get(session,0)>=8:
         return StreamingResponse(iter(['retry: 30000\nevent: limit\ndata: {}\n\n']),media_type='text/event-stream',status_code=429)
     replay=request.headers.get('last-event-id')
     hub=HUBS.setdefault(workspace,Hub(workspace))
@@ -138,7 +138,8 @@ async def stream(request:Request,timeout:int=Query(default=0,ge=0,le=3600)):
                     row=await asyncio.wait_for(queue.get(),timeout=1)
                     yield frame(row)
                 except asyncio.TimeoutError:
-                    if time.monotonic()-beat>15:
+                    # Frequent pings surface closed tabs quickly and release their slot.
+                    if time.monotonic()-beat>5:
                         beat=time.monotonic();yield ': ping\n\n'
         finally:
             hub.clients.discard(queue)
