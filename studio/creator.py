@@ -3,6 +3,7 @@ import json,uuid
 from decimal import Decimal
 import httpx
 from fastapi import APIRouter,HTTPException
+from typing import Literal
 from pydantic import BaseModel,Field
 from .core import db,audit
 from . import runtime
@@ -33,6 +34,8 @@ from .production_harness import ProductionSpec,compile_spec
 class CreativePlan(BaseModel):
  production_spec:ProductionSpec|None=None
  mix_crossfade_seconds:float=Field(default=1.5,ge=0,le=5)
+ ambient_bed:Literal['none','rain','fireplace']='none'
+ ambient_gain_db:float=Field(default=-26,ge=-40,le=-12)
  title:str=Field(min_length=1,max_length=100)
  description:str=Field(max_length=4000)
  theme:str=Field(min_length=1,max_length=2000)
@@ -193,7 +196,7 @@ def storyboard(body:StoryboardRequest):
   from .channels import profile
   profile(c,body.channel_id)
   from .harness_profiles import require_version
-  require_version(c,body.channel_id,body.spec.niche_pack_sha256)
+  require_version(c,body.channel_id,body.spec.niche_pack_sha256,body.spec)
   assets=[]
   if body.draft_id:
    prior=c.execute('SELECT data FROM creator_plans WHERE id=%s AND channel_id=%s',(body.draft_id,body.channel_id)).fetchone()
@@ -215,7 +218,7 @@ def save_storyboard(body:StoryboardRequest):
  with db() as c:
   profile(c,body.channel_id)
   from .harness_profiles import require_version
-  require_version(c,body.channel_id,body.spec.niche_pack_sha256)
+  require_version(c,body.channel_id,body.spec.niche_pack_sha256,body.spec)
   if body.draft_id:
    prior=c.execute("SELECT id,data FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL FOR UPDATE",(body.draft_id,body.channel_id)).fetchone()
    if not prior:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
@@ -246,3 +249,12 @@ router.include_router(timeline_router)
 
 from .harness_profiles import router as harness_profiles_router
 router.include_router(harness_profiles_router)
+
+from .event_proposals import router as event_proposals_router
+router.include_router(event_proposals_router)
+
+
+@router.get('/pose-library')
+def pose_library():
+ from .pose_library import library
+ return library()

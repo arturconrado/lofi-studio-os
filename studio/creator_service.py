@@ -58,6 +58,16 @@ def visual(bid,plan,folder):
   c.execute("INSERT INTO program_scenes(batch_id,id,title,video_key,image_key,duration_seconds,width,height,fps,technique,position) VALUES(%s,'scene',%s,%s,%s,60,1280,720,30,'local_illustration_animation',0)",(bid,plan['title'],vkey,previewkey));c.commit()
  return receipt
 
+def apply_ambience(plan,audio,folder,bid,store,bucket):
+ """Separate ambience bus; the music-only master is kept and uploaded as its own output."""
+ if plan.get('ambient_bed','none')=='none':return None
+ from .ambient_audio import layer
+ music_only=folder/'audio-music-only.mp3';audio.replace(music_only)
+ ambient=layer(music_only,plan['ambient_bed'],float(plan.get('ambient_gain_db',-26)),audio,folder)
+ ambient['music_only_key']=f'programs/{bid}/audio-music-only.mp3';ambient['music_only_sha256']=hashlib.sha256(music_only.read_bytes()).hexdigest()
+ store.upload_file(str(music_only),bucket,ambient['music_only_key'],ExtraArgs={'ContentType':'audio/mpeg'})
+ return ambient
+
 def package(bid,folder):
  from .miniobs import program_tracks
  with db() as c:b=c.execute('SELECT * FROM production_batches WHERE id=%s',(bid,)).fetchone();rows=program_tracks(c,bid)
@@ -78,6 +88,7 @@ def package(bid,folder):
   for track,measured in zip(timeline,mix_report['tracks']):track['start_seconds']=measured['start_seconds']
  else:
   subprocess.run(['ffmpeg','-v','error','-y','-f','concat','-safe','0','-i',str(lst),'-c:a','copy','-vn',str(audio)],check=True)
+ ambient=apply_ambience(plan,audio,folder,bid,s,bucket)
  subprocess.run(['ffmpeg','-v','error','-xerror','-i',str(audio),'-f','null','-'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
  seconds=float(json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-of','json',str(audio)]))['format']['duration']);assert seconds>=b['target_seconds']
  akey=f'programs/{bid}/audio.mp3';mkey=f'programs/{bid}/manifest.json';s.upload_file(str(audio),bucket,akey,ExtraArgs={'ContentType':'audio/mpeg'})
@@ -90,6 +101,7 @@ def package(bid,folder):
   evidence=inspect(folder/'scene-loop.mp4')
   evidence.update(demo_only=False,timeline_coverage_seconds=20,source_preserved=True)
  if mix_report:manifest['audio']['mix']=mix_report
+ if ambient:manifest['audio']['ambience']=ambient
  manifest['video_guardrails']=assess(evidence,float(b['target_seconds']))
  s.put_object(Bucket=bucket,Key=mkey,Body=json.dumps(manifest,default=str).encode(),ContentType='application/json')
  with db() as c:

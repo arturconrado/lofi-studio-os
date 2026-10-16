@@ -93,14 +93,20 @@ def produce(item):
         info=json.loads(result.stdout);duration=float(info['format']['duration']);st=next(s for s in info['streams'] if s['codec_type']=='audio')
         # Full decoding verifies playable bytes; it does not gate artistic quality or alter them.
         subprocess.run(['ffmpeg','-v','error','-xerror','-i',str(p),'-f','null','-'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=60)
+        from .audio_analysis import decode,estimate_bpm
+        try:tempo=estimate_bpm(decode(p))
+        except Exception:tempo={'bpm':None,'measured':False}
     from .quality_gate import analyze
     qc=analyze(raw,MODEL,120)
-    qc.update(batch=BATCH,provider_stream_complete=not partial,playback_decode_verified=True)
+    # Measured estimate; the prompt BPM stays an intention in tracks.bpm.
+    qc.update(batch=BATCH,provider_stream_complete=not partial,playback_decode_verified=True,measured_tempo=tempo)
     if partial:
         qc['status']='REJECT';qc['reasons'].append({'code':'INCOMPLETE_PROVIDER_STREAM','state':'REJECT'})
     rejected=qc['status']=='REJECT'
     with db() as c:
         c.execute("INSERT INTO assets(id,track_id,object_key,sha256,mime,duration_seconds,model,qc,technical_status,editorial_status,review_note) VALUES(%s,%s,%s,%s,'audio/mpeg',%s,%s,%s,%s,'PENDING','Original preservado; diagnóstico técnico sem masterização; aguarda audição')",(jid,tid,key,sha,duration,MODEL,json.dumps(qc),qc['status']))
+        from .provenance import stamp
+        stamp(c,jid)
         c.execute("UPDATE jobs SET status=%s,detail=%s,updated_at=now() WHERE id=%s",('FAILED' if partial or rejected else 'COMPLETED','Original preserved; technical rejection; batch paused' if partial or rejected else 'Original decoded and measured; listening pending',jid))
         update(c,'failed' if partial or rejected else 'producing','Diagnóstico técnico reprovado; original preservado, sem nova geração automática' if partial or rejected else '')
         audit(c,'BATCH_ORIGINAL_STORED',tid,sha);c.commit()

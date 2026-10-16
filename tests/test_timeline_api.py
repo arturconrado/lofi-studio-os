@@ -133,3 +133,56 @@ def test_resume_is_explicit_scoped_and_requires_unchanged_inputs(client,monkeypa
     assert client.post(path,headers=headers).status_code==409
     client.cookies.clear();_,other=signup(client)
     assert client.post(path,headers={'X-CSRF-Token':other['csrf_token']}).status_code==404
+
+
+def test_approved_scene_regions_need_no_cushion_and_clip_masks_bind_to_clip(client,monkeypatch,tmp_path):
+    import shutil,subprocess
+    from studio import timeline_api
+    if not shutil.which('ffmpeg'):pytest.skip('FFmpeg required')
+    monkeypatch.setenv('S3_BUCKET','test-only')
+    monkeypatch.setattr(timeline_api,'storage',lambda:type('S',(),{'upload_file':lambda *a,**k:None})())
+    _,identity=signup(client);headers={'X-CSRF-Token':identity['csrf_token']}
+    cid=client.post('/api/channels',json={'name':'Snow','niche':'Original lo-fi'},headers=headers).json()['id']
+    spec={'hours':1,'scenario':'snowy_night_studio','cadence':'quarter_hour_v2'}
+    bad=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers)
+    assert bad.status_code==422 and 'phone' in bad.text
+    spec|={'cadence':'custom_markers','markers':[{'minute':15,'sequence':'breath_pet'}],'contextual_actions':['fireplace_glow_rises']}
+    pid=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers).json()['id']
+    base='/api/creator/assembly/plans/'+pid
+    regions={'sky':[[.6,0],[1,0],[1,.3],[.6,.3]],'fire':[[0,.2],[.2,.2],[.2,.5]],'confirm_regions':True}
+    r=client.post(base+'/regions',json=regions,headers=headers);assert r.status_code==200,r.text
+    env=client.get(base).json()['environment'];assert env['cushion_box'] is None and env['fire']
+    video=tmp_path/'pet.mp4'
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=1280x720:rate=24:duration=11','-c:v','libx264','-threads','1','-preset','ultrafast','-pix_fmt','yuv420p',str(video)],check=True)
+    with video.open('rb') as handle:clip=client.post(base+'/clips/pet_cat',files={'file':('pet.mp4',handle,'video/mp4')},headers=headers).json()
+    frame={'shirt':[[.1,.5],[.3,.5],[.3,.9]],'protected_girl':[[.4,.1],[.6,.1],[.6,.4]]}
+    masks={'sha256':clip['sha256'],'keyframes':[{'t':0,**frame},{'t':5,**frame}],'confirm_every_frame':True}
+    path=base+'/clips/'+clip['id']+'/masks'
+    assert client.post(path,json=masks|{'confirm_every_frame':False},headers=headers).status_code==422
+    uneven=masks|{'keyframes':[{'t':0,**frame},{'t':5,**frame|{'shirt':[[.1,.5],[.3,.5],[.3,.9],[.1,.9]]}}]}
+    assert client.post(path,json=uneven,headers=headers).status_code==422
+    assert client.post(path,json=masks|{'sha256':'f'*64},headers=headers).status_code==409
+    assert client.post(path,json=masks|{'keyframes':[{'t':30,**frame}]},headers=headers).status_code==422
+    assert client.post(path,json=masks,headers=headers).status_code==200
+    saved=client.get(base).json()['environment']['clip_masks'][clip['sha256']]
+    assert saved['reviewed'] and len(saved['keyframes'])==2
+    # Re-saving fixed regions keeps per-clip masks.
+    assert client.post(base+'/regions',json=regions,headers=headers).status_code==200
+    assert clip['sha256'] in client.get(base).json()['environment']['clip_masks']
+
+
+def test_status_exposes_episode_state_and_economics_without_cost_claims(client):
+    pid,headers,_,_=draft(client);base='/api/creator/assembly/plans/'+pid
+    assert client.get(base).json()['episode_state']['state']=='DRAFT'
+    e=client.get(base+'/economics').json()
+    assert e['approved_videos']==0 and e['cost_per_approved_video_usd'] is None and e['infrastructure_usd'] is None
+    assert e['paid_calls']==0
+
+
+def test_clip_briefs_cover_missing_actions_with_pose_anchors(client):
+    pid,headers,_,_=draft(client)
+    r=client.get('/api/creator/assembly/plans/'+pid+'/clip-briefs').json()
+    assert len(r['briefs'])==11 and r['paid_calls']==0
+    pet=next(b for b in r['briefs'] if b['action']=='pet_cat')
+    assert pet['minimum_seconds']==10 and pet['pose_before']['cat']=='near_girl' and pet['pose_after']['hands']=='cat'
+    assert r['viewpoint']['safe_transform_bounds']['scale']==1.0

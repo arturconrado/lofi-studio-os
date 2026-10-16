@@ -66,10 +66,17 @@ def tick():
                          'unique_measured_seconds':p['audio']['unique_measured_seconds'],'style_reviewed':False}
         key=f'creator-timelines/{row["id"]}/{report["video"]["sha256"]}.mp4'
         storage().upload_file(str(final),os.environ['S3_BUCKET'],key,ExtraArgs={'ContentType':'video/mp4'})
+        extra={}
+        if p.get('preview_mode')=='condensed' and report.get('sample_map'):
+            from .timeline_preview import storyboard_sheet
+            sheet=storyboard_sheet(final,report['sample_map'],folder/'storyboard.jpg')
+            extra['storyboard_key']=f'creator-timelines/{row["id"]}/storyboard.jpg'
+            storage().upload_file(str(sheet),os.environ['S3_BUCKET'],extra['storyboard_key'],ExtraArgs={'ContentType':'image/jpeg'})
+        report['local_resources']['uploaded_bytes']=final.stat().st_size+(Path(folder/'storyboard.jpg').stat().st_size if extra else 0)
         report_key=f'creator-timelines/{row["id"]}/report.json'
         storage().put_object(Bucket=os.environ['S3_BUCKET'],Key=report_key,Body=json.dumps(report).encode(),ContentType='application/json')
         with db() as c:
-            c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Montagem pronta para assistir e revisar',updated_at=now() WHERE id=%s",(json.dumps({'video_key':key,'report_key':report_key,'report':report}),row['id']));audit(c,'TIMELINE_RENDER_COMPLETED',str(row['id']),p['plan_id']);c.commit()
+            c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Montagem pronta para assistir e revisar',updated_at=now() WHERE id=%s",(json.dumps({'video_key':key,'report_key':report_key,'report':report}|extra),row['id']));audit(c,'TIMELINE_RENDER_COMPLETED',str(row['id']),p['plan_id']);c.commit()
         completed=True
     except Exception as error:
         with db() as c:

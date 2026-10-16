@@ -13,7 +13,9 @@ from fastapi.responses import JSONResponse
 @app.exception_handler(RequestValidationError)
 async def invalid_request(request,exc):
     fields=', '.join('.'.join(str(x) for x in e['loc']) for e in exc.errors())
-    return JSONResponse({'detail':'Campos inválidos: '+fields},status_code=422)
+    # Rule messages are authored server-side (value_error) and never echo input values.
+    rules=sorted({str(e['msg']).removeprefix('Value error, ') for e in exc.errors() if e.get('type')=='value_error'})
+    return JSONResponse({'detail':'Campos inválidos: '+fields+(' · '+' · '.join(rules) if rules else '')},status_code=422)
 
 app.mount('/static',StaticFiles(directory=str(Path(__file__).resolve().parent.parent/'web')),name='static')
 
@@ -190,6 +192,12 @@ class Approve(BaseModel):
     technical_review_note:str=Field(default='',max_length=2000)
     musical_review_note:str=Field(default='',min_length=0,max_length=3000)
 
+@app.get('/api/programs/{bid}/rights')
+def program_rights(bid:str):
+    """Per-track provenance and rights declaration status; read-only."""
+    from .provenance import program_report
+    with db() as c:return program_report(c,bid)
+
 @app.post('/api/tracks/{tid}/approve')
 def approve(tid:str,form:Approve):
     if not(form.listened_fully and form.reviewed_rights and len(form.evidence_reference.strip())>=12):
@@ -203,7 +211,8 @@ def approve(tid:str,form:Approve):
         if form.variant=='master':
             if not a['master_object_key'] or not a['master_qc']:raise HTTPException(409,'Master inexistente')
             qc=json.loads(a['master_qc'])
-        if qc.get('version')!='3.0.0' or qc.get('status') not in ('PASS','REVIEW'):
+        from .quality_gate import VERSION as QC_VERSION
+        if qc.get('version') not in ('3.0.0',QC_VERSION) or qc.get('status') not in ('PASS','REVIEW'):
             raise HTTPException(409,'QC v3 pendente ou rejeitado; aprovação bloqueada')
         if qc['status']=='REVIEW' and not(form.technical_reviewed and len(form.technical_review_note.strip())>=20):
             raise HTTPException(409,'Explique a revisão dos alertas técnicos antes de aprovar')

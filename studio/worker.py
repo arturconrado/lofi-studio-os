@@ -33,6 +33,8 @@ def handle(row):
             c.execute("""INSERT INTO assets(id,track_id,object_key,sha256,mime,duration_seconds,model,qc)
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING""",
                 (job_id,row['track_id'],key,sha(buf),mime,duration,row['model'],json.dumps(qc)))
+            from .provenance import stamp
+            stamp(c,job_id)
             c.execute("UPDATE tracks SET status='REVIEW' WHERE id=%s",(row['track_id'],))
             c.commit()
         from .qc_service import reprocess
