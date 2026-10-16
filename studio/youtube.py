@@ -44,7 +44,7 @@ def user_ref(request):
 def capabilities():return {'oauth_available':configured(),'publication_available':configured(),'live_api_available':False}
 
 @router.post('/channels/{cid}/connect')
-def connect(cid:uuid.UUID,request:Request,upload:bool=False):
+def connect(cid:uuid.UUID,request:Request,upload:bool=False,manage:bool=False):
     if not configured():raise HTTPException(503,'Configure o aplicativo OAuth do YouTube antes de conectar.')
     identity=user_ref(request)
     state,verifier=secrets.token_urlsafe(32),secrets.token_urlsafe(64)
@@ -59,7 +59,7 @@ def connect(cid:uuid.UUID,request:Request,upload:bool=False):
           (hashlib.sha256(state.encode()).hexdigest(),cid,identity,cipher().encrypt(verifier.encode()).decode(),datetime.now(timezone.utc)+timedelta(minutes=10)))
         c.commit()
     params={'client_id':os.environ['STUDIO_YOUTUBE_CLIENT_ID'],'redirect_uri':callback_url(),
-      'response_type':'code','scope':' '.join(SCOPES+(['https://www.googleapis.com/auth/youtube.upload'] if upload else [])),'access_type':'offline','prompt':'consent',
+      'response_type':'code','scope':' '.join(SCOPES+(['https://www.googleapis.com/auth/youtube.upload'] if upload or manage else [])+(['https://www.googleapis.com/auth/youtube.force-ssl'] if manage else [])),'access_type':'offline','prompt':'consent',
       'state':state,'code_challenge':challenge,'code_challenge_method':'S256'}
     return {'authorization_url':'https://accounts.google.com/o/oauth2/v2/auth?'+urlencode(params)}
 
@@ -107,7 +107,12 @@ def connected():
     with db() as c:
         rows=c.execute('SELECT * FROM channel_credentials').fetchall()
     from .youtube_publish import upload_allowed
-    return [{**{k:r[k] for k in ('channel_id','youtube_channel_id','youtube_title','updated_at')},'upload_authorized':upload_allowed(json.loads(cipher().decrypt(r['token_encrypted'].encode())))} for r in rows]
+    from .youtube_publish import delete_allowed
+    out=[]
+    for r in rows:
+        tokens=json.loads(cipher().decrypt(r['token_encrypted'].encode()))
+        out.append({**{k:r[k] for k in ('channel_id','youtube_channel_id','youtube_title','updated_at')},'upload_authorized':upload_allowed(tokens),'delete_authorized':delete_allowed(tokens)})
+    return out
 
 
 from pydantic import BaseModel
