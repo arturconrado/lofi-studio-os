@@ -238,6 +238,19 @@ def music_styles():
  from .music_styles import catalog
  return catalog()
 
+@router.get('/catalog')
+def creative_catalog():
+ """Every option a form or recipe may offer, from the registries the validators use."""
+ from .music_styles import STYLES
+ from .scene_profiles import SCENES,LEGACY
+ from .action_states import SEQUENCES
+ from .production_harness import COLORS,PRESETS
+ scenes=[{'id':k,'label':s['label'],'approved':k not in LEGACY,'approved_pilot_id':s['approved_pilot_id'],'props':s['props'],
+          'objects':sorted(s['objects']),'weather':s['weather'],'allowed_weather':s['allowed_weather'],'period':s['period'],'allowed_periods':s['allowed_periods']} for k,s in SCENES.items()]
+ return {'styles':STYLES,'scenes':scenes,'shirt_colors':COLORS,'cadences':sorted(PRESETS)+['custom_markers'],
+         'sequences':[{'id':k,'requires':sorted(v.get('requires',[]))} for k,v in SEQUENCES.items()],
+         'contextual_actions':['lamp_on_with_gesture','lamp_glow_auto','fireplace_glow_rises'],'hours':{'min':1,'max':8}}
+
 from .motion_validation import router as motion_validation_router
 router.include_router(motion_validation_router)
 

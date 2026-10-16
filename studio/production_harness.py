@@ -6,11 +6,12 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 COLORS = ['violet', 'pink', 'orange', 'green', 'royal blue']
-from .music_styles import DIRECTIONS as AUDIO
-from .action_states import SEQUENCES, OCCASIONAL, CONTEXTUAL, sequence_seconds, missing_props
-from .scene_profiles import SCENES, LEGACY, resolve
+ShirtColor = Literal[tuple(COLORS)]
+from .music_styles import DIRECTIONS as AUDIO, MusicStyle
+from .action_states import SEQUENCES, OCCASIONAL, CONTEXTUAL, SequenceName, ContextualAction, sequence_seconds, missing_props
+from .scene_profiles import SCENES, LEGACY, Scenario, resolve
 
-SCENARIOS = Literal['city_sunset', 'mountain_stars', 'balcony_dawn', 'snowy_night_studio', 'greenhouse_rain_study', 'autumn_bookshop']
+SCENARIOS = Scenario
 PRESETS = {'legacy_10_25_45':[(m,'breath_pet') for m in (10,20,30,40,50)]+[(25,'phone_check'),(45,'phone_check')],
            'quarter_hour_v2':[(15,'breath_pet'),(45,'breath_pet'),(30,'phone_check')]}
 # Defaults omitted from the creative hash so earlier approvals stay bound.
@@ -20,7 +21,7 @@ NEUTRAL = {'markers':[], 'weather':'scene_default', 'time_of_day':'scene_default
 
 class Marker(BaseModel):
     minute: int = Field(ge=1, le=59)
-    sequence: Literal['breath_pet', 'phone_check', 'stretch_break', 'window_glance', 'cat_stretch']
+    sequence: SequenceName
 
 
 class ProductionSpec(BaseModel):
@@ -28,11 +29,11 @@ class ProductionSpec(BaseModel):
     niche_pack_sha256: str = Field(default='',pattern=r'^(|[a-f0-9]{64})$')
     cadence: Literal['legacy_10_25_45', 'quarter_hour_v2', 'custom_markers'] = 'legacy_10_25_45'
     hours: int = Field(default=8, ge=1, le=8)
-    music_style: Literal['lofi_hiphop','chillhop','jazz_lofi','sleep_lofi','piano_lofi','guitar_lofi','bossa_lofi','8bit_lofi','synth_lofi','custom'] = 'jazz_lofi'
+    music_style: MusicStyle = 'jazz_lofi'
     music_brief: str = Field(default='', max_length=2000)
     scene_brief: str = Field(default='', max_length=2000)
     scenario: SCENARIOS = 'city_sunset'
-    shirt_color: Literal['violet', 'pink', 'orange', 'green', 'royal blue'] = 'violet'
+    shirt_color: ShirtColor = 'violet'
     character_reference: str = Field(default='', max_length=200)
     cat_reference: str = Field(default='', max_length=200)
     program_budget_usd: float = Field(default=0, ge=0, le=40)
@@ -43,7 +44,7 @@ class ProductionSpec(BaseModel):
     precipitation_intensity: float | None = Field(default=None, ge=0, le=1)
     occasional_variations: bool = False
     variation_seed: int = Field(default=0, ge=0, le=2**31-1)
-    contextual_actions: list[Literal['lamp_on_with_gesture', 'lamp_glow_auto', 'fireplace_glow_rises']] = Field(default_factory=list, max_length=3)
+    contextual_actions: list[ContextualAction] = Field(default_factory=list, max_length=3)
 
     @model_validator(mode='after')
     def scene_rules(self):
