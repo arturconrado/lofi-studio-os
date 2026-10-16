@@ -130,6 +130,10 @@ def tick():
   print('Creator failure:',type(e).__name__,flush=True)
 def main():
  init_db();CACHE.mkdir(exist_ok=True,parents=True)
+ # Productions advance between and during long batches (booking, local exports).
+ import threading
+ from .productions import loop
+ threading.Thread(target=loop,daemon=True,name='orchestrator').start()
  while True:
   try:tick()
   except Exception as e:print('Creator queue:',type(e).__name__,flush=True)

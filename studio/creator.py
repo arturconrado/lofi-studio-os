@@ -97,6 +97,24 @@ def recipe_prompt(prompt,recipe):
  m=recipe['music'];v=recipe['visual']
  prompt=prompt.replace(' or jazzhop,',',').replace('painterly lo-fi illustration',v['image_prompt_suffix'].rstrip('.') if v['variant']=='canonical_illustrated' else 'reviewed pixel-art variant of the canonical lo-fi illustration')
  return prompt+'. Channel recipe: '+recipe['copy']['style_title']+'. Musical direction: '+(m.get('bible') or DIRECTIONS[m['style_id']])+(' Instruments: '+', '.join(m['instruments'])+'.' if m.get('instruments') else '')
+def authorize_batch(c,plan_id,plan_data,minutes,channel_id,budget):
+ """Book one bounded music batch for a plan. Caller holds lock 192837467 and checked paid generation."""
+ if c.execute("SELECT 1 FROM production_batches WHERE channel_id=%s AND state IN ('producing','waiting','queued')",(channel_id,)).fetchone():raise HTTPException(409,'Este canal já tem um lote em produção ou na fila. Aguarde antes de criar outro para ele.')
+ image_reserve=Decimal('0') if plan_data.get('visual_reference') else Decimal('.15')
+ from .audio_mix import estimated_tracks
+ estimate=image_reserve+Decimal(estimated_tracks(minutes*60,plan_data.get('mix_crossfade_seconds',1.5)))*Decimal('.08')
+ if budget<estimate:raise HTTPException(422,'O teto precisa cobrir as músicas e o visual escolhido; a duração real pode exigir faixas adicionais.')
+ booked=c.execute("""SELECT COALESCE(sum(GREATEST(b.budget-
+    COALESCE((SELECT sum(GREATEST(j.estimated_cost,COALESCE(j.actual_cost,0))) FROM jobs j WHERE j.track_id LIKE b.id||'-%'),0)-
+    COALESCE((SELECT sum(f.reserved_cost) FROM factory_tasks f WHERE f.payload->>'batch'=b.id),0),0)),0) n
+    FROM creator_plans p JOIN production_batches b ON b.id=p.program_id WHERE p.status IN ('queued','processing')""").fetchone()['n']
+ remaining=Decimal(runtime.settings(c)['total_limit'])-usage(c)-Decimal(booked)
+ if estimate>remaining:raise HTTPException(409,f'A estimativa de US${estimate:.2f} supera o limite disponível de US${max(remaining,Decimal(0)):.2f}. Ajuste o limite acumulado antes de produzir.')
+ bid='LOFI-'+str(plan_id).split('-')[0].upper()
+ c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,detail,channel_id) VALUES(%s,'queued',%s,%s,'Aguardando produção autorizada pelo usuário',%s)",(bid,minutes*60,budget,channel_id))
+ c.execute("UPDATE creator_plans SET program_id=%s,data=%s,status='queued' WHERE id=%s",(bid,json.dumps(plan_data),plan_id))
+ c.execute('INSERT INTO program_metadata(program_id,title,description,theme,music_description,alternatives,keywords) VALUES(%s,%s,%s,%s,%s,%s,%s)',(bid,plan_data['title'],plan_data['description'],plan_data['theme'],plan_data.get('music_description',''),json.dumps(plan_data.get('alternative_titles',[])),json.dumps(plan_data.get('keywords',[]))));audit(c,'CREATOR_BATCH_AUTHORIZED',bid,str(budget))
+ return bid
 class CreateRequest(BaseModel):
  plan_id:uuid.UUID
  plan:CreativePlan
@@ -132,22 +150,9 @@ def produce(body:CreateRequest):
    source=c.execute("SELECT a.* FROM ambient_pilots a JOIN youtube_publications y ON y.pilot_id=a.id WHERE a.id=%s AND a.channel_id=%s AND y.channel_id=%s AND y.state='uploaded'",(body.visual_source_pilot_id,p['channel_id'],p['channel_id'])).fetchone()
    if not source or not ready_pilot(source):raise HTTPException(404,'Escolha um episódio de 1h publicado neste canal')
    reference={'pilot_id':str(source['id']),'title':source['title'],'silent_key':source['silent_key'],'report':source['report']}
-  image_reserve=Decimal('0') if reference else Decimal('.15')
-  from .audio_mix import estimated_tracks
-  estimate=image_reserve+Decimal(estimated_tracks(p['minutes']*60,body.plan.mix_crossfade_seconds))*Decimal('.08')
-  if body.budget<estimate:raise HTTPException(422,'O teto precisa cobrir as músicas e o visual escolhido; a duração real pode exigir faixas adicionais.')
   plan_data=body.plan.model_dump()
   if reference:plan_data['visual_reference']=reference
-  booked=c.execute("""SELECT COALESCE(sum(GREATEST(b.budget-
-    COALESCE((SELECT sum(GREATEST(j.estimated_cost,COALESCE(j.actual_cost,0))) FROM jobs j WHERE j.track_id LIKE b.id||'-%'),0)-
-    COALESCE((SELECT sum(f.reserved_cost) FROM factory_tasks f WHERE f.payload->>'batch'=b.id),0),0)),0) n
-    FROM creator_plans p JOIN production_batches b ON b.id=p.program_id WHERE p.status IN ('queued','processing')""").fetchone()['n']
-  remaining=Decimal(runtime.settings(c)['total_limit'])-usage(c)-Decimal(booked)
-  if estimate>remaining:raise HTTPException(409,f'A estimativa de US${estimate:.2f} supera o limite disponível de US${max(remaining,Decimal(0)):.2f}. Ajuste o limite acumulado antes de produzir.')
-  bid='LOFI-'+str(body.plan_id).split('-')[0].upper()
-  c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,detail,channel_id) VALUES(%s,'queued',%s,%s,'Aguardando produção autorizada pelo usuário',%s)",(bid,p['minutes']*60,body.budget,p.get('channel_id','00000000-0000-0000-0000-000000000001')))
-  c.execute("UPDATE creator_plans SET program_id=%s,data=%s,status='queued' WHERE id=%s",(bid,json.dumps(plan_data),body.plan_id))
-  c.execute('INSERT INTO program_metadata(program_id,title,description,theme,music_description,alternatives,keywords) VALUES(%s,%s,%s,%s,%s,%s,%s)',(bid,body.plan.title,body.plan.description,body.plan.theme,body.plan.music_description,json.dumps(body.plan.alternative_titles),json.dumps(body.plan.keywords)));audit(c,'CREATOR_BATCH_AUTHORIZED',bid,str(body.budget));c.commit()
+  bid=authorize_batch(c,body.plan_id,plan_data,p['minutes'],p.get('channel_id','00000000-0000-0000-0000-000000000001'),body.budget);c.commit()
  return {'id':bid}
 class Metadata(BaseModel):
  music_description:str=Field(default='',max_length=1500)
@@ -285,6 +290,9 @@ router.include_router(event_proposals_router)
 from .recipes import router as recipes_router,channel_router as channel_recipes_router
 router.include_router(recipes_router)
 router.include_router(channel_recipes_router)
+
+from .productions import router as productions_router
+router.include_router(productions_router)
 
 
 @router.get('/pose-library')
