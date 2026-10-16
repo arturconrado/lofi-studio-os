@@ -21,3 +21,4 @@ def test_catalog_lists_registry_options(client):
     scenes={s['id']:s for s in body['scenes']}
     assert set(scenes)==set(SCENES) and scenes['snowy_night_studio']['approved'] and not scenes['city_sunset']['approved']
     assert 'royal blue' in body['shirt_colors'] and 'custom_markers' in body['cadences']
+    assert scenes['snowy_night_studio']['reference']['setting'].startswith('Rustic log cabin') and body['canonical_identity']['girl']

@@ -96,6 +96,10 @@ def recipe_prompt(prompt,recipe):
  from .music_styles import DIRECTIONS
  m=recipe['music'];v=recipe['visual']
  prompt=prompt.replace(' or jazzhop,',',').replace('painterly lo-fi illustration',v['image_prompt_suffix'].rstrip('.') if v['variant']=='canonical_illustrated' else 'reviewed pixel-art variant of the canonical lo-fi illustration')
+ if v['variant']!='canonical_illustrated':
+  from .visual_identity import reference_brief
+  ref=reference_brief(v.get('default_scenario'))
+  if ref:prompt+='. Keep the canonical identity exactly: '+ref['identity']['girl']+' '+ref['identity']['cat']
  return prompt+'. Channel recipe: '+recipe['copy']['style_title']+'. Musical direction: '+(m.get('bible') or DIRECTIONS[m['style_id']])+(' Instruments: '+', '.join(m['instruments'])+'.' if m.get('instruments') else '')
 def authorize_batch(c,plan_id,plan_data,minutes,channel_id,budget):
  """Book one bounded music batch for a plan. Caller holds lock 192837467 and checked paid generation."""
@@ -266,11 +270,15 @@ def creative_catalog():
  from .scene_profiles import SCENES,LEGACY
  from .action_states import SEQUENCES
  from .production_harness import COLORS,PRESETS
+ from .visual_identity import reference_brief
  scenes=[{'id':k,'label':s['label'],'approved':k not in LEGACY,'approved_pilot_id':s['approved_pilot_id'],'props':s['props'],
-          'objects':sorted(s['objects']),'weather':s['weather'],'allowed_weather':s['allowed_weather'],'period':s['period'],'allowed_periods':s['allowed_periods']} for k,s in SCENES.items()]
+          'objects':sorted(s['objects']),'weather':s['weather'],'allowed_weather':s['allowed_weather'],'period':s['period'],'allowed_periods':s['allowed_periods'],
+          'reference':(reference_brief(k) or {}).get('scene')} for k,s in SCENES.items()]
+ from .visual_identity import REGISTRY
  return {'styles':STYLES,'scenes':scenes,'shirt_colors':COLORS,'cadences':sorted(PRESETS)+['custom_markers'],
          'sequences':[{'id':k,'requires':sorted(v.get('requires',[]))} for k,v in SEQUENCES.items()],
-         'contextual_actions':['lamp_on_with_gesture','lamp_glow_auto','fireplace_glow_rises'],'hours':{'min':1,'max':8}}
+         'contextual_actions':['lamp_on_with_gesture','lamp_glow_auto','fireplace_glow_rises'],'hours':{'min':1,'max':8},
+         'canonical_identity':REGISTRY.get('canonical_identity')}
 
 from .motion_validation import router as motion_validation_router
 router.include_router(motion_validation_router)

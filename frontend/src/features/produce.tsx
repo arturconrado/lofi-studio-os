@@ -108,7 +108,7 @@ export function Produce() {
         <div class="card stack">
           <h3>3. Cena</h3>
           <div class="grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: '8px' }}>
-            {scenes.map(s => <button type="button" class="scene" aria-pressed={s.id === scenario} onClick={() => setScenario(s.id)}><b>{s.label.split(' · ')[0]}</b><span class="faint" style={{ fontSize: '12px' }}>{s.label.split(' · ')[1] || ''}</span></button>)}
+            {scenes.map(s => <button type="button" class="scene" aria-pressed={s.id === scenario} title={s.reference?.setting} onClick={() => setScenario(s.id)}><b>{s.label.split(' · ')[0]}</b><span class="faint" style={{ fontSize: '12px' }}>{s.label.split(' · ')[1] || ''}</span></button>)}
           </div>
           {recipe && recipe.data.visual.variant !== 'canonical_illustrated' && <div class="notice">Receita em pixel art: usa o episódio de referência aprovado para esta variante.</div>}
         </div>

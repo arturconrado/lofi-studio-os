@@ -125,7 +125,7 @@ export function RecipeEditor({ id }: { id?: string }) {
         {v.variant !== 'canonical_illustrated' && <div class="notice">Pixel art é uma variante da mesma garota e do mesmo gato. Escolha o episódio de referência abaixo; a receita só pode ser usada depois que você aprovar a comparação na Revisão.</div>}
         <Field label="Cena padrão">
           <div class="grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: '8px' }}>
-            {scenes.filter(s => s.approved).map(s => <button type="button" class="scene" aria-pressed={v.default_scenario === s.id} onClick={() => setData((d: any) => ({ ...d, visual: { ...d.visual, default_scenario: s.id, allowed_scenarios: d.visual.allowed_scenarios.length && !d.visual.allowed_scenarios.includes(s.id) ? [...d.visual.allowed_scenarios, s.id] : d.visual.allowed_scenarios } }))}><b>{s.label.split(' · ')[0]}</b><span class="faint" style={{ fontSize: '12px' }}>{s.label.split(' · ')[1]}</span></button>)}
+            {scenes.filter(s => s.approved).map(s => <button type="button" class="scene" aria-pressed={v.default_scenario === s.id} title={s.reference?.setting} onClick={() => setData((d: any) => ({ ...d, visual: { ...d.visual, default_scenario: s.id, allowed_scenarios: d.visual.allowed_scenarios.length && !d.visual.allowed_scenarios.includes(s.id) ? [...d.visual.allowed_scenarios, s.id] : d.visual.allowed_scenarios } }))}><b>{s.label.split(' · ')[0]}</b><span class="faint" style={{ fontSize: '12px' }}>{s.label.split(' · ')[1]}</span></button>)}
           </div>
         </Field>
         <Field label="Cenas permitidas" hint="Nenhuma marcada = todas as aprovadas">
