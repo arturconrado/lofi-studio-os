@@ -72,6 +72,7 @@ def tick():
             sheet=storyboard_sheet(final,report['sample_map'],folder/'storyboard.jpg')
             extra['storyboard_key']=f'creator-timelines/{row["id"]}/storyboard.jpg'
             storage().upload_file(str(sheet),os.environ['S3_BUCKET'],extra['storyboard_key'],ExtraArgs={'ContentType':'image/jpeg'})
+        report['local_resources']['uploaded_bytes']=final.stat().st_size+(Path(folder/'storyboard.jpg').stat().st_size if extra else 0)
         report_key=f'creator-timelines/{row["id"]}/report.json'
         storage().put_object(Bucket=os.environ['S3_BUCKET'],Key=report_key,Body=json.dumps(report).encode(),ContentType='application/json')
         with db() as c:

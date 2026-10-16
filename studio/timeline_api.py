@@ -162,6 +162,20 @@ def public_job(row):
         'paid_calls':0,'broadcast_started':False,'preview_only':p.get('preview_only',False)}
 
 
+def published(c,row):
+    if not row.get('program_id') or not c.execute("SELECT to_regclass('youtube_publications') t").fetchone()['t']:return False
+    return bool(c.execute('SELECT 1 FROM youtube_publications y JOIN export_jobs e ON e.id=y.export_id WHERE e.program_id=%s AND y.video_id IS NOT NULL',(row['program_id'],)).fetchone())
+
+
+@router.get('/plans/{pid}/economics')
+def plan_economics(pid:uuid.UUID):
+    with db() as c:
+        row=get_plan(c,pid)
+        jobs=c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'plan_id'=%s ORDER BY created_at DESC LIMIT 50",(KIND,str(pid))).fetchall()
+        from .episode_state import economics
+        return economics(c,row,jobs)|{'paid_calls':0}
+
+
 @router.get('/plans/{pid}')
 def status(pid:uuid.UUID):
     with db() as c:
@@ -170,6 +184,8 @@ def status(pid:uuid.UUID):
         jobs=c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'plan_id'=%s ORDER BY created_at DESC LIMIT 10",(KIND,str(pid))).fetchall()
         scenes=c.execute('SELECT s.batch_id,s.id,s.title,s.image_key FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.image_key IS NOT NULL ORDER BY s.batch_id,s.position',(row['channel_id'],)).fetchall()
         programs=c.execute("SELECT b.id,COALESCE(m.title,b.id) title,b.seconds FROM production_batches b LEFT JOIN program_metadata m ON m.program_id=b.id WHERE b.channel_id=%s AND b.audio_key IS NOT NULL AND b.manifest_key IS NOT NULL ORDER BY b.updated_at DESC",(row['channel_id'],)).fetchall()
+        from .episode_state import derive
+        state=derive(row,result,jobs,inputs_hash(row,result),published(c,row))
     from .visual_identity import REGISTRY
     scenes=[{k:v for k,v in scene.items() if k!='image_key'} for scene in scenes if scene['image_key'] not in REGISTRY['rejected_keys']]
     actions=[]
@@ -182,7 +198,7 @@ def status(pid:uuid.UUID):
     return {'plan_id':pid,'input_sha256':inputs_hash(row,result),'preflight':result,'actions':actions,'audio_programs':programs,'scene_sources':scenes,
             'audio':{k:v for k,v in (row['data'].get('assembly_audio') or {}).items() if k not in ('audio_key',)},
             'environment':row['data'].get('assembly_environment'),'worker_online':online,
-            'jobs':[public_job(j)|{'inputs_current':j['payload'].get('input_sha256')==inputs_hash(row,result)} for j in jobs],'reusable_clips':len(available),'identity_sources':identities,'identity_bound':bool(row['data']['production_spec'].get('character_reference') and row['data']['production_spec'].get('cat_reference')),'paid_calls':0}
+            'jobs':[public_job(j)|{'inputs_current':j['payload'].get('input_sha256')==inputs_hash(row,result)} for j in jobs],'reusable_clips':len(available),'identity_sources':identities,'identity_bound':bool(row['data']['production_spec'].get('character_reference') and row['data']['production_spec'].get('cat_reference')),'episode_state':state,'paid_calls':0}
 
 
 @router.post('/plans/{pid}/clips/{action}')

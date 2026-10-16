@@ -212,8 +212,29 @@ def save_checkpoint(path, chunk, binding, seconds):
     temporary.replace(path)
 
 
+def scratch_bytes(folder):
+    return sum(p.stat().st_size for p in Path(folder).rglob('*') if p.is_file())
+
+
+def resource_report(started,cpu_before,peak,output,target):
+    """Measured local resources; money only when the operator configured real rates."""
+    import os,resource
+    usage=resource.getrusage(resource.RUSAGE_CHILDREN);cpu=usage.ru_utime+usage.ru_stime-cpu_before
+    elapsed=time.monotonic()-started;size=Path(output).stat().st_size;per_hour=3600/max(target,1)
+    cpu_rate=os.getenv('LOFI_CPU_HOUR_USD');storage_rate=os.getenv('LOFI_STORAGE_GB_MONTH_USD')
+    cost=None
+    if cpu_rate and storage_rate:cost=round(cpu/3600*float(cpu_rate)+size/1024**3*float(storage_rate),4)
+    return {'elapsed_seconds':round(elapsed,3),'cpu_seconds':round(cpu,3),'output_bytes':size,'scratch_peak_bytes':peak,
+            'realtime_factor':round(elapsed/max(target,1),4),
+            'per_program_hour':{'elapsed_seconds':round(elapsed*per_hour,1),'cpu_seconds':round(cpu*per_hour,1),
+                                'output_bytes':round(size*per_hour),'scratch_peak_bytes':round(peak*per_hour)},
+            'infrastructure_cost_usd':cost,'cost_rates_configured':cost is not None,
+            'estimate_basis':'linear extrapolation from this render; confirm with a real long render before promising 4/8h'}
+
+
 def render(compiled,plan,sources,audio,environment,output,progress=None,width=1280,height=720,fps=24):
-    started=time.monotonic()
+    import resource
+    started=time.monotonic();usage=resource.getrusage(resource.RUSAGE_CHILDREN);cpu_before=usage.ru_utime+usage.ru_stime;peak=0
     output=Path(output);folder=output.parent;folder.mkdir(parents=True,exist_ok=True)
     target=float(compiled['duration_seconds']);segments=plan['segments']
     if not plan['assets_ready'] or not segments:raise ValueError('Reviewed action clips required')
@@ -290,6 +311,7 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
         previous=folder/'boundary.png'
         subprocess.run(['ffmpeg','-v','error','-y','-ss',str(max(0,seconds-1/fps)),'-i',str(chunk),'-frames:v','1','-threads','1',str(previous)],check=True,timeout=30,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         chunks.append(chunk);receipts.append({**segment,'rendered_seconds':seconds,'source_verified':True,'checkpoint_reused':reused,'transition_seconds':.35 if index else 0})
+        peak=max(peak,scratch_bytes(folder))
         if progress:progress(index+1,len(segments),segment['end'])
         if shutil.disk_usage(folder).free<512*1024**2:raise ValueError('Scratch capacity exhausted')
     listing=folder/'chunks.txt';listing.write_text(''.join(f"file '{p.name}'\n" for p in chunks))
@@ -302,6 +324,8 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
     if evidence['duration_seconds']+.001<target or not evidence['full_decode_pass']:raise ValueError('Final duration or decode check failed')
     evidence.update(demo_only=False,timeline_coverage_seconds=target,source_preserved=True,
                     continuous_transitions_reviewed=False,perceptible_motion_reviewed=False,time_progression_reviewed=False)
-    return {'video':evidence,'segments':receipts,'local_resources':{'elapsed_seconds':round(time.monotonic()-started,3),'output_bytes':output.stat().st_size,'checkpoint_reused_segments':sum(bool(s['checkpoint_reused']) for s in receipts),'infrastructure_cost_usd':None},'paid_calls':0,'environment_clock':'absolute_no_hourly_reset',
+    resources=resource_report(started,cpu_before,max(peak,scratch_bytes(folder)),output,target)
+    resources['checkpoint_reused_segments']=sum(bool(s['checkpoint_reused']) for s in receipts)
+    return {'video':evidence,'segments':receipts,'local_resources':resources,'paid_calls':0,'environment_clock':'absolute_no_hourly_reset',
             'eligible_for_live':False,'final_human_review_required':True,'target_seconds':target,'preview_only':compiled.get('preview_only',False),'parent_spec_sha256':compiled.get('spec_sha256'),'clock_offset_seconds':compiled.get('clock_offset_seconds',0),
             'preview_mode':compiled.get('preview_mode','window' if compiled.get('preview_only') else None),'sample_map':compiled.get('sample_map')}

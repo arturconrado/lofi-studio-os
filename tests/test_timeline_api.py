@@ -169,3 +169,11 @@ def test_approved_scene_regions_need_no_cushion_and_clip_masks_bind_to_clip(clie
     # Re-saving fixed regions keeps per-clip masks.
     assert client.post(base+'/regions',json=regions,headers=headers).status_code==200
     assert clip['sha256'] in client.get(base).json()['environment']['clip_masks']
+
+
+def test_status_exposes_episode_state_and_economics_without_cost_claims(client):
+    pid,headers,_,_=draft(client);base='/api/creator/assembly/plans/'+pid
+    assert client.get(base).json()['episode_state']['state']=='DRAFT'
+    e=client.get(base+'/economics').json()
+    assert e['approved_videos']==0 and e['cost_per_approved_video_usd'] is None and e['infrastructure_usd'] is None
+    assert e['paid_calls']==0
