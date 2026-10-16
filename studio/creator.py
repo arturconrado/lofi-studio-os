@@ -249,3 +249,6 @@ router.include_router(timeline_router)
 
 from .harness_profiles import router as harness_profiles_router
 router.include_router(harness_profiles_router)
+
+from .event_proposals import router as event_proposals_router
+router.include_router(event_proposals_router)
