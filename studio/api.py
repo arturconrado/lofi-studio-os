@@ -383,6 +383,8 @@ def program_player():
 
 from .creator import router as creator_router
 app.include_router(creator_router)
+from .events import router as events_router
+app.include_router(events_router)
 
 from .channels import router as channels_router
 app.include_router(channels_router)

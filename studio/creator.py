@@ -294,6 +294,9 @@ router.include_router(channel_recipes_router)
 from .productions import router as productions_router
 router.include_router(productions_router)
 
+from .inbox import router as inbox_router
+router.include_router(inbox_router)
+
 
 @router.get('/pose-library')
 def pose_library():
