@@ -21,6 +21,7 @@ O compositor temporal existe, mas faltam assets/revisões para a sequência comp
 7. [Backlog priorizado e rollback](07-BACKLOG_INCREMENTAL.md)
 8. [Decisões e limites](08-DECISOES_E_LIMITES.md)
 9. [Áudio, proveniência e custos](09-AUDIO_PROVENIENCIA_E_CUSTOS.md)
+10. [Lacunas atuais após a recuperação SDD v2](10-LACUNAS_POS_RECUPERACAO.md): substitui a matriz 04 como lista viva; 01–09 refletem `bf5c851`
 
 ## Evidências visuais
 

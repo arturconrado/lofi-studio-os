@@ -13,7 +13,9 @@ from fastapi.responses import JSONResponse
 @app.exception_handler(RequestValidationError)
 async def invalid_request(request,exc):
     fields=', '.join('.'.join(str(x) for x in e['loc']) for e in exc.errors())
-    return JSONResponse({'detail':'Campos inválidos: '+fields},status_code=422)
+    # Rule messages are authored server-side (value_error) and never echo input values.
+    rules=sorted({str(e['msg']).removeprefix('Value error, ') for e in exc.errors() if e.get('type')=='value_error'})
+    return JSONResponse({'detail':'Campos inválidos: '+fields+(' · '+' · '.join(rules) if rules else '')},status_code=422)
 
 app.mount('/static',StaticFiles(directory=str(Path(__file__).resolve().parent.parent/'web')),name='static')
 

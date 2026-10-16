@@ -27,6 +27,9 @@ def test_empty_scene_direction_preserves_existing_asset_hash():
     old.pop('cadence')
     old.pop('scene_brief')
     old.pop('program_budget_usd')
+    # Specs stored before scene profiles had none of the neutral episode fields.
+    from studio.production_harness import NEUTRAL
+    for key in NEUTRAL:old.pop(key)
     legacy = hashlib.sha256(json.dumps(old, sort_keys=True).encode()).hexdigest()
     assert production_spec_hash(old) == legacy
     assert production_spec_hash(ProductionSpec().model_dump()) == legacy

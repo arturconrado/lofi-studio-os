@@ -11,8 +11,9 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 from .production_harness import assembly_plan, production_spec_hash
+from .selective_color import mask_planes
 
 
 def file_hash(path):
@@ -36,7 +37,7 @@ def measure(path,kind):
 def preflight(compiled,assets,audio,environment):
     plan=assembly_plan(compiled,assets)
     from .action_states import validate
-    failures=validate(compiled['events'])
+    failures=validate(compiled['events'],compiled.get('objects_initial'))
     if not plan['assets_ready']:failures.append('action_clips_missing')
     digest=compiled.get('spec_sha256') or production_spec_hash(compiled['spec'])
     if not audio or not (audio.get('human_review_sha256')==audio.get('sha256') and audio.get('sha256') and audio.get('style_reviewed') and audio.get('source_preserved') and audio.get('spec_sha256')==digest):
@@ -47,8 +48,10 @@ def preflight(compiled,assets,audio,environment):
     if not environment or environment.get('spec_sha256')!=digest or environment.get('reviewed') is not True or environment.get('region_asset_shas')!=current_shas:
         failures.append('scene_regions_review_missing')
     if environment and environment.get('recolor'):
-        current=sorted({s['asset_sha256'] for s in plan['segments'] if s.get('asset_sha256')})
-        if current!=environment.get('recolor_asset_shas') or environment.get('recolor_color')!=compiled['identity']['shirt_color']:failures.append('recolor_masks_review_missing')
+        current={s['asset_sha256'] for s in plan['segments'] if s.get('asset_sha256')}
+        # Each clip needs a reviewed fixed mask or its own reviewed keyframed masks.
+        covered=set(environment.get('recolor_asset_shas') or [])|{k for k,v in (environment.get('clip_masks') or {}).items() if v.get('reviewed')}
+        if not current<=covered or environment.get('recolor_color')!=compiled['identity']['shirt_color']:failures.append('recolor_masks_review_missing')
     return {'ready':not failures,'failures':failures,'assembly':plan,'generation_started':False,
             'paid_calls':0,'final_review_required':True}
 
@@ -73,14 +76,76 @@ def clock_expression(frames,key,offset):
     return expression
 
 
-def environment_files(environment,folder,size):
-    w,h=size;files={}
+def polygon_mask(points,size):
+    im=Image.new('L',size);w,h=size
+    if points:ImageDraw.Draw(im).polygon([(round(x*w),round(y*h)) for x,y in points],fill=255)
+    return im
+
+
+def weather_frames(overlay,sky,folder,size,fps,seed):
+    """Seamless local precipitation/haze inside the reviewed sky region only."""
+    import random
+    w,h=size;rng=random.Random(seed);kind=overlay['type'];intensity=float(overlay['intensity'])
+    count=1 if kind=='fog' else fps*2
+    if kind=='fog':
+        im=Image.new('RGBA',size,(225,230,240,0));im.putalpha(sky.point(lambda v:round(v*.35*intensity)))
+        im.save(folder/'weather-000.png');return str(folder/'weather-%03d.png')
+    # Integer laps over the loop make the last frame continue into the first.
+    laps=3 if kind=='rain' else 1
+    drops=[(rng.random(),rng.random(),rng.uniform(.6,1),rng.random()) for _ in range(round((900 if kind=='rain' else 450)*intensity))]
+    for i in range(count):
+        im=Image.new('RGBA',size);d=ImageDraw.Draw(im);u=i/count
+        for x0,y0,depth,phase in drops:
+            y=((y0+u*laps)%1)*h
+            if kind=='rain':
+                x=x0*w;length=max(3,round(h*.025*depth));d.line((x,y,x-length*.18,y+length),fill=(200,215,235,round(70*depth)),width=1)
+            else:
+                import math
+                x=(x0*w+math.sin(2*math.pi*(u+phase))*w*.006)%w;r=max(1,round(2.2*depth));d.ellipse((x-r,y-r,x+r,y+r),fill=(245,248,255,round(160*depth)))
+        im.putalpha(ImageChops.multiply(im.getchannel('A'),sky));im.save(folder/f'weather-{i:03}.png')
+    return str(folder/'weather-%03d.png')
+
+
+def interpolate_regions(keyframes,seconds):
+    frames=sorted(keyframes,key=lambda k:k['t'])
+    if seconds<=frames[0]['t']:return frames[0]
+    for a,b in zip(frames,frames[1:]):
+        if seconds<=b['t']:
+            u=(seconds-a['t'])/(b['t']-a['t'])
+            return {k:[(x+(bx-x)*u,y+(by-y)*u) for (x,y),(bx,by) in zip(a[k],b[k])] for k in a if k!='t'}
+    return frames[-1]
+
+
+def clip_mask_frames(animated,folder,size,fps,seconds,sha):
+    """One mask per source frame, built from reviewed keyframes; cached per clip."""
+    from .selective_color import editable_mask
+    target=folder/f'clipmask-{sha[:16]}';pattern=str(target/'m-%05d.png')
+    count=max(1,int(round(seconds*fps)))
+    if target.exists() and len(list(target.glob('m-*.png')))==count:return pattern
+    target.mkdir(exist_ok=True)
+    for i in range(count):
+        regions=interpolate_regions(animated['keyframes'],i/fps)
+        editable=Image.new('L',size);protected=Image.new('L',size)
+        for name in ('shirt','cushion_color'):editable=ImageChops.lighter(editable,polygon_mask(regions.get(name),size))
+        for name in ('protected_girl','protected_cat','protected_hands'):protected=ImageChops.lighter(protected,polygon_mask(regions.get(name),size))
+        try:mask=editable_mask(editable,protected)
+        except ValueError:mask=Image.new('L',size)  # Fully occluded outfit keeps original colors.
+        mask.save(target/f'm-{i:05}.png')
+    return pattern
+
+
+def environment_files(environment,folder,size,lighting=None,fps=24):
+    w,h=size;files={};lighting=lighting or {}
     for name in ('sky','lights'):
-        im=Image.new('L',size)
-        if environment[name]:ImageDraw.Draw(im).polygon([(round(x*w),round(y*h)) for x,y in environment[name]],fill=255)
+        im=polygon_mask(environment.get(name),size)
         path=folder/(name+'.png');im.save(path);files[name]=path
+    # Object light only exists when the plan schedules it and a region was reviewed.
+    for name,region in (('fire','fire'),('lamp','lamp_glow')):
+        if environment.get(region) and name in lighting.get('object_keyframes',{}):
+            path=folder/(name+'.png');polygon_mask(environment[region],size).save(path);files[name]=path
+    from .scene_profiles import SCENES
     # Sparse stars are composed locally inside the reviewed sky region.
-    if environment.get('scenario')=='mountain_stars':
+    if SCENES.get(environment.get('scenario'),{}).get('stars'):
         import random
         sky=Image.open(files['sky']);im=Image.new('L',size);d=ImageDraw.Draw(im);rng=random.Random(environment['spec_sha256'])
         for _ in range(1000):
@@ -88,15 +153,15 @@ def environment_files(environment,folder,size):
             if sky.getpixel((x,y)) and rng.random()<.08:d.ellipse((x,y,x+1,y+1),fill=rng.randrange(140,256))
         path=folder/'stars.png';im.save(path);files['stars']=path
     if environment.get('recolor'):
-        from PIL import ImageChops
+        from .selective_color import editable_mask
         editable=Image.new('L',size);protected=Image.new('L',size)
-        for name in ('shirt','cushion_color'):
-            ImageDraw.Draw(editable).polygon([(round(x*w),round(y*h)) for x,y in environment[name]],fill=255)
-        for name in ('protected_girl','protected_cat','protected_hands'):
-            ImageDraw.Draw(protected).polygon([(round(x*w),round(y*h)) for x,y in environment[name]],fill=255)
-        editable=ImageChops.subtract(editable,protected)
-        if not editable.getbbox():raise ValueError('No editable pixels outside protected regions')
-        path=folder/'recolor-mask.png';editable.save(path);files['recolor']=path
+        for name in ('shirt','cushion_color'):editable=ImageChops.lighter(editable,polygon_mask(environment.get(name),size))
+        for name in ('protected_girl','protected_cat','protected_hands'):protected=ImageChops.lighter(protected,polygon_mask(environment.get(name),size))
+        path=folder/'recolor-mask.png';editable_mask(editable,protected).save(path);files['recolor']=path
+    if lighting.get('overlay') and environment.get('sky'):
+        files['weather']=weather_frames(lighting['overlay'],polygon_mask(environment['sky'],size),folder,size,fps,environment.get('spec_sha256',''))
+    # Approved scenes have no cushion; no lettering is invented for them.
+    if not environment.get('cushion_box'):return files
     x,y,bw,bh=environment['cushion_box'];box=(max(1,round(bw*w)),max(1,round(bh*h)))
     im=Image.new('RGBA',box);d=ImageDraw.Draw(im);font=ImageFont.load_default(size=max(8,min(round(box[1]*.45),round(box[0]/10))))
     d.text((box[0]/2,box[1]/2),'lo+fi vibe coding',font=font,anchor='mm',fill=(240,230,255,235),stroke_width=1,stroke_fill=(30,24,40,180))
@@ -165,8 +230,8 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
     needed=math.ceil(target*2_000_000/8*3+512*1024**2)
     if shutil.disk_usage(folder).free<needed:raise ValueError('Insufficient local scratch capacity')
     binding=checkpoint_binding(compiled,plan,environment,file_hash(audio),width,height,fps)
-    masks=environment_files(environment,folder,(width,height));chunks=[];previous=None;receipts=[]
-    frames=compiled['lighting']['keyframes']
+    masks=environment_files(environment,folder,(width,height),compiled['lighting'],fps);chunks=[];previous=None;receipts=[]
+    frames=compiled['lighting']['keyframes'];objects=compiled['lighting'].get('object_keyframes',{})
     for index,segment in enumerate(segments):
         seconds=float(segment['end']-segment['start']);source=Path(sources[segment['asset_sha256']]);available,_=measure(source,'video')
         idle=segment['action']=='typing_idle'
@@ -178,21 +243,32 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
         names={name:i+1 for i,name in enumerate(masks)}
         phase=segment.get('source_offset_seconds',0)%available if idle else segment.get('source_offset_seconds',0)
         filters=[f'[0:v]trim=start={phase},setpts=PTS-STARTPTS,fps={fps},scale={width}:{height},setsar=1,format=yuv420p[v0]']
-        night=clock_expression(frames,'night',segment['start']+compiled.get('clock_offset_seconds',0));dawn=clock_expression(frames,'sky_light',segment['start']+compiled.get('clock_offset_seconds',0));lights=clock_expression(frames,'city_lights',segment['start']+compiled.get('clock_offset_seconds',0))
-        brightness={'sky':f'(-0.18*({night})+0.12*({dawn}))','lights':f'(0.16*({lights}))','stars':f'(0.30*({night})*(0.7+0.3*sin((t+{segment["start"]+compiled.get("clock_offset_seconds",0)})*1.7)))'}
+        # Condensed previews carry each sample's own absolute program clock.
+        clock=segment.get('clock_seconds',segment['start']+compiled.get('clock_offset_seconds',0))
+        night=clock_expression(frames,'night',clock);dawn=clock_expression(frames,'sky_light',clock);lights=clock_expression(frames,'city_lights',clock)
+        brightness={'sky':f'(-0.18*({night})+0.12*({dawn}))','lights':f'(0.16*({lights}))','stars':f'(0.30*({night})*(0.7+0.3*sin((t+{clock})*1.7)))'}
+        if 'fire' in objects:brightness['fire']=f'(0.07*({clock_expression(objects["fire"],"fire",clock)})*(0.65+0.35*sin((t+{clock})*7.3)*sin((t+{clock})*2.9+1.3)))'
+        if 'lamp' in objects:brightness['lamp']=f'(0.14*({clock_expression(objects["lamp"],"lamp",clock)}))'
         last='v0'
-        for step,name in enumerate(k for k in masks if k not in ('label','recolor')):
-            filters += [f'[{last}]split[b{step}][s{step}]',f'[s{step}]eq=brightness=\'{brightness[name]}\':eval=frame[e{step}]',f'[{names[name]}:v]scale={width}:{height},format=gray[m{step}]',f'[b{step}][e{step}][m{step}]maskedmerge[v{step+1}]'];last=f'v{step+1}'
+        for step,name in enumerate(k for k in masks if k not in ('label','recolor','weather')):
+            filters += [f'[{last}]split[b{step}][s{step}]',f'[s{step}]eq=brightness=\'{brightness[name]}\':eval=frame[e{step}]',*mask_planes(f'{names[name]}:v',f'm{step}',width,height),f'[b{step}][e{step}][m{step}]maskedmerge[v{step+1}]'];last=f'v{step+1}'
         if 'recolor' in masks:
-            import colorsys
-            from .selective_color import PALETTE
-            hue=colorsys.rgb_to_hsv(*(v/255 for v in PALETTE[environment['recolor_color']]))[0]*360
-            filters += [f'[{last}]split[colorbase][colorinput]',f'[colorinput]hue=h=0:s=0,colorize=hue={hue}:saturation=0.6:lightness=0.5:mix=1[colored]',f'[{names["recolor"]}:v]scale={width}:{height},format=gray[colormask]',f'[colorbase][colored][colormask]maskedmerge[recolored]']
+            from .selective_color import ffmpeg_filters
+            animated=(environment.get('clip_masks') or {}).get(segment['asset_sha256'])
+            if animated:
+                # Reviewed keyframed masks follow the clip's own time, including loop phase.
+                sequence=clip_mask_frames(animated,folder,(width,height),fps,available,segment['asset_sha256'])
+                mask_index=len(masks)+1;args+=(['-loop','1'] if idle else [])+['-framerate',str(fps),'-i',sequence]
+                filters += [f'[{mask_index}:v]trim=start={phase},setpts=PTS-STARTPTS[clipmask]'];mask_label='clipmask'
+            else:mask_label=f'{names["recolor"]}:v'
+            filters += ffmpeg_filters(last,mask_label,environment['recolor_color'],width,height)
             last='recolored'
-        x,y,_,_=environment['cushion_box']
-        filters += [f'[{last}][{names["label"]}:v]overlay=x={round(x*width)}:y={round(y*height)}:shortest=1[labelled]'];last='labelled'
+        if 'weather' in masks:filters += [f'[{last}][{names["weather"]}:v]overlay=shortest=1[weathered]'];last='weathered'
+        if 'label' in masks:
+            x,y,_,_=environment['cushion_box']
+            filters += [f'[{last}][{names["label"]}:v]overlay=x={round(x*width)}:y={round(y*height)}:shortest=1[labelled]'];last='labelled'
         if previous:
-            prev_index=len(masks)+1;args+=['-loop','1','-framerate',str(fps),'-i',str(previous)]
+            prev_index=args.count('-i');args+=['-loop','1','-framerate',str(fps),'-i',str(previous)]
             filters += [f'[{last}]format=yuva420p,fade=t=in:st=0:d=0.35:alpha=1[faded]',f'[{prev_index}:v][faded]overlay=shortest=1[transition]'];last='transition'
         chunk=folder/f'chunk-{index:04}.mp4'
         args+=['-filter_complex',';'.join(filters),'-map',f'[{last}]','-an','-t',str(seconds),'-c:v','libx264','-threads','1','-preset','veryfast','-crf','19','-pix_fmt','yuv420p','-g',str(fps*2),'-r',str(fps),str(chunk)]
