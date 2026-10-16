@@ -96,10 +96,10 @@ class Copy(BaseModel):
     model_config=ConfigDict(extra='forbid')
     style_title:str=Field(default='Lo-Fi',min_length=1,max_length=60)
     title_template:str=Field(default='{scene_title} | {hours_label} of {style_title} for Coding',max_length=200)
-    description_template:str=Field(default='Original instrumental {style_title} for coding, studying and deep focus, set in {scene_title}.\n\n{idea}\n\n{hashtags}',max_length=3000)
+    description_template:str=Field(default_factory=lambda:__import__('studio.copywriting',fromlist=['DEFAULT_TEMPLATE']).DEFAULT_TEMPLATE,max_length=3000)
     live_title_template:str=Field(default='{style_title} Radio · {scene_title} | Music for Coding',max_length=200)
     alt_title_templates:list[str]=Field(default_factory=list,max_length=3)
-    hashtags:list[str]=Field(default_factory=lambda:['#lofi','#coding'],max_length=3)
+    hashtags:list[str]=Field(default_factory=lambda:['#lofi','#codingmusic','#studymusic'],max_length=3)
     keywords:list[str]=Field(default_factory=list,max_length=12)
 
     @model_validator(mode='after')
@@ -195,6 +195,21 @@ def ensure(c):
         if not c.execute('SELECT 1 FROM recipes WHERE slug=%s',(style.replace('_','-'),)).fetchone():
             insert(c,style.replace('_','-'),title,'builtin',builtin(style))
     import_profiles(c)
+    refresh_builtin_copy(c)
+
+
+def refresh_builtin_copy(c):
+    """Untouched built-in recipes move to the viewer-first description, as a new revision."""
+    from .copywriting import OLD_TEMPLATE,DEFAULT_TEMPLATE
+    rows=c.execute('''SELECT r.id,v.data FROM recipes r JOIN recipe_revisions v ON v.recipe_id=r.id AND v.revision=r.current_revision
+      WHERE r.origin='builtin' AND v.data->'copy'->>'description_template'=%s''',(OLD_TEMPLATE,)).fetchall()
+    for row in rows:
+        data=row['data'];data['copy']=data['copy']|{'description_template':DEFAULT_TEMPLATE,'hashtags':['#lofi','#codingmusic','#studymusic']}
+        model=RecipeData.model_validate(data);sha=digest(model)
+        if c.execute('SELECT 1 FROM recipe_revisions WHERE sha256=%s',(sha,)).fetchone():continue
+        revision=c.execute('SELECT max(revision)+1 n FROM recipe_revisions WHERE recipe_id=%s',(row['id'],)).fetchone()['n']
+        c.execute('INSERT INTO recipe_revisions(recipe_id,revision,sha256,data) VALUES(%s,%s,%s,%s)',(row['id'],revision,sha,json.dumps(dump(model))))
+        c.execute('UPDATE recipes SET current_revision=%s,updated_at=now() WHERE id=%s',(revision,row['id']))
 
 
 def insert(c,slug,name,origin,data,review=None):

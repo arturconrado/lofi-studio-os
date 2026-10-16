@@ -65,8 +65,9 @@ def suggestions(p,recipe=None):
         from .recipes import RecipeData,render_copy
         data=RecipeData.model_validate(recipe['data']);copy=render_copy(data,recipe.get('scenario') or data.visual.default_scenario,recipe.get('hours',1))
         alternatives=[copy['live_title'],title,*copy['alternatives']][:3]
-    description=(p.get('description') or 'Instrumental lo-fi music for coding, studying and quiet focus.').strip()
-    description+='\n\nLive from our studio. Put on your headphones, settle into your workspace and enjoy instrumental music while you code, study or read.\n\nMusic and visuals produced with AI assistance. The visual animation repeats during the live.\n\nTell us what you are working on today.\n\n#lofi #coding #studymusic'
+    from .copywriting import organic,HASHTAGS
+    description=organic(p.get('description') or '',p.get('title')) or 'Instrumental lo-fi music for coding, studying and quiet focus.'
+    description+='\n\nLive from our studio: headphones on, settle into your workspace and stay as long as you like.\n\nWhat are you working on today? Tell us in the chat 👇\n\n'+HASHTAGS
     return {'title':title,'alternatives':alternatives,'description':description[:5000],'basis':'Tema e descrição do programa; proposta editorial, sem previsão de alcance.','theme':theme}
 
 def program_recipe(cid,program_id):

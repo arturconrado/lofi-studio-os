@@ -15,7 +15,7 @@ const GROUPS: Record<string, string[]> = {
   prontos: ['PRONTO_PARA_PUBLICAR', 'PUBLICADO', 'AO_VIVO'], encerrados: ['CANCELADO', 'ARQUIVADO'],
 };
 
-type Publication = { id: string; channel_id: string; title: string; privacy: string; actual_privacy: string | null; state: string; video_id: string | null; detail: string; created_at: string };
+type Publication = { id: string; channel_id: string; title: string; description: string; privacy: string; actual_privacy: string | null; state: string; video_id: string | null; detail: string; created_at: string };
 const PUB_STATE: Record<string, [string, string]> = { uploaded: ['ok', 'No YouTube'], queued: ['info', 'Na fila'], uploading: ['violet', 'Enviando'], held: ['', 'Pausado pela agenda'],
   interrupted: ['warn', 'Interrompido'], uncertain: ['warn', 'Incerto'], failed: ['bad', 'Falhou'], deleted: ['', 'Excluído'] };
 
@@ -23,6 +23,14 @@ function Publications({ cid }: { cid: string }) {
   const pubs = useResource<Publication[]>('/api/youtube/publications', ['production.updated'], []);
   const [removing, setRemoving] = useState<Publication | null>(null);
   const [sure, setSure] = useState(false);
+  const [editing, setEditing] = useState<Publication | null>(null);
+  const [text, setText] = useState('');
+  const [confirmEdit, setConfirmEdit] = useState(false);
+  const saveText = async () => {
+    if (!editing) return;
+    const ok = await attempt(() => post(`/api/youtube/publications/${editing.id}/metadata`, { description: text, confirm_update: true }), 'Descrição atualizada no YouTube');
+    if (ok !== undefined) { setEditing(null); pubs.reload(); }
+  };
   const list = (pubs.data || []).filter(p => p.channel_id === cid);
   if (!list.length) return null;
   const release = async (p: Publication) => {
@@ -52,10 +60,19 @@ function Publications({ cid }: { cid: string }) {
               <td>{p.actual_privacy || p.privacy}</td><td class="faint">{ago(p.created_at)}</td>
               <td style={{ textAlign: 'right' }}>
                 {p.state === 'held' && <button class="btn sm" onClick={() => release(p)}>Liberar envio</button>}
-                {p.state === 'uploaded' && <button class="btn danger sm" onClick={() => { setRemoving(p); setSure(false); }}>Excluir do YouTube</button>}
+                {p.state === 'uploaded' && <div class="row tight" style={{ justifyContent: 'flex-end' }}>
+                  <button class="btn sm" onClick={() => { setEditing(p); setText(p.description || ''); setConfirmEdit(false); }}>Editar descrição</button>
+                  <button class="btn danger sm" onClick={() => { setRemoving(p); setSure(false); }}>Excluir do YouTube</button></div>}
               </td>
             </tr>); })}</tbody></table>
       </div>
+      <Dialog open={!!editing} onClose={() => setEditing(null)} title={`Descrição · ${editing?.title || ''}`}>
+        <p class="faint" style={{ fontSize: '13px' }}>Escreva para o espectador: clima, cena, quando ouvir e um convite para comentar. Os capítulos (00:00 …) ajudam a reter quem assiste.</p>
+        <textarea class="textarea" style={{ minHeight: '320px' }} maxLength={5000} value={text} onInput={e => setText((e.target as HTMLTextAreaElement).value)} />
+        <span class="faint" style={{ fontSize: '12px' }}>{text.length}/5000</span>
+        <Check checked={confirmEdit} onChange={setConfirmEdit}>Atualizar a descrição publicada no YouTube</Check>
+        <div class="row"><button class="btn primary" disabled={!confirmEdit || !text.trim()} onClick={saveText}>Salvar no YouTube</button><button class="btn ghost" onClick={() => setEditing(null)}>Cancelar</button></div>
+      </Dialog>
       <Dialog open={!!removing} onClose={() => setRemoving(null)} title="Excluir do YouTube">
         <p>“{removing?.title}” será apagado do canal no YouTube, junto com visualizações e comentários. Os arquivos na plataforma continuam.</p>
         <Check checked={sure} onChange={setSure}>Entendo que a exclusão no YouTube é definitiva</Check>

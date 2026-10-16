@@ -89,3 +89,25 @@ def test_pixel_recipe_waits_for_reference_review(client):
     ok=client.post(path,json={'confirm_same_character':True,'confirm_same_cat':True,'confirm_framing':True,'note':'compared side by side with Snowy'},headers=h)
     assert ok.status_code==200 and ok.json()['visual_review']['same_cat']
     assert client.get(f"/api/creator/recipes/{created['id']}").json()['recipe']['usable']
+
+
+@DB
+def test_builtin_recipes_move_to_viewer_first_copy(client):
+    from studio.copywriting import OLD_TEMPLATE,DEFAULT_TEMPLATE
+    from studio.recipes import refresh_builtin_copy
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    _,owner=signup(client)
+    recipes={r['slug']:r for r in client.get('/api/creator/recipes').json()['recipes']}
+    marker=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:
+            rid=recipes['jazz-lofi']['id']
+            # As in production: revision 1 carries the old template and its own digest.
+            c.execute("UPDATE recipe_revisions SET data=jsonb_set(data,'{copy,description_template}',to_jsonb(%s::text)),sha256=%s WHERE recipe_id=%s",(OLD_TEMPLATE,'e'*64,rid))
+            refresh_builtin_copy(c);c.commit()
+            row=c.execute("SELECT r.current_revision,v.data FROM recipes r JOIN recipe_revisions v ON v.recipe_id=r.id AND v.revision=r.current_revision WHERE r.id=%s",(rid,)).fetchone()
+            assert row['current_revision']==2 and row['data']['copy']['description_template']==DEFAULT_TEMPLATE
+            refresh_builtin_copy(c);c.commit()
+            assert c.execute('SELECT count(*) n FROM recipe_revisions WHERE recipe_id=%s',(rid,)).fetchone()['n']==2
+    finally:WORKSPACE.reset(marker)
