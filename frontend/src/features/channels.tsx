@@ -50,13 +50,15 @@ function Connection({ cid }: { cid: string }) {
 function YouTube({ cid }: { cid: string }) {
   const yt = useResource<any[]>('/api/youtube/channels');
   const link = yt.data?.find(x => x.channel_id === cid);
-  const connect = async () => { const r = await attempt(() => post(`/api/youtube/channels/${cid}/connect?upload=true`)); if (r?.authorization_url) location.href = r.authorization_url; };
+  const connect = async (manage = false) => { const r = await attempt(() => post(`/api/youtube/channels/${cid}/connect?upload=true${manage ? '&manage=true' : ''}`)); if (r?.authorization_url) location.href = r.authorization_url; };
   const disconnect = () => confirm('Desconectar a conta do YouTube deste canal?') && attempt(async () => { await api(`/api/youtube/channels/${cid}`, { method: 'DELETE', json: { confirm_disconnect: true } }); yt.reload(); }, 'Desconectado');
   return (
     <div class="row">
-      {link ? <><Pill tone="ok">{link.youtube_title || 'Conectado'}</Pill>{link.upload_authorized ? <Pill tone="ok">Envio autorizado</Pill> : <Pill tone="warn">Sem permissão de envio</Pill>}</> : <Pill>Não conectado</Pill>}
+      {link ? <><Pill tone="ok">{link.youtube_title || 'Conectado'}</Pill>{link.upload_authorized ? <Pill tone="ok">Envio autorizado</Pill> : <Pill tone="warn">Sem permissão de envio</Pill>}
+        {link.delete_authorized ? <Pill tone="ok">Pode excluir vídeos</Pill> : <Pill>Sem permissão para excluir</Pill>}</> : <Pill>Não conectado</Pill>}
       <div style={{ flex: 1 }} />
-      <button class="btn" onClick={connect}>{link ? (link.upload_authorized ? 'Reconectar' : 'Autorizar envio') : 'Conectar YouTube'}</button>
+      {link && !link.delete_authorized && <button class="btn" onClick={() => connect(true)} title="O Google vai pedir permissão para gerenciar os vídeos do canal">Autorizar exclusão</button>}
+      <button class="btn" onClick={() => connect()}>{link ? (link.upload_authorized ? 'Reconectar' : 'Autorizar envio') : 'Conectar YouTube'}</button>
       {link && <button class="btn ghost" onClick={disconnect}>Desconectar</button>}
     </div>
   );

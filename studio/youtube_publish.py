@@ -31,6 +31,8 @@ def ensure(c):
 
 
 def upload_allowed(tokens):return UPLOAD_SCOPE in tokens.get('scope','').split()
+MANAGE_SCOPES=('https://www.googleapis.com/auth/youtube.force-ssl','https://www.googleapis.com/auth/youtube')
+def delete_allowed(tokens):return any(s in tokens.get('scope','').split() for s in MANAGE_SCOPES)
 def secure_session(url):
     u=urlparse(url)
     if u.scheme!='https' or u.hostname!='www.googleapis.com' or u.port not in (None,443) or u.username or u.password or u.path!='/upload/youtube/v3/videos':raise ValueError('Invalid resumable endpoint')
@@ -82,6 +84,51 @@ def create(body:Publication):
         c.execute('INSERT INTO youtube_publications(id,request_id,channel_id,export_id,youtube_channel_id,title,description,privacy,made_for_kids) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)',(jid,body.request_id,body.channel_id,body.export_id,credential['youtube_channel_id'],body.title.strip(),body.description,body.privacy,body.made_for_kids))
         audit(c,'YOUTUBE_PUBLICATION_REQUESTED',str(jid),body.privacy);c.commit()
     return {'id':jid,'state':'queued'}
+
+class Release(BaseModel):
+    confirm_release:bool=False
+
+
+@router.post('/{jid}/release')
+def release(jid:uuid.UUID,body:Release):
+    """A publication held by the launch schedule goes to the upload queue on explicit request."""
+    if not body.confirm_release:raise HTTPException(422,'Confirme a liberação deste envio.')
+    with db() as c:
+        ensure(c)
+        r=c.execute("UPDATE youtube_publications SET state='queued',detail='Liberado manualmente para envio',updated_at=now() WHERE id=%s AND state='held' RETURNING id",(jid,)).fetchone()
+        if not r:raise HTTPException(409,'Só um envio pausado pela agenda pode ser liberado.')
+        audit(c,'YOUTUBE_PUBLICATION_RELEASED',str(jid));c.commit()
+    return {'id':jid,'state':'queued'}
+
+
+class Removal(BaseModel):
+    confirm_delete:bool=False
+
+
+@router.post('/{jid}/delete')
+def delete_video(jid:uuid.UUID,body:Removal):
+    """Delete an uploaded video from YouTube; needs the 'manage videos' permission granted in Canais."""
+    if not body.confirm_delete:raise HTTPException(422,'Confirme a exclusão definitiva deste vídeo no YouTube.')
+    with db() as c:
+        ensure(c)
+        row=c.execute('SELECT * FROM youtube_publications WHERE id=%s',(jid,)).fetchone()
+        if not row:raise HTTPException(404,'Publicação não encontrada.')
+        if row['state']=='deleted':return {'id':jid,'state':'deleted','reused':True}
+        if row['state']!='uploaded' or not row['video_id']:raise HTTPException(409,'Só um vídeo já recebido pelo YouTube pode ser excluído.')
+        credential=c.execute('SELECT token_encrypted FROM channel_credentials WHERE channel_id=%s',(row['channel_id'],)).fetchone()
+        if not credential or not delete_allowed(json.loads(cipher().decrypt(credential['token_encrypted'].encode()))):
+            raise HTTPException(409,'Reconecte o YouTube em Canais autorizando o gerenciamento de vídeos para excluir pela plataforma.')
+    with httpx.Client(timeout=30) as client:
+        try:token=access_token(client,row)
+        except ValueError as error:raise HTTPException(409,'Conexão do YouTube indisponível: '+str(error)) from None
+        r=client.delete('https://www.googleapis.com/youtube/v3/videos',params={'id':row['video_id']},headers={'Authorization':'Bearer '+token})
+    if r.status_code not in (204,404):raise HTTPException(502,f'O YouTube recusou a exclusão ({r.status_code}). Nada foi alterado.')
+    gone='Excluído do YouTube pela plataforma' if r.status_code==204 else 'O YouTube já não tinha este vídeo'
+    with db() as c:
+        c.execute("UPDATE youtube_publications SET state='deleted',detail=%s,updated_at=now() WHERE id=%s",(gone,jid))
+        audit(c,'YOUTUBE_VIDEO_DELETED',str(jid),row['video_id']);c.commit()
+    return {'id':jid,'state':'deleted','video_id':row['video_id']}
+
 
 @router.post('/{jid}/resume')
 def resume(jid:uuid.UUID):

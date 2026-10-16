@@ -96,3 +96,58 @@ def test_strict_provenance_applies_to_pilots_like_exports(monkeypatch):
     from studio import youtube_publish
     assert 'publication_gate(c,pilot=p)' in inspect.getsource(youtube_publish.create_pilot)
     assert 'publication_gate(c,program_id=' in inspect.getsource(youtube_publish.create)
+
+
+def test_release_held_and_delete_uploaded_video(monkeypatch):
+    import os,json,uuid
+    import pytest
+    if not os.getenv('LOFI_TEST_DATABASE_URL'):pytest.skip('Disposable PostgreSQL required')
+    from test_authentication import signup
+    from fastapi.testclient import TestClient
+    from studio import authentication as auth, youtube_publish as ypub
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio.youtube import cipher
+    monkeypatch.setenv('DATABASE_URL',os.environ['LOFI_TEST_DATABASE_URL'])
+    for k,v in {'STUDIO_PUBLIC_ORIGIN':'https://testserver','STUDIO_SIGNUP_ENABLED':'1','STUDIO_EMAIL_PROVIDER':'smtp','STUDIO_SMTP_HOST':'unused.test',
+                'STUDIO_MASTER_KEY':'nSzKUroWUCuq_KhmQiOkLgRxML3HrIjngIv5yvtjmuk=','STUDIO_SMTP_USER':'x','STUDIO_SMTP_PASSWORD':'x','STUDIO_EMAIL_FROM':'s@example.test'}.items():monkeypatch.setenv(k,v)
+    auth.initialize()
+    with auth.connection() as conn:conn.execute("ALTER TABLE public.os_email_outbox ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'")
+    from studio.api import app
+    client=TestClient(app,base_url='https://testserver')
+    _,owner=signup(client);h={'X-CSRF-Token':owner['csrf_token']};cid=client.get('/api/channels').json()[0]['id']
+    held,live=uuid.uuid4(),uuid.uuid4()
+    def tokens(scope):return cipher().encrypt(json.dumps({'scope':scope,'access_token':'t','expires_at':'2999-01-01T00:00:00+00:00'}).encode()).decode()
+    marker=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:
+            ypub.ensure(c)
+            from studio.youtube import initialize;initialize(c)
+            c.execute("INSERT INTO channel_credentials(channel_id,youtube_channel_id,token_encrypted) VALUES(%s,'UCtest',%s)",(cid,tokens(ypub.UPLOAD_SCOPE)))
+            for jid,state,vid in ((held,'held',None),(live,'uploaded','abcdefghijk')):
+                c.execute("INSERT INTO youtube_publications(id,request_id,channel_id,youtube_channel_id,title,description,privacy,made_for_kids,state,video_id) VALUES(%s,%s,%s,'UCtest','t','d','public',false,%s,%s)",(jid,uuid.uuid4(),cid,state,vid))
+            c.commit()
+    finally:WORKSPACE.reset(marker)
+    assert client.post(f'/api/youtube/publications/{held}/release',json={},headers=h).status_code==422
+    assert client.post(f'/api/youtube/publications/{held}/release',json={'confirm_release':True},headers=h).json()['state']=='queued'
+    assert client.post(f'/api/youtube/publications/{held}/release',json={'confirm_release':True},headers=h).status_code==409
+    # Upload-only permission cannot delete; the operator must grant management in Canais.
+    r=client.post(f'/api/youtube/publications/{live}/delete',json={'confirm_delete':True},headers=h)
+    assert r.status_code==409 and 'Reconecte' in r.text
+    marker=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:c.execute('UPDATE channel_credentials SET token_encrypted=%s',(tokens(ypub.UPLOAD_SCOPE+' '+ypub.MANAGE_SCOPES[0]),));c.commit()
+    finally:WORKSPACE.reset(marker)
+    calls=[]
+    class Fake:
+        def __init__(self,*a,**k):pass
+        def __enter__(self):return self
+        def __exit__(self,*a):return False
+        def delete(self,url,params,headers):calls.append(params['id']);return type('R',(),{'status_code':204})()
+    monkeypatch.setattr(ypub.httpx,'Client',Fake);monkeypatch.setattr(ypub,'access_token',lambda client,row:'token')
+    assert client.post(f'/api/youtube/publications/{live}/delete',json={},headers=h).status_code==422
+    done=client.post(f'/api/youtube/publications/{live}/delete',json={'confirm_delete':True},headers=h).json()
+    assert done['state']=='deleted' and calls==['abcdefghijk']
+    again=client.post(f'/api/youtube/publications/{live}/delete',json={'confirm_delete':True},headers=h).json()
+    assert again['reused'] and calls==['abcdefghijk']
+    assert ypub.delete_allowed({'scope':'https://www.googleapis.com/auth/youtube.force-ssl'}) and not ypub.delete_allowed({'scope':ypub.UPLOAD_SCOPE})
