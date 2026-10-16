@@ -46,10 +46,13 @@ class ContinuousSession:
         vr, ar = f'pipe:{video_read}', f'pipe:{audio_read}'
         args = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y']
         if self.realtime: args += ['-re']
-        args += ['-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-s', f'{self.width}x{self.height}',
+        # Raw inputs are fully described: no probing. Probing the video pipe first used to block
+        # while the decoder filled the audio pipe (Linux 64 KiB) and waited: a two-process deadlock.
+        raw = ['-probesize', '32', '-analyzeduration', '0', '-thread_queue_size', '1024']
+        args += raw + ['-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-s', f'{self.width}x{self.height}',
                  '-r', str(self.fps), '-i', vr]
         if self.realtime: args += ['-re']
-        args += ['-f', 's16le', '-ar', '48000', '-ac', '2', '-i', ar,
+        args += raw + ['-f', 's16le', '-ar', '48000', '-ac', '2', '-i', ar,
                  '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'libx264',
                  '-preset', 'veryfast', '-tune', 'zerolatency', '-pix_fmt', 'yuv420p',
                  '-g', str(self.fps * 2), '-c:a', 'aac', '-b:a', '192k',
