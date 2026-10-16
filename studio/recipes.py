@@ -95,7 +95,7 @@ class Cadence(BaseModel):
 class Copy(BaseModel):
     model_config=ConfigDict(extra='forbid')
     style_title:str=Field(default='Lo-Fi',min_length=1,max_length=60)
-    title_template:str=Field(default='{scene_title} | {hours_label} of {style_title} for Coding',max_length=200)
+    title_template:str=Field(default_factory=lambda:__import__('studio.copywriting',fromlist=['DEFAULT_TITLE']).DEFAULT_TITLE,max_length=200)
     description_template:str=Field(default_factory=lambda:__import__('studio.copywriting',fromlist=['DEFAULT_TEMPLATE']).DEFAULT_TEMPLATE,max_length=3000)
     live_title_template:str=Field(default='{style_title} Radio · {scene_title} | Music for Coding',max_length=200)
     alt_title_templates:list[str]=Field(default_factory=list,max_length=3)
@@ -200,11 +200,13 @@ def ensure(c):
 
 def refresh_builtin_copy(c):
     """Untouched built-in recipes move to the viewer-first description, as a new revision."""
-    from .copywriting import OLD_TEMPLATE,DEFAULT_TEMPLATE
+    from .copywriting import PREVIOUS_TEMPLATES,DEFAULT_TEMPLATE,PREVIOUS_TITLES,DEFAULT_TITLE
     rows=c.execute('''SELECT r.id,v.data FROM recipes r JOIN recipe_revisions v ON v.recipe_id=r.id AND v.revision=r.current_revision
-      WHERE r.origin='builtin' AND v.data->'copy'->>'description_template'=%s''',(OLD_TEMPLATE,)).fetchall()
+      WHERE r.origin='builtin' AND (v.data->'copy'->>'description_template'=ANY(%s) OR v.data->'copy'->>'title_template'=ANY(%s))''',
+      (list(PREVIOUS_TEMPLATES),list(PREVIOUS_TITLES))).fetchall()
     for row in rows:
-        data=row['data'];data['copy']=data['copy']|{'description_template':DEFAULT_TEMPLATE,'hashtags':['#lofi','#codingmusic','#studymusic']}
+        copy=row['data']['copy'];data=row['data']
+        data['copy']=copy|({'description_template':DEFAULT_TEMPLATE} if copy['description_template'] in PREVIOUS_TEMPLATES else {})|({'title_template':DEFAULT_TITLE} if copy['title_template'] in PREVIOUS_TITLES else {})
         model=RecipeData.model_validate(data);sha=digest(model)
         if c.execute('SELECT 1 FROM recipe_revisions WHERE sha256=%s',(sha,)).fetchone():continue
         revision=c.execute('SELECT max(revision)+1 n FROM recipe_revisions WHERE recipe_id=%s',(row['id'],)).fetchone()['n']
