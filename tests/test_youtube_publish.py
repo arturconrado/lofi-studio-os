@@ -151,3 +151,48 @@ def test_release_held_and_delete_uploaded_video(monkeypatch):
     again=client.post(f'/api/youtube/publications/{live}/delete',json={'confirm_delete':True},headers=h).json()
     assert again['reused'] and calls==['abcdefghijk']
     assert ypub.delete_allowed({'scope':'https://www.googleapis.com/auth/youtube.force-ssl'}) and not ypub.delete_allowed({'scope':ypub.UPLOAD_SCOPE})
+
+
+def test_same_video_is_never_published_twice(monkeypatch):
+    # 2026-10-16: the Snowy 8-Bit export reused the Snowy episode already on the channel.
+    import os,json,uuid
+    import pytest
+    if not os.getenv('LOFI_TEST_DATABASE_URL'):pytest.skip('Disposable PostgreSQL required')
+    from fastapi import HTTPException
+    from studio.core import db,init_db
+    from studio.authentication import connection
+    from studio.tenancy import WORKSPACE,schema_name
+    from studio import youtube_publish as ypub
+    from studio.ambient_api import init as init_ambient
+    from psycopg import sql
+    monkeypatch.setenv('DATABASE_URL',os.environ['LOFI_TEST_DATABASE_URL'])
+    wid=uuid.uuid4()
+    with connection() as c:c.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema_name(wid))))
+    token=WORKSPACE.set(str(wid))
+    try:
+        init_db()
+        cid='00000000-0000-0000-0000-000000000001';snowy=uuid.uuid4();silent='ambient-pilots/snowy/silent.mp4'
+        with db() as c:
+            ypub.ensure(c);init_ambient(c)
+            c.execute("INSERT INTO ambient_pilots(id,channel_id,title,video_key,silent_key,report,plan) VALUES(%s,%s,'Snowy','ambient-pilots/snowy/video.mp4',%s,'{}','{}')",(snowy,cid,silent))
+            c.execute("INSERT INTO youtube_publications(id,request_id,channel_id,pilot_id,youtube_channel_id,title,description,privacy,made_for_kids,state,video_id) VALUES(%s,%s,%s,%s,'UC','Snowy Night Studio','d','public',false,'uploaded','Aw5WkR7ZVnE')",(uuid.uuid4(),uuid.uuid4(),cid,snowy))
+            def program(bid,audio):
+                c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,video_key,audio_key) VALUES(%s,'ready',3600,0,%s,%s)",(bid,silent,audio))
+                c.execute("INSERT INTO creator_plans(id,request_id,theme,minutes,data,status,reserved,program_id) VALUES(%s,%s,'t',60,%s,'ready',0,%s)",(uuid.uuid4(),uuid.uuid4(),json.dumps({'visual_reference':{'pilot_id':str(snowy)}}),bid))
+                eid=uuid.uuid4();c.execute("INSERT INTO export_jobs(id,request_id,program_id,snapshot_sha256,seconds,state) VALUES(%s,%s,%s,'s',3600,'completed')",(eid,uuid.uuid4(),bid));return eid
+            eight=program('LOFI-8BIT','programs/8bit/audio.mp3')
+            with pytest.raises(HTTPException) as e:ypub.refuse_duplicates(c,cid,False,export_id=eight)
+            assert e.value.status_code==409 and 'Aw5WkR7ZVnE' in e.value.detail and 'visual' in e.value.detail
+            assert ypub.refuse_duplicates(c,cid,True,export_id=eight)[0]['same_visual']
+            # Once published, any export with the same music is refused even with consent.
+            c.execute("INSERT INTO youtube_publications(id,request_id,channel_id,export_id,youtube_channel_id,title,description,privacy,made_for_kids,state,video_id) VALUES(%s,%s,%s,%s,'UC','8-Bit','d','public',false,'uploaded','Bb6wYntheEM')",(uuid.uuid4(),uuid.uuid4(),cid,eight))
+            again=program('LOFI-8BIT-4H','programs/8bit/audio.mp3')
+            with pytest.raises(HTTPException) as e:ypub.refuse_duplicates(c,cid,True,export_id=again)
+            assert 'mesma música' in e.value.detail
+            other=program('LOFI-NEW','programs/new/audio.mp3')
+            c.execute("UPDATE production_batches SET video_key='ambient-pilots/forest/silent.mp4' WHERE id='LOFI-NEW'")
+            c.execute("UPDATE creator_plans SET data='{}' WHERE program_id='LOFI-NEW'")
+            assert ypub.refuse_duplicates(c,cid,False,export_id=other)==[]
+            assert not ypub.ready_pilot({'report':{'media_purged':{'at':'x'},'duration_seconds':3600}})
+            c.rollback()
+    finally:WORKSPACE.reset(token)

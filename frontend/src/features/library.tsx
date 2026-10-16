@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'preact/hooks';
 import { post } from '../lib/api';
-import { attempt } from '../lib/toast';
+import { attempt, toast } from '../lib/toast';
 import { Check, Dialog, Pill } from '../ds/ui';
 import { useResource } from '../lib/resource';
 import { href } from '../lib/router';
@@ -25,7 +25,16 @@ function Publications({ cid }: { cid: string }) {
   const [sure, setSure] = useState(false);
   const list = (pubs.data || []).filter(p => p.channel_id === cid);
   if (!list.length) return null;
-  const release = (p: Publication) => confirm(`Liberar o envio de “${p.title}”?`) && attempt(async () => { await post(`/api/youtube/publications/${p.id}/release`, { confirm_release: true }); pubs.reload(); }, 'Envio liberado; entra na fila do publicador');
+  const release = async (p: Publication) => {
+    if (!confirm(`Liberar o envio de “${p.title}”?`)) return;
+    try { await post(`/api/youtube/publications/${p.id}/release`, { confirm_release: true }); }
+    catch (e: any) {
+      // A repeated visual needs explicit consent; the same music is always refused by the server.
+      if (!String(e.message).includes('repete o visual') || !confirm(e.message + '\n\nPublicar mesmo assim?')) { await attempt(async () => { throw e; }); return; }
+      if (await attempt(() => post(`/api/youtube/publications/${p.id}/release`, { confirm_release: true, allow_repeat_visual: true })) === undefined) return;
+    }
+    pubs.reload(); toast('Envio liberado; entra na fila do publicador', 'ok');
+  };
   const remove = async () => {
     if (!removing) return;
     const ok = await attempt(() => post(`/api/youtube/publications/${removing.id}/delete`, { confirm_delete: true }), 'Vídeo excluído do YouTube');
