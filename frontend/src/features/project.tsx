@@ -6,7 +6,7 @@ import { attempt } from '../lib/toast';
 import { duration, usd, hoursLabel, ago } from '../lib/format';
 import { StatusPill, Stages, Progress, Skeleton, Empty, Dialog, Field, Pill } from '../ds/ui';
 import { IconArrow } from '../ds/icons';
-import type { Production, Block } from './studio';
+import { SEQUENCE_LABEL, type Production, type Block } from './studio';
 
 function MetadataEditor({ programId, onClose }: { programId: string; onClose: () => void }) {
   const meta = useResource<any>(`/api/creator/programs/${programId}/metadata`);
@@ -59,7 +59,9 @@ export function Project({ id }: { id: string }) {
     <>
       <div class="page-head">
         <div class="grow">
-          <div class="row tight"><StatusPill status={d.status} label={d.label} /><span class="faint" style={{ fontSize: '13px' }}>{d.recipe_name} · {hoursLabel(d.hours)} · criada {ago(d.created_at)}</span></div>
+          <div class="row tight"><StatusPill status={d.status} label={d.label} />
+            {d.visual && d.visual.planned.length > 0 && <Pill tone={d.visual.applied ? 'ok' : 'warn'}>{d.visual.applied ? 'Roteiro visual aplicado' : 'Roteiro visual não aplicado'}</Pill>}
+            <span class="faint" style={{ fontSize: '13px' }}>{d.recipe_name}{d.recipe_version?.revision ? ` v${d.recipe_version.revision}` : ''} · {hoursLabel(d.hours)} · criada {ago(d.created_at)}</span></div>
           <h1 style={{ marginTop: '8px' }}>{d.copy.title}</h1>
           {d.idea && <p class="muted">“{d.idea}”</p>}
         </div>
@@ -98,6 +100,19 @@ export function Project({ id }: { id: string }) {
           </div>
         )}
       </section>
+
+      {d.visual && (
+        <section class="card stack">
+          <div class="card-head"><h3 class="grow">Roteiro visual</h3><Pill tone={d.visual.applied ? 'ok' : d.visual.planned.length ? 'warn' : ''}>{d.visual.label}</Pill></div>
+          {d.visual.planned.length === 0 ? <p class="faint">A receita não programa movimentos; o vídeo usa o episódio aprovado.</p> : (
+            <table class="table"><thead><tr><th>Minuto</th><th>Movimento planejado</th><th>No vídeo</th></tr></thead>
+              <tbody>{d.visual.planned.map(e => <tr><td class="mono">{e.minute}</td><td>{SEQUENCE_LABEL[e.sequence] || e.sequence}</td>
+                <td>{d.visual!.applied ? <Pill tone="ok">Executado</Pill> : <Pill tone="warn">Não aplicado</Pill>}</td></tr>)}</tbody></table>)}
+          {d.visual.planned.length > 0 && !d.visual.applied && <p class="faint" style={{ fontSize: '13px' }}>
+            “MP4 pronto” confirma o arquivo exportado, não o roteiro. Para aplicar movimentos é preciso ter clipes de ação aprovados ({d.visual.available_actions.length} de {d.visual.required_actions.length} hoje) e a montagem por timeline.</p>}
+          <p class="faint mono" style={{ fontSize: '11px' }}>Receita {d.recipe_version?.revision ? 'v' + d.recipe_version.revision + ' · ' : ''}{d.recipe_version?.sha256.slice(0, 16)}</p>
+        </section>
+      )}
 
       <section class="card stack">
         <h3>Textos sugeridos pela receita</h3>

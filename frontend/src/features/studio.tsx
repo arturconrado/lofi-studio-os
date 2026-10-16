@@ -11,7 +11,12 @@ export type Production = {
   status: string; label: string; next_action: { kind: string; label: string; program_id?: string; export_id?: string };
   stages: { id: string; state: string }[]; blocks: Block[]; progress: { seconds: number; target_seconds: number; blocks_created: number; blocks_total: number; tracks: number };
   cost: { ceiling_usd: number; reserved_usd: number }; error: { message: string } | null; detail: string;
+  visual?: VisualPlan; recipe_version?: { revision: number | null; sha256: string };
 };
+export type VisualPlan = { mode: string; planned: { minute: number; sequence: string; actions: string[] }[]; required_actions: string[]; available_actions: string[];
+  missing_actions: string[]; applied: boolean; executed: unknown[]; label: string };
+export const SEQUENCE_LABEL: Record<string, string> = { breath_pet: 'respira e faz carinho no gato', phone_check: 'olha o celular', stretch_break: 'alonga os braços',
+  window_glance: 'olha pela janela', cat_stretch: 'gato se espreguiça' };
 export type Block = { hour_index: number; program_id: string; stage: string; label: string; batch_state: string; batch_detail: string; tracks: number; pending_tracks: number;
   reviewed: string | null; export: { id: string; state: string } | null; publication: { id: string; state: string } | null; live: boolean };
 
@@ -29,6 +34,7 @@ export function ProjectCard({ p }: { p: Production }) {
         <Progress value={progress} label="Música produzida" />
         <span class="faint" style={{ fontSize: '12px' }}>{duration(p.progress.seconds)} de {duration(p.progress.target_seconds)} · {p.progress.tracks} faixas</span>
       </div>}
+      {p.visual && p.visual.planned.length > 0 && !p.visual.applied && <span class="faint" style={{ fontSize: '12px' }}>Vídeo sem os movimentos programados</span>}
       {p.next_action.kind !== 'wait' && p.next_action.kind !== 'none' && <span class="row tight" style={{ color: 'var(--accent)', fontWeight: 600, fontSize: '14px' }}>{p.next_action.label} <IconArrow class="" /></span>}
     </a>
   );
