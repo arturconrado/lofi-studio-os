@@ -59,8 +59,22 @@ def label(seconds, action):
     return f'{int(seconds)//60:02d}:{int(seconds)%60:02d} · {NAMES.get(action,action)}'
 
 
+def budget(points, total, minimum=1.0, late=None):
+    """At most total/minimum samples at real speed: keep opening and closing, then event beats
+    evenly spread, dropping the late-light point first. Returns (kept, omitted)."""
+    limit=max(2,int(total//minimum))
+    if len(points)<=limit:return list(points),[]
+    first,last=points[0],points[-1];room=limit-2
+    beats=[p for p in points[1:-1] if p!=late]
+    if room>=len(beats):chosen=beats+([late] if late in points[1:-1] and room>len(beats) else [])
+    else:chosen=[beats[round(i*(len(beats)-1)/max(room-1,1))] for i in range(room)] if room>0 else []
+    kept=sorted(set([first,*chosen,last]))
+    return kept,[p for p in points if p not in kept]
+
+
 def condensed(compiled, assembly, points=None, total=10):
-    points=points or sample_points(compiled)
+    hour=min(3600,compiled['duration_seconds'])
+    points,omitted=budget(points or sample_points(compiled),total,late=max(0,hour-300))
     each=round(max(1.0,total/len(points)),2);segments=[];samples=[];missing=[];cursor=0
     for point in points:
         start=min(point,compiled['duration_seconds']-each)
@@ -75,7 +89,7 @@ def condensed(compiled, assembly, points=None, total=10):
     spec=deepcopy(compiled)
     spec.update(duration_seconds=cursor,clock_offset_seconds=0,audio_offset_seconds=0,preview_only=True,
                 preview_mode='direction_condensed',parent_duration_seconds=compiled['duration_seconds'],
-                audio_windows=[(s['program_start'],s['seconds']) for s in samples],sample_map=samples)
+                audio_windows=[(s['program_start'],s['seconds']) for s in samples],sample_map=samples,omitted_sample_points=omitted)
     result=deepcopy(assembly)
     result.update(segments=segments,duration_seconds=cursor,planned_timeline_seconds=cursor,
                   assets_ready=True,render_started=False,eligible_for_live=False)

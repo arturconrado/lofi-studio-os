@@ -55,7 +55,8 @@ def render(spec):
         if proc.poll() is None:proc.kill();proc.wait()
     out=ROOT/(slug+'-loop.mp4')
     subprocess.run(['ffmpeg','-v','error','-y','-stream_loop','2','-i',str(core),'-t','60','-an','-c:v','copy','-movflags','+faststart',str(out)],check=True)
-    meta=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-show_format','-of','json',str(out)]));assert len(meta['streams'])==1 and meta['streams'][0]['codec_type']=='video'
+    meta=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-show_format','-of','json',str(out)]))
+    if not (len(meta['streams'])==1 and meta['streams'][0]['codec_type']=='video'):raise ValueError('Rendered scene failed its stream check')
     receipt={'slug':slug,'title':title,'file':out.name,'image':image,'duration_seconds':float(meta['format']['duration']),'width':W,'height':H,'fps':FPS,'sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'method':'Local animation of original imagegen illustration: rain or mist, coffee steam, subtle illustrated breathing and hand micro-motion. Not an AI image-to-video performance.','external_video_cost':0}
     (ROOT/(slug+'-receipt.json')).write_text(json.dumps(receipt,indent=2,ensure_ascii=False));print(json.dumps(receipt,ensure_ascii=False),flush=True)
     return receipt

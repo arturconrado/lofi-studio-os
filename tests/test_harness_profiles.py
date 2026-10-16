@@ -42,3 +42,16 @@ def test_niche_pack_policy_is_enforced_on_storyboards(client):
     for change,word in (({'music_style':'8bit_lofi'},'Estilo'),({'occasional_variations':True},'variações'),({'cadence':'legacy_10_25_45'},'Interrupções')):
         r=client.post('/api/creator/storyboard',json={'channel_id':cid,'spec':spec|change},headers=headers)
         assert r.status_code==422 and word in r.text,r.text
+
+
+def test_sequence_policy_applies_to_presets_like_custom_markers():
+    # Audit C03: a preset containing phone_check used to pass a policy that forbids it.
+    from studio.harness_profiles import enforce
+    from studio.production_harness import ProductionSpec
+    policy={'allowed_sequences':['stretch_break','breath_pet'],'max_interruption_seconds_per_hour':900}
+    preset=ProductionSpec(hours=1,cadence='quarter_hour_v2')
+    custom=ProductionSpec(hours=1,cadence='custom_markers',markers=[{'minute':15,'sequence':'breath_pet'},{'minute':30,'sequence':'phone_check'},{'minute':45,'sequence':'breath_pet'}])
+    assert 'Sequência de evento fora do pacote do canal' in enforce(policy,preset)
+    assert 'Sequência de evento fora do pacote do canal' in enforce(policy,custom)
+    allowed=enforce(policy|{'allowed_sequences':['breath_pet','phone_check']},preset)
+    assert 'Sequência de evento fora do pacote do canal' not in allowed

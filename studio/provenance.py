@@ -52,6 +52,35 @@ def program_report(c, program_id):
             'missing':sorted({m for i in items for m in i['missing']}),'items':items}
 
 
+def strict():
+    return os.getenv('LOFI_REQUIRE_PROVENANCE_FOR_PUBLISH','').lower() in ('1','true','yes')
+
+
+def pilot_report(pilot):
+    """Externally produced episodes need a recorded audio provenance; their report alone does not link tracks."""
+    report=pilot.get('report') or {};p=report.get('provenance') or {}
+    missing=[]
+    if not p.get('audio_sources'):missing.append('pilot_audio_sources_unlinked')
+    if not p.get('provider_terms'):missing.append('provider_terms_unreviewed')
+    if len(str(p.get('rights_declaration') or '').strip())<12:missing.append('rights_declaration_missing')
+    return {'pilot_id':str(pilot.get('id')),'ready':not missing,'missing':missing}
+
+
+def publication_gate(c, program_id=None, pilot=None):
+    """One release rule for every publication path (export, pilot, future timeline promotion).
+
+    Raises 409 under LOFI_REQUIRE_PROVENANCE_FOR_PUBLISH when evidence is missing; artistic
+    confirmation stays separate and is checked by each route.
+    """
+    if not strict():return None
+    from fastapi import HTTPException
+    report=program_report(c,program_id) if program_id else pilot_report(pilot)
+    if not report['ready']:
+        hint=' Registre a proveniência do episódio (fontes de áudio, termos e direitos) antes de publicar.' if pilot is not None else ''
+        raise HTTPException(409,'Proveniência ou declaração de direitos pendente: '+', '.join(report['missing'])+'.'+hint)
+    return report
+
+
 QUERY='SELECT a.id,a.sha256,a.model,j.provider,j.model job_model,j.provider_generation_id,j.prompt_snapshot,j.requested_seconds,j.submitted_at,j.created_at,j.actual_cost FROM assets a LEFT JOIN jobs j ON j.id=a.id WHERE a.provenance IS NULL'
 
 

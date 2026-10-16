@@ -33,3 +33,23 @@ def test_render_report_measures_cpu_scratch_and_only_prices_with_configured_rate
     assert 9<=r['elapsed_seconds']<=11 and abs(r['realtime_factor']-r['elapsed_seconds']/600)<1e-3
     monkeypatch.setenv('LOFI_CPU_HOUR_USD','0.05');monkeypatch.setenv('LOFI_STORAGE_GB_MONTH_USD','0.02')
     assert resource_report(time.monotonic(),0,0,out,600)['infrastructure_cost_usd'] is not None
+
+
+def test_cost_per_video_separates_external_from_total():
+    # Audit C08: external 2 + infrastructure 3 must not be presented as a total of 2.
+    from studio import episode_state
+    class Cursor:
+        def __init__(self,rows):self.rows=rows
+        def fetchone(self):return self.rows
+    class Conn:
+        def execute(self,q,args=()):
+            if 'motion_validation' in q:return Cursor({'reserved':0,'actual':2,'n':1})
+            return Cursor(None)
+    plan={'id':'p','data':{}}
+    jobs=[{'id':'j','status':'COMPLETED','payload':{'review':{'eligible':True},'report':{'local_resources':{'infrastructure_cost_usd':3}}}},
+          {'id':'k','status':'FAILED','payload':{'report':{'local_resources':{'infrastructure_cost_usd':1}}}}]
+    import inspect
+    fn=next(f for n,f in inspect.getmembers(episode_state,inspect.isfunction) if 'known_external_usd' in inspect.getsource(f))
+    e=fn(Conn(),plan,jobs)
+    assert e['external_cost_per_approved_video_usd']==2 and e['total_cost_per_approved_video_usd']==6 and e['coverage']=='external_and_infrastructure'
+    assert any(r['status']=='FAILED' for r in e['local_renders']) and e['rework_renders']==1

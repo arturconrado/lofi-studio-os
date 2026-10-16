@@ -120,6 +120,11 @@ def reuse_baseline_motion(pid:uuid.UUID,body:IdentitySelection):
     with db() as c:
         row=get_plan(c,pid);spec=row['data']['production_spec'];digest=production_spec_hash(spec)
         if not c.execute('SELECT id FROM ambient_pilots WHERE id=%s AND channel_id=%s',(body.source_pilot_id,row['channel_id'])).fetchone():raise HTTPException(404,'Referência não encontrada neste canal')
+        # The base motion must come from the episode approved for this scenario; otherwise a
+        # Greenhouse clip would carry the Snowy fingerprint and only a reviewer could notice.
+        from .scene_profiles import SCENES
+        approved=SCENES.get(spec.get('scenario'),{}).get('approved_pilot_id')
+        if approved and str(body.source_pilot_id)!=approved:raise HTTPException(409,'Este episódio não é a base aprovada do cenário escolhido; selecione o episódio da mesma cena')
         expected=entry['files']['source']['sha256']
         if spec.get('character_reference')!='reviewed:'+expected+':girl' or spec.get('cat_reference')!='reviewed:'+expected+':cat':raise HTTPException(409,'Selecione primeiro a identidade deste episódio')
         existing=next((a for a in row['data'].get('production_assets',{}).values() if a.get('baseline_pilot_id')==str(body.source_pilot_id) and a.get('spec_sha256')==digest),None)
@@ -492,6 +497,11 @@ def final_review(jid:uuid.UUID,body:FinalReview):
         from .production_harness import assess_delivery
         review=assess_delivery(p['compiled'],receipts)
         if not review['eligible']:raise HTTPException(409,'A montagem não passou nos critérios técnicos: '+', '.join(review['failures']))
+        # Calibrated QC receipt: missing metrics stay "incomplete", never a pass; blocking is opt-in.
+        from .calibration import verdict
+        review['calibration']=verdict(report.get('qc') or {},'timeline')
+        if __import__('os').getenv('LOFI_REQUIRE_CALIBRATED_QC')=='1' and review['calibration']['status']!='pass':
+            raise HTTPException(409,'QC calibrado não aprovado ('+review['calibration']['status']+'): '+', '.join(review['calibration']['failures'] or ['limites não calibrados']))
         c.execute("UPDATE factory_tasks SET payload=payload||%s::jsonb,detail='Montagem revisada; início e publicação continuam manuais',updated_at=now() WHERE id=%s",(json.dumps({'review':review,'report':report}),jid))
         audit(c,'TIMELINE_FINAL_REVIEWED',str(jid));c.commit()
     return {'reviewed':True,'broadcast_started':False,'published_to_youtube':False}

@@ -74,3 +74,25 @@ def test_short_or_unvalidated_pilot_cannot_be_published():
     assert not yp.ready_pilot({'report':{'duration_seconds':60,'decoded_without_errors':True,'artifact_sha256':{'video':'a'*64}}})
     assert not yp.ready_pilot({'report':{'duration_seconds':3600,'artifact_sha256':{'video':'a'*64}}})
     assert yp.ready_pilot({'report':{'duration_seconds':3600,'technical_integrity':True,'full_decode_pass':True,'artifact_sha256':{'video':'a'*64}}})
+
+
+def test_strict_provenance_applies_to_pilots_like_exports(monkeypatch):
+    # Audit C05: the pilot route skipped LOFI_REQUIRE_PROVENANCE_FOR_PUBLISH.
+    import pytest
+    from fastapi import HTTPException
+    from studio import provenance
+    pilot={'id':'p1','report':{'artifact_sha256':{'video':'a'*64}}}
+    monkeypatch.delenv('LOFI_REQUIRE_PROVENANCE_FOR_PUBLISH',raising=False)
+    assert provenance.publication_gate(None,pilot=pilot) is None
+    monkeypatch.setenv('LOFI_REQUIRE_PROVENANCE_FOR_PUBLISH','1')
+    with pytest.raises(HTTPException) as e:provenance.publication_gate(None,pilot=pilot)
+    assert e.value.status_code==409 and 'pilot_audio_sources_unlinked' in e.value.detail and 'Registre' in e.value.detail
+    pilot['report']['provenance']={'audio_sources':['tracklist sha256 ab12'],'provider_terms':{'reviewed':True},'rights_declaration':'Original tracks generated under reviewed terms'}
+    assert provenance.publication_gate(None,pilot=pilot)['ready']
+    monkeypatch.setattr(provenance,'program_report',lambda c,pid:{'ready':False,'missing':['provenance_missing']})
+    with pytest.raises(HTTPException) as e:provenance.publication_gate(None,program_id='LOFI-1')
+    assert 'provenance_missing' in e.value.detail
+    import inspect
+    from studio import youtube_publish
+    assert 'publication_gate(c,pilot=p)' in inspect.getsource(youtube_publish.create_pilot)
+    assert 'publication_gate(c,program_id=' in inspect.getsource(youtube_publish.create)

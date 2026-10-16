@@ -51,7 +51,9 @@ def enforce(policy, spec):
     if not p.contextual_gestures_allowed and 'lamp_on_with_gesture' in spec.contextual_actions:failures.append('O pacote do canal não permite gestos de cenário')
     compiled=compile_spec(spec)
     if p.allowed_sequences:
-        used={e.get('sequence') for e in compiled['events'] if e.get('sequence')}
+        # From the effective schedule: presets drop 'sequence' from events to keep legacy manifests stable.
+        from .production_harness import PRESETS
+        used={m.sequence for m in spec.markers} if spec.markers else {name for _,name in PRESETS[spec.cadence]}
         if not used<=set(p.allowed_sequences):failures.append('Sequência de evento fora do pacote do canal')
     interruption=sum(e['end']-e['start'] for e in compiled['events'] if e['start']<3600 and not e.get('optional'))
     if interruption>p.max_interruption_seconds_per_hour:failures.append(f'Interrupções somam {interruption}s por hora; o pacote permite {p.max_interruption_seconds_per_hour}s')

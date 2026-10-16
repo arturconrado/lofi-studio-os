@@ -113,3 +113,22 @@ def test_masked_filters_are_exact_outside_their_masks(tmp_path):
         assert np.abs(uv-base[1])[:,23:,30:].max()==0
     assert np.abs(light[0]-base[0])[:30,:45].mean()>10
     assert np.abs(tint[1]-base[1])[:,:15,:22].mean()>10
+
+
+def test_weather_phase_follows_the_program_clock_in_previews(tmp_path):
+    # Audit C04: each segment/preview restarted the 2 s precipitation cycle at frame zero.
+    source=tmp_path/'flat.mp4';audio=tmp_path/'a.wav'
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',f'color=c=gray:size={W}x{H}:rate=24:duration=3','-c:v','libx264','-crf','10','-threads','1','-pix_fmt','yuv420p',str(source)],check=True)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','sine=frequency=220:duration=4',str(audio)],check=True)
+    sha=file_hash(source);lighting={'keyframes':[{'minute':0},{'minute':60}],'overlay':{'type':'snow','intensity':1}}
+    def render_from(clock,seconds,name):
+        folder=tmp_path/name;folder.mkdir()
+        compiled={'duration_seconds':seconds,'clock_offset_seconds':clock,'lighting':lighting}
+        segments=[{'start':0,'end':seconds,'action':'typing_idle','asset_sha256':sha,'repeat_short_clip':True}]
+        render(compiled,{'assets_ready':True,'segments':segments},{sha:source},audio,BASE,folder/'final.mp4',width=W,height=H)
+        return folder/'final.mp4'
+    full=render_from(0,2,'full');preview=render_from(1,1,'preview')
+    sky=region(BASE['sky'])
+    same_second=np.abs(frame(full,1,tmp_path,'f1.png')-frame(preview,0,tmp_path,'p0.png'))[sky][:,0].mean()
+    other_second=np.abs(frame(full,0,tmp_path,'f0.png')-frame(preview,0,tmp_path,'p0b.png'))[sky][:,0].mean()
+    assert other_second>2 and same_second<other_second/3

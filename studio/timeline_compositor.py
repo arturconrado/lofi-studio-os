@@ -186,7 +186,7 @@ def encode_chunk(args,timeout,progress,index,total,start,end,log):
             proc.stdout.close()
 
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2  # 2: weather phase follows the program clock
 
 
 def checkpoint_binding(compiled, plan, environment, audio_sha, width, height, fps):
@@ -286,7 +286,11 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
             else:mask_label=f'{names["recolor"]}:v'
             filters += ffmpeg_filters(last,mask_label,environment['recolor_color'],width,height)
             last='recolored'
-        if 'weather' in masks:filters += [f'[{last}][{names["weather"]}:v]overlay=shortest=1[weathered]'];last='weathered'
+        if 'weather' in masks:
+            # The 2 s precipitation cycle follows the absolute program clock, like the light, so
+            # segments, odd cut points and previews show the same phase at the same program second.
+            weather_phase=round(((clock%2)*fps))/fps
+            filters += [f'[{names["weather"]}:v]trim=start={weather_phase},setpts=PTS-STARTPTS[wx]',f'[{last}][wx]overlay=shortest=1[weathered]'];last='weathered'
         if segment.get('label'):
             # Condensed previews name the real program minute of each sample.
             tag=folder/f'sample-label-{hashlib.sha256(segment["label"].encode()).hexdigest()[:12]}.png'

@@ -31,6 +31,8 @@ def ensure(c):
     c.execute('''CREATE TABLE IF NOT EXISTS production_blocks(
       production_id UUID NOT NULL REFERENCES productions(id),hour_index INTEGER NOT NULL,plan_id UUID NOT NULL UNIQUE,
       program_id TEXT UNIQUE,budget NUMERIC NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(production_id,hour_index))''')
+    # Visual plan: which recipe movements were planned and whether this path renders them.
+    c.execute('ALTER TABLE productions ADD COLUMN IF NOT EXISTS visual_plan JSONB')
 
 
 def ready():
@@ -65,6 +67,38 @@ def pick_reference(c,cid,data,scenario,review=None):
     raise HTTPException(409,'Nenhum episódio de referência pronto e aprovado para esta receita e cena')
 
 
+def approved_clip_actions(c,cid):
+    """Reviewed action clips on this channel, by cache fingerprint (bytes and review bound by sha)."""
+    rows=c.execute("""SELECT a.value->>'cache_fingerprint' fp FROM creator_plans p
+      CROSS JOIN LATERAL jsonb_each(COALESCE(p.data->'production_assets','{}'::jsonb)) a
+      WHERE p.channel_id=%s AND a.value->>'role'='action_clip' AND a.value->>'status'='APPROVED_ACTION'
+      AND a.value->>'human_review_sha256'=a.value->>'sha256'""",(cid,)).fetchall()
+    return {r['fp'] for r in rows if r['fp']}
+
+
+def visual_plan(spec,approved=frozenset(),mode='episode_reference'):
+    """Planned movements versus what this production path actually renders.
+
+    The episode-reference path reuses an approved one-hour video as-is: it never executes the
+    recipe's scheduled movements, whatever clips exist. Saying so is part of the contract.
+    """
+    from .production_harness import ProductionSpec,compile_spec,PRESETS
+    from .action_states import SEQUENCES
+    s=spec if isinstance(spec,ProductionSpec) else ProductionSpec(**spec)
+    tasks={t['action']:t for t in compile_spec(s)['asset_tasks']}
+    markers=sorted((m.minute,m.sequence) for m in s.markers) if s.markers else sorted(PRESETS[s.cadence])
+    planned=[{'minute':m,'sequence':seq,'actions':[a for a,_,_ in SEQUENCES[seq]['steps']]} for m,seq in markers]
+    required=sorted({a for e in planned for a in e['actions']}|{'typing_idle'})
+    available=[a for a in required if tasks.get(a,{}).get('cache_fingerprint') in approved]
+    missing=[a for a in required if a not in available]
+    applied=mode=='timeline' and not missing
+    label=('Movimentos aplicados no vídeo' if applied else
+           'Sem movimentos programados: o vídeo reutiliza o episódio aprovado' if mode=='episode_reference' else
+           'Movimentos pendentes: faltam clipes aprovados')
+    return {'mode':mode,'planned':planned,'required_actions':required,'available_actions':available,'missing_actions':missing,
+            'applied':applied,'executed':planned if applied else [],'label':label}
+
+
 class QuoteRequest(BaseModel):
     channel_id:uuid.UUID
     recipe_id:uuid.UUID|None=None
@@ -77,6 +111,7 @@ class CreateRequest(QuoteRequest):
     request_id:uuid.UUID
     ceiling_usd:Decimal=Field(gt=0,le=48)
     confirm_ceiling:bool=False
+    accept_without_motion:bool=False
 
 
 def plan_quote(c,body):
@@ -96,6 +131,7 @@ def plan_quote(c,body):
     require(c,body.channel_id,row['sha256'],spec)
     compiled=compile_spec(spec,dump_music(data))
     reference=pick_reference(c,body.channel_id,data,scenario,row['visual_review'])
+    visual=visual_plan(spec,approved_clip_actions(c,body.channel_id))
     block=per_block_estimate(data)
     suggested=min(BLOCK_CAP,max(block,Decimal(str(data.cost.default_ceiling_usd_per_hour)))).quantize(Decimal('.01'))*body.hours
     remaining=Decimal(runtime.settings(c)['total_limit'])-reserved_elsewhere(c)
@@ -104,7 +140,7 @@ def plan_quote(c,body):
             'audio_prompt':compiled['audio']['prompt'],'reference':{'pilot_id':reference['pilot_id'],'title':reference['title']},
             'estimate_per_block_usd':float(block),'estimate_usd':float(block*body.hours),'suggested_ceiling_usd':float(suggested),
             'remaining_usd':float(max(remaining,Decimal(0))),'paid_enabled':bool(runtime.settings(c)['enabled']),
-            'copy':copy_for(data,scenario,body.hours,body.idea),'generation_started':False},row,data,spec,reference
+            'copy':copy_for(data,scenario,body.hours,body.idea),'visual':visual,'generation_started':False},row,data,spec,reference
 
 
 def dump_music(data):
@@ -224,6 +260,10 @@ def view(c,p):
     out['reference']={'pilot_id':p['reference']['pilot_id'],'title':p['reference']['title']}
     from .recipes import RecipeData
     out['copy']=copy_for(RecipeData.model_validate(p['recipe_snapshot']),p['scenario'],p['hours'],p['idea'])
+    revision=c.execute('SELECT revision FROM recipe_revisions WHERE sha256=%s',(p['recipe_sha256'],)).fetchone()
+    out['recipe_version']={'revision':revision['revision'] if revision else None,'sha256':p['recipe_sha256']}
+    # Productions made before visual plans were stored are described from their persisted spec.
+    out['visual']=p.get('visual_plan') or visual_plan(p['spec'])
     return out|derive(c,p)
 
 
@@ -245,6 +285,8 @@ def create(body:CreateRequest,request:Request):
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
         if not runtime.settings(c)['enabled']:raise HTTPException(409,'Geração paga desativada. Ative em Ajustes antes de produzir.')
         out,row,data,spec,reference=plan_quote(c,body)
+        if out['visual']['planned'] and not out['visual']['applied'] and not body.accept_without_motion:
+            raise HTTPException(422,'A receita programa movimentos que este vídeo não vai executar: o episódio aprovado é reutilizado como está. Confirme que aceita o vídeo sem os movimentos, ou produza e aprove os clipes antes.')
         estimate=Decimal(str(out['estimate_usd']));ceiling=Decimal(body.ceiling_usd).quantize(Decimal('.01'))
         if ceiling<estimate:raise HTTPException(422,f'O teto precisa cobrir a estimativa de US${estimate:.2f}')
         if ceiling/body.hours>BLOCK_CAP:raise HTTPException(422,'Cada hora aceita no máximo US$12')
@@ -253,11 +295,12 @@ def create(body:CreateRequest,request:Request):
         from .recipes import dump
         pid=uuid.uuid4()
         authorization={'by':str(identity.get('user_id') or identity.get('email') or 'admin'),'at':time.time(),'ceiling_usd':str(ceiling),
-                       'estimate_usd':str(estimate),'recipe_sha256':row['sha256'],'spec_sha256':out['spec_sha256'],'hours':body.hours}
-        c.execute('''INSERT INTO productions(id,request_id,channel_id,recipe_id,recipe_sha256,recipe_snapshot,idea,hours,scenario,spec,spec_sha256,reference,cost_ceiling_usd,cost_authorization)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                       'estimate_usd':str(estimate),'recipe_sha256':row['sha256'],'spec_sha256':out['spec_sha256'],'hours':body.hours,
+                       'accepted_without_motion':bool(out['visual']['planned'] and not out['visual']['applied'])}
+        c.execute('''INSERT INTO productions(id,request_id,channel_id,recipe_id,recipe_sha256,recipe_snapshot,idea,hours,scenario,spec,spec_sha256,reference,cost_ceiling_usd,cost_authorization,visual_plan)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
           (pid,body.request_id,body.channel_id,row['id'],row['sha256'],json.dumps(dump(data)),body.idea.strip(),body.hours,out['scenario'],
-           json.dumps(spec.model_dump()),out['spec_sha256'],json.dumps(reference),ceiling,json.dumps(authorization)))
+           json.dumps(spec.model_dump()),out['spec_sha256'],json.dumps(reference),ceiling,json.dumps(authorization),json.dumps(out['visual'])))
         audit(c,'PRODUCTION_AUTHORIZED',str(pid),f'ceiling USD{ceiling}; {body.hours}h; recipe {row["sha256"][:12]}')
         p=load(c,pid,True);advance(c,p);c.commit()
         return view(c,load(c,pid))

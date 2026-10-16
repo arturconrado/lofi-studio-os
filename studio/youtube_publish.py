@@ -73,11 +73,9 @@ def create(body:Publication):
         except ValueError as error:raise HTTPException(409,str(error)) from None
         review=c.execute('SELECT snapshot_sha256 FROM program_reviews WHERE program_id=%s',(e['program_id'],)).fetchone()
         if snapshot!=e['snapshot_sha256'] or not review or review['snapshot_sha256']!=snapshot:raise HTTPException(409,'O programa mudou. Revise e exporte novamente.')
-        if os.getenv('LOFI_REQUIRE_PROVENANCE_FOR_PUBLISH','').lower() in ('1','true','yes'):
-            # Opt-in hard gate: every track needs generation provenance, reviewed terms and a rights declaration.
-            from .provenance import program_report
-            rights=program_report(c,e['program_id'])
-            if not rights['ready']:raise HTTPException(409,'Proveniência ou declaração de direitos pendente: '+', '.join(rights['missing']))
+        # Opt-in hard gate shared with pilots: provenance, reviewed terms and a rights declaration.
+        from .provenance import publication_gate
+        publication_gate(c,program_id=e['program_id'])
         credential=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s FOR UPDATE',(body.channel_id,)).fetchone()
         if not credential or not upload_allowed(json.loads(cipher().decrypt(credential['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio de vídeos no menu Canais antes de publicar.')
         jid=uuid.uuid4()
@@ -108,7 +106,7 @@ def access_token(client,row):
     return tokens['access_token']
 
 def progress(jid,**fields):
-    assert fields.keys()<={'state','detail','session_encrypted','bytes_sent','total_bytes','video_id','actual_privacy','thumbnail_detail'}
+    if not fields.keys()<={'state','detail','session_encrypted','bytes_sent','total_bytes','video_id','actual_privacy','thumbnail_detail'}:raise ValueError('Unexpected publication field')
     with db() as c:c.execute('UPDATE youtube_publications SET '+','.join(k+'=%s' for k in fields)+',updated_at=now() WHERE id=%s',tuple(fields.values())+(jid,));c.commit()
 
 def accepted_offset(response,total):
@@ -222,6 +220,8 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
         p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(pid,body.channel_id)).fetchone()
         if not p:raise HTTPException(404,'Vídeo inexistente neste canal.')
         if not ready_pilot(p):raise HTTPException(409,'Vídeo completo de uma hora ainda não validado tecnicamente.')
+        from .provenance import publication_gate
+        publication_gate(c,pilot=p)
         old=c.execute('SELECT '+FIELDS+' FROM youtube_publications WHERE request_id=%s OR pilot_id=%s',(body.request_id,pid)).fetchone()
         if old:
             if old['pilot_id']!=pid or old['channel_id']!=body.channel_id or old['title']!=body.title.strip() or old['description']!=body.description or old['privacy']!=body.privacy:raise HTTPException(409,'Este vídeo já tem um envio registrado. Confira o histórico.')

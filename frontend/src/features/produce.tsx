@@ -7,6 +7,7 @@ import { usd } from '../lib/format';
 import { attempt } from '../lib/toast';
 import { Check, Field, Segmented, Empty, Skeleton, Pill } from '../ds/ui';
 import { IconSpark } from '../ds/icons';
+import { SEQUENCE_LABEL, type VisualPlan } from './studio';
 
 export type Recipe = { id: string; slug: string; name: string; origin: string; state: string; current_revision: number; sha256: string; data: any; usable: boolean; pending_reference_review: boolean };
 export const SWATCH: Record<string, string> = {
@@ -26,7 +27,7 @@ export function RecipeCard({ r, pressed, onClick, isDefault }: { r: Recipe; pres
 }
 
 type Quote = { recipe: { name: string; sha256: string }; scenario: string; scene_label: string; reference: { title: string }; estimate_usd: number; estimate_per_block_usd: number;
-  suggested_ceiling_usd: number; remaining_usd: number; paid_enabled: boolean; audio_prompt: string; copy: { title: string; description: string } };
+  suggested_ceiling_usd: number; remaining_usd: number; paid_enabled: boolean; audio_prompt: string; copy: { title: string; description: string }; visual: VisualPlan };
 
 export function Produce() {
   const cid = channel.value?.id;
@@ -41,6 +42,7 @@ export function Produce() {
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [ceiling, setCeiling] = useState<number | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const [noMotion, setNoMotion] = useState(false);
   const [busy, setBusy] = useState(false);
   const requestId = useRef(uuid());
 
@@ -58,7 +60,7 @@ export function Produce() {
 
   useEffect(() => {
     if (!cid || !recipe || !scenario) return;
-    setConfirmed(false);
+    setConfirmed(false); setNoMotion(false);
     const t = setTimeout(async () => {
       try {
         const q = await post<Quote>('/api/creator/productions/quote', { channel_id: cid, recipe_id: recipe.id, hours, idea, scenario });
@@ -71,7 +73,7 @@ export function Produce() {
   const submit = async () => {
     if (!quote || !ceiling) return;
     setBusy(true);
-    const p = await attempt(() => post('/api/creator/productions', { request_id: requestId.current, channel_id: cid, recipe_id: recipe!.id, hours, idea, scenario, ceiling_usd: ceiling, confirm_ceiling: true }), 'Produção autorizada. Acompanhe por aqui.');
+    const p = await attempt(() => post('/api/creator/productions', { request_id: requestId.current, channel_id: cid, recipe_id: recipe!.id, hours, idea, scenario, ceiling_usd: ceiling, confirm_ceiling: true, accept_without_motion: noMotion }), 'Produção autorizada. Acompanhe por aqui.');
     setBusy(false);
     if (p) { requestId.current = uuid(); navigate('/projetos/' + p.id); }
   };
@@ -122,6 +124,13 @@ export function Produce() {
             <div class="stat"><b>{usd(quote.remaining_usd)}</b><span>Disponível no limite</span></div>
             <div class="stat"><b style={{ fontSize: '16px' }}>{quote.reference.title.split('|')[0]}</b><span>Visual reutilizado (sem custo)</span></div>
           </div>
+          {quote.visual.planned.length > 0 && (
+            <div class={`notice ${quote.visual.applied ? 'ok' : 'warn'}`}>
+              <b>Movimentos da receita:</b> {quote.visual.planned.map(e => `min ${e.minute} · ${SEQUENCE_LABEL[e.sequence] || e.sequence}`).join(' · ')}
+              <div style={{ marginTop: '6px' }}>{quote.visual.applied ? 'Serão aplicados no vídeo.' :
+                <>Este vídeo <b>não</b> vai executar esses movimentos: ele reutiliza o episódio aprovado exatamente como está. Clipes de ação aprovados neste canal: {quote.visual.available_actions.length} de {quote.visual.required_actions.length}.</>}</div>
+            </div>
+          )}
           <div class="copy-preview"><b>{quote.copy.title}</b>{'\n\n'}{quote.copy.description}</div>
           <details><summary class="faint" style={{ cursor: 'pointer', fontSize: '13px' }}>Direção musical enviada ao gerador</summary><pre class="copy-preview mono" style={{ marginTop: '8px' }}>{quote.audio_prompt}</pre></details>
           <div class="row">
@@ -132,9 +141,10 @@ export function Produce() {
           {!quote.paid_enabled && <div class="notice warn">A geração paga está desativada. <a href={href('/ajustes')}>Ative em Ajustes</a> para produzir.</div>}
           {overBudget && <div class="notice bad">O teto passa do limite disponível. Ajuste o limite acumulado em Ajustes.</div>}
           {underEstimate && <div class="notice bad">O teto precisa cobrir a estimativa.</div>}
+          {quote.visual.planned.length > 0 && !quote.visual.applied && <Check checked={noMotion} onChange={setNoMotion}>Entendo que o vídeo sai sem os movimentos programados (música nova sobre o episódio aprovado)</Check>}
           <Check checked={confirmed} onChange={setConfirmed}>Autorizo até {usd(ceiling)} para {hours}h de música original com a receita “{quote.recipe.name}”. Sem novas tentativas pagas automáticas.</Check>
           <div class="row">
-            <button class="btn primary lg" disabled={!confirmed || busy || !quote.paid_enabled || overBudget || underEstimate || !settings.value} onClick={submit}><IconSpark /> {busy ? 'Autorizando…' : 'Produzir'}</button>
+            <button class="btn primary lg" disabled={!confirmed || (quote.visual.planned.length > 0 && !quote.visual.applied && !noMotion) || busy || !quote.paid_enabled || overBudget || underEstimate || !settings.value} onClick={submit}><IconSpark /> {busy ? 'Autorizando…' : 'Produzir'}</button>
             <span class="faint" style={{ fontSize: '13px' }}>Você só volta a ser chamado na revisão.</span>
           </div>
         </>}

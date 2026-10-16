@@ -15,7 +15,7 @@ const production = { id: 'p1', channel_id: 'c1', idea: 'neve', hours: 2, scenari
   status: 'AGUARDANDO_REVISAO', label: 'Aguardando sua revisão', next_action: { kind: 'review', label: 'Revisar hora 1', program_id: 'LOFI-1' },
   stages: ['recipe', 'music', 'review', 'export', 'deliver'].map((id, i) => ({ id, state: i < 2 ? 'done' : i === 2 ? 'active' : 'pending' })),
   blocks: [{ hour_index: 0, program_id: 'LOFI-1', stage: 'AGUARDANDO_REVISAO', label: 'Aguardando', batch_state: 'ready', batch_detail: '', tracks: 30, pending_tracks: 30, reviewed: null, export: null, publication: null, live: false }],
-  progress: { seconds: 3600, target_seconds: 7200, blocks_created: 1, blocks_total: 2, tracks: 30 }, cost: { ceiling_usd: 5, reserved_usd: 2.4 }, error: null, detail: '' };
+  progress: { seconds: 3600, target_seconds: 7200, blocks_created: 1, blocks_total: 2, tracks: 30 }, cost: { ceiling_usd: 5, reserved_usd: 2.4 }, error: null, detail: '', recipe_version: { revision: 1, sha256: 'a'.repeat(64) }, visual: { mode: 'episode_reference', planned: [{ minute: 15, sequence: 'breath_pet', actions: ['pet_cat'] }], required_actions: ['pet_cat', 'typing_idle'], available_actions: [], missing_actions: ['pet_cat', 'typing_idle'], applied: false, executed: [], label: 'Sem movimentos programados' } };
 const block = { id: 'block_review:LOFI-1', kind: 'block_review', priority: 10, title: 'Hora 1', subtitle: '2 faixas', created_at: new Date().toISOString(), program_id: 'LOFI-1', production_id: 'p1',
   media: { audio_url: '/a', video_url: '/v' }, tracks: [{ track_id: 'LOFI-1-001', asset_id: 'a1', title: 'Track 1', seconds: 120, editorial_status: 'PENDING', track_status: 'REVIEW', technical_status: 'PASS', audio_url: '/x', prefill: { evidence_reference: 'OpenRouter' }, technical_note_required: false }],
   track_evidence: [{ name: 'listened_fully', type: 'bool', label: 'Ouvi' }], track_actions: { approve: { method: 'POST', path: '/api/tracks/{track_id}/approve', body: { asset_id: '{asset_id}' } }, reject: { method: 'POST', path: '/api/tracks/{track_id}/assets/{asset_id}/reject' } },
@@ -27,7 +27,7 @@ function respond(url: string): unknown {
   if (url.includes('/channels/c1/recipes')) return { recipes: [{ recipe_id: 'r1', is_default: true }] };
   if (url.includes('/productions/legacy')) return { programs: [] };
   if (url.includes('/productions/p1')) return production;
-  if (url.includes('/productions/quote')) return { recipe: { name: '8-Bit', sha256: 'a' }, scenario: 'snowy_night_studio', scene_label: 'Snowy', reference: { title: 'Snowy' }, estimate_usd: 2.48, estimate_per_block_usd: 2.48, suggested_ceiling_usd: 3, remaining_usd: 30, paid_enabled: true, audio_prompt: 'p', copy: { title: 't', description: 'd' } };
+  if (url.includes('/productions/quote')) return { recipe: { name: '8-Bit', sha256: 'a' }, scenario: 'snowy_night_studio', scene_label: 'Snowy', reference: { title: 'Snowy' }, estimate_usd: 2.48, estimate_per_block_usd: 2.48, suggested_ceiling_usd: 3, remaining_usd: 30, paid_enabled: true, audio_prompt: 'p', copy: { title: 't', description: 'd' }, visual: { mode: 'episode_reference', planned: [{ minute: 15, sequence: 'breath_pet', actions: ['pet_cat'] }], required_actions: ['pet_cat', 'typing_idle'], available_actions: [], missing_actions: ['pet_cat', 'typing_idle'], applied: false, executed: [], label: 'Sem movimentos programados' } };
   if (url.includes('/productions')) return { productions: [production] };
   if (url.includes('/inbox')) return { items: [block], count: 1, counts: { block_review: 1 } };
   if (url.includes('/catalog')) return { styles: [{ id: '8bit_lofi', label: '8-bit', bpm: [65, 85], direction: 'chip' }], scenes: [{ id: 'snowy_night_studio', label: 'Snowy Night Studio · lareira', approved: true }], sequences: [{ id: 'breath_pet', requires: ['cat'] }], contextual_actions: [] };
@@ -52,7 +52,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('every screen renders with data', () => {
   const cases: [string, RegExp][] = [
-    ['/', /Precisa de você/], ['/produzir', /Custo e confirmação/], ['/projetos/p1', /Horas/], ['/revisao', /Validar esta hora/],
+    ['/', /Precisa de você/], ['/produzir', /não<\/b> vai executar|não vai executar/], ['/projetos/p1', /Roteiro visual não aplicado/], ['/revisao', /Validar esta hora/],
     ['/biblioteca', /Biblioteca/], ['/ao-vivo', /Mixer de áudio/], ['/receitas', /Nova receita/], ['/receitas/r1', /Bíblia musical/],
     ['/receitas/nova', /Criar receita/], ['/canais', /Receitas do canal|Salvar receitas do canal/], ['/ajustes', /Geração paga/], ['/diagnostico', /Serviços/],
   ];
