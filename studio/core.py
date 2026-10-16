@@ -133,6 +133,7 @@ def init_db(connection=None):
               "ALTER TABLE assets ADD COLUMN IF NOT EXISTS editorial_status TEXT NOT NULL DEFAULT 'PENDING'",
               "ALTER TABLE assets ADD COLUMN IF NOT EXISTS review_note TEXT NOT NULL DEFAULT ''",
               'ALTER TABLE assets ADD COLUMN IF NOT EXISTS broadcast_path TEXT',
+              'ALTER TABLE assets ADD COLUMN IF NOT EXISTS provenance JSONB',
               'ALTER TABLE broadcast_control ADD COLUMN IF NOT EXISTS automatic BOOLEAN NOT NULL DEFAULT false',
             ]: q.execute(statement)
             # Legacy editorial approvals must never be inferred from rights text.

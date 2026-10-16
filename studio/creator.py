@@ -3,6 +3,7 @@ import json,uuid
 from decimal import Decimal
 import httpx
 from fastapi import APIRouter,HTTPException
+from typing import Literal
 from pydantic import BaseModel,Field
 from .core import db,audit
 from . import runtime
@@ -33,6 +34,8 @@ from .production_harness import ProductionSpec,compile_spec
 class CreativePlan(BaseModel):
  production_spec:ProductionSpec|None=None
  mix_crossfade_seconds:float=Field(default=1.5,ge=0,le=5)
+ ambient_bed:Literal['none','rain','fireplace']='none'
+ ambient_gain_db:float=Field(default=-26,ge=-40,le=-12)
  title:str=Field(min_length=1,max_length=100)
  description:str=Field(max_length=4000)
  theme:str=Field(min_length=1,max_length=2000)

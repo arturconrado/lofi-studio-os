@@ -73,6 +73,11 @@ def create(body:Publication):
         except ValueError as error:raise HTTPException(409,str(error)) from None
         review=c.execute('SELECT snapshot_sha256 FROM program_reviews WHERE program_id=%s',(e['program_id'],)).fetchone()
         if snapshot!=e['snapshot_sha256'] or not review or review['snapshot_sha256']!=snapshot:raise HTTPException(409,'O programa mudou. Revise e exporte novamente.')
+        if os.getenv('LOFI_REQUIRE_PROVENANCE_FOR_PUBLISH','').lower() in ('1','true','yes'):
+            # Opt-in hard gate: every track needs generation provenance, reviewed terms and a rights declaration.
+            from .provenance import program_report
+            rights=program_report(c,e['program_id'])
+            if not rights['ready']:raise HTTPException(409,'Proveniência ou declaração de direitos pendente: '+', '.join(rights['missing']))
         credential=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s FOR UPDATE',(body.channel_id,)).fetchone()
         if not credential or not upload_allowed(json.loads(cipher().decrypt(credential['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio de vídeos no menu Canais antes de publicar.')
         jid=uuid.uuid4()
