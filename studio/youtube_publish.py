@@ -33,6 +33,7 @@ def ensure(c):
 def upload_allowed(tokens):return UPLOAD_SCOPE in tokens.get('scope','').split()
 MANAGE_SCOPES=('https://www.googleapis.com/auth/youtube.force-ssl','https://www.googleapis.com/auth/youtube')
 def delete_allowed(tokens):return any(s in tokens.get('scope','').split() for s in MANAGE_SCOPES)
+manage_allowed=delete_allowed  # editing metadata needs the same YouTube management permission
 def secure_session(url):
     u=urlparse(url)
     if u.scheme!='https' or u.hostname!='www.googleapis.com' or u.port not in (None,443) or u.username or u.password or u.path!='/upload/youtube/v3/videos':raise ValueError('Invalid resumable endpoint')
@@ -183,6 +184,47 @@ def delete_video(jid:uuid.UUID,body:Removal):
     return {'id':jid,'state':'deleted','video_id':row['video_id']}
 
 
+class MetadataUpdate(BaseModel):
+    description:str=Field(max_length=5000)
+    title:str|None=Field(default=None,min_length=1,max_length=100)
+    confirm_update:bool=False
+
+
+@router.post('/{jid}/metadata')
+def update_metadata(jid:uuid.UUID,body:MetadataUpdate):
+    """Rewrite the description (and optionally the title) of a video already on YouTube.
+
+    The current snippet is read first so tags, category and language are preserved.
+    """
+    if not body.confirm_update:raise HTTPException(422,'Confirme a alteração do texto publicado no YouTube.')
+    if any(x in (body.title or '')+body.description for x in '<>'):raise HTTPException(422,'Texto inválido.')
+    with db() as c:
+        ensure(c)
+        row=c.execute('SELECT * FROM youtube_publications WHERE id=%s',(jid,)).fetchone()
+        if not row:raise HTTPException(404,'Publicação não encontrada.')
+        if row['state']!='uploaded' or not row['video_id']:raise HTTPException(409,'Só um vídeo já recebido pelo YouTube pode ser editado.')
+        credential=c.execute('SELECT token_encrypted FROM channel_credentials WHERE channel_id=%s',(row['channel_id'],)).fetchone()
+        if not credential or not manage_allowed(json.loads(cipher().decrypt(credential['token_encrypted'].encode()))):
+            raise HTTPException(409,'Reconecte o YouTube em Canais autorizando o gerenciamento de vídeos para editar pela plataforma.')
+    with httpx.Client(timeout=30) as client:
+        try:token=access_token(client,row)
+        except ValueError as error:raise HTTPException(409,'Conexão do YouTube indisponível: '+str(error)) from None
+        headers={'Authorization':'Bearer '+token}
+        current=client.get('https://www.googleapis.com/youtube/v3/videos',params={'part':'snippet','id':row['video_id']},headers=headers)
+        items=current.json().get('items',[]) if current.status_code==200 else []
+        if not items:raise HTTPException(404,'O YouTube não encontrou este vídeo; ele pode ter sido excluído.')
+        snippet=items[0]['snippet']
+        update={k:snippet[k] for k in ('title','categoryId','tags','defaultLanguage','defaultAudioLanguage') if k in snippet}
+        update['description']=body.description
+        if body.title:update['title']=body.title.strip()
+        r=client.put('https://www.googleapis.com/youtube/v3/videos',params={'part':'snippet'},headers=headers,json={'id':row['video_id'],'snippet':update})
+    if r.status_code!=200:raise HTTPException(502,f'O YouTube recusou a alteração ({r.status_code}). Nada foi alterado.')
+    with db() as c:
+        c.execute('UPDATE youtube_publications SET description=%s,title=%s,updated_at=now() WHERE id=%s',(body.description,update['title'],jid))
+        audit(c,'YOUTUBE_METADATA_UPDATED',str(jid),row['video_id']);c.commit()
+    return {'id':jid,'video_id':row['video_id'],'title':update['title'],'updated':True}
+
+
 @router.post('/{jid}/resume')
 def resume(jid:uuid.UUID):
     with db() as c:
@@ -295,10 +337,11 @@ def pilot_draft(pid:uuid.UUID):
     with db() as c:p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s',(pid,)).fetchone()
     if not p or not ready_pilot(p):raise HTTPException(409,'Este arquivo não é um vídeo completo de 1h validado tecnicamente.')
     key=p['report'].get('delivery_assets',{}).get('description')
-    description='Instrumental lo-fi jazzhop for coding, study and quiet focus. Music and visuals produced with AI assistance.'
+    from .copywriting import organic,HASHTAGS
+    description='One hour of warm instrumental lo-fi jazzhop for coding, studying and quiet focus.\n\nWhat are you working on today? Tell us in the comments 👇\n\n'+HASHTAGS
     if key:
         obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=key)
-        try:description=obj['Body'].read(20000).decode('utf-8')[:5000]
+        try:description=organic(obj['Body'].read(20000).decode('utf-8'),p['title'])[:5000] or description
         finally:obj['Body'].close()
     return {'pilot_id':pid,'channel_id':p['channel_id'],'title':p['title'],'description':description,'seconds':3600,'thumbnail_url':f'/api/ambient/pilots/{pid}/assets/thumbnail1','video_url':f'/api/ambient/pilots/{pid}/video'}
 

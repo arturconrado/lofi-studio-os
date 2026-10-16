@@ -151,6 +151,18 @@ def test_release_held_and_delete_uploaded_video(monkeypatch):
     again=client.post(f'/api/youtube/publications/{live}/delete',json={'confirm_delete':True},headers=h).json()
     assert again['reused'] and calls==['abcdefghijk']
     assert ypub.delete_allowed({'scope':'https://www.googleapis.com/auth/youtube.force-ssl'}) and not ypub.delete_allowed({'scope':ypub.UPLOAD_SCOPE})
+    # Editing the description of a live video keeps the rest of its snippet.
+    marker=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:c.execute("UPDATE youtube_publications SET state='uploaded' WHERE id=%s",(live,));c.commit()
+    finally:WORKSPACE.reset(marker)
+    sent={}
+    class FakeEdit(Fake):
+        def get(self,url,params,headers):return type('R',(),{'status_code':200,'json':lambda self:{'items':[{'snippet':{'title':'Old','categoryId':'10','tags':['lofi'],'description':'Made with AI'}}]}})()
+        def put(self,url,params,headers,json):sent.update(json);return type('R',(),{'status_code':200})()
+    monkeypatch.setattr(ypub.httpx,'Client',FakeEdit)
+    edited=client.post(f'/api/youtube/publications/{live}/metadata',json={'description':'Snow falls outside.','confirm_update':True},headers=h).json()
+    assert edited['updated'] and sent['snippet']=={'title':'Old','categoryId':'10','tags':['lofi'],'description':'Snow falls outside.'}
 
 
 def test_same_video_is_never_published_twice(monkeypatch):
