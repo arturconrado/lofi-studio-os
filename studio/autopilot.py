@@ -49,6 +49,7 @@ class Setup(BaseModel):
     accept_automatic_approval:bool=False
     autostart_broadcast:bool=False
     private_event_confirmed:bool=False
+    recipe_id:uuid.UUID|None=None
 
 @router.put('/settings')
 def setup(body:Setup):
@@ -65,6 +66,10 @@ def setup(body:Setup):
         if usage(c)>body.budget_usd:raise HTTPException(422,'Teto menor que as reservas já realizadas')
         c.execute('UPDATE studio_config SET api_key_encrypted=%s,model=%s,total_limit=%s,daily_limit=%s,enabled=false WHERE id=1',(encrypted,MODEL,body.budget_usd,body.budget_usd))
         c.execute("UPDATE factory_control SET rights_policy=%s,autostart=false,private_confirmed=false,state='ready',detail='Chave validada; pronto para produzir instrumentais via OpenRouter' WHERE id=1",(body.rights_policy,))
+        from .recipes import ready,ensure_autopilot,current
+        ready();ensure_autopilot(c)
+        if body.recipe_id:current(c,body.recipe_id)
+        c.execute('INSERT INTO autopilot_recipe(id,recipe_id) VALUES(1,%s) ON CONFLICT(id) DO UPDATE SET recipe_id=EXCLUDED.recipe_id,updated_at=now()',(body.recipe_id,))
         audit(c,'OPENROUTER_FACTORY_CONFIGURED','1',str(body.budget_usd));c.commit()
     return {'ok':True}
 
@@ -106,11 +111,16 @@ def tick():
         except ValueError:block('Teto financeiro atingido; catálogo preservado',state='budget_limit');return
         n=c.execute("SELECT count(*) n FROM tracks WHERE id LIKE 'OR-%'").fetchone()['n']+1
         tid='OR-'+uuid.uuid4().hex[:12];jid=uuid.uuid4()
-        instruments=['Rhodes and upright bass','soft jazz guitar and piano','vibraphone and brushed drums','warm analog pads and electric piano','nylon guitar and mellow organ','piano and gentle electric bass']
-        moods=['rainy window','midnight skyline','warm morning cafe','quiet library','forest cabin','seaside sunset','snowy night','neon city']
-        prompt=f'Create an original three-minute instrumental lo-fi jazzhop composition. {instruments[n%6]}, {moods[n%8]}, {66+n%19} BPM. Detailed coherent arrangement, evolving jazz harmony and subtle variation. Clean stereo production, no vocals, no imitation of named artists, no samples of existing music. Smooth intro and natural outro. Theme number {n}.'
+        from .recipes import autopilot_music,autopilot_prompt
+        music=autopilot_music(c)
+        if music:prompt,bpm=autopilot_prompt(music,n)
+        else:
+            instruments=['Rhodes and upright bass','soft jazz guitar and piano','vibraphone and brushed drums','warm analog pads and electric piano','nylon guitar and mellow organ','piano and gentle electric bass']
+            moods=['rainy window','midnight skyline','warm morning cafe','quiet library','forest cabin','seaside sunset','snowy night','neon city']
+            prompt=f'Create an original three-minute instrumental lo-fi jazzhop composition. {instruments[n%6]}, {moods[n%8]}, {66+n%19} BPM. Detailed coherent arrangement, evolving jazz harmony and subtle variation. Clean stereo production, no vocals, no imitation of named artists, no samples of existing music. Smooth intro and natural outro. Theme number {n}.'
+            bpm=66+n%19
         coll=f'Conjunto {1+(n-1)//60:02d}'
-        c.execute('INSERT INTO tracks(id,title,collection,bpm,prompt) VALUES(%s,%s,%s,%s,%s)',(tid,f'Lo-Fi {n:03d}',coll,66+n%19,prompt))
+        c.execute('INSERT INTO tracks(id,title,collection,bpm,prompt) VALUES(%s,%s,%s,%s,%s)',(tid,f'Lo-Fi {n:03d}',coll,bpm,prompt))
         c.execute("INSERT INTO jobs(id,track_id,status,provider,model,estimated_cost,budget_reserved,prompt_snapshot,requested_seconds) VALUES(%s,%s,'QUEUED','openrouter',%s,%s,true,%s,180)",(jid,tid,MODEL,price,prompt))
         audit(c,'AUTO_REQUESTED',tid,f'{jid}; reserve={price}');c.commit()
 

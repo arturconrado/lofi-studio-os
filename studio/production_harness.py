@@ -16,7 +16,10 @@ PRESETS = {'legacy_10_25_45':[(m,'breath_pet') for m in (10,20,30,40,50)]+[(25,'
            'quarter_hour_v2':[(15,'breath_pet'),(45,'breath_pet'),(30,'phone_check')]}
 # Defaults omitted from the creative hash so earlier approvals stay bound.
 NEUTRAL = {'markers':[], 'weather':'scene_default', 'time_of_day':'scene_default', 'precipitation_intensity':None,
-           'occasional_variations':False, 'variation_seed':0, 'contextual_actions':[]}
+           'occasional_variations':False, 'variation_seed':0, 'contextual_actions':[],
+           'recipe_sha256':'', 'visual_variant':'canonical_illustrated'}
+# Recipe fields added later; omitted from compiled output at their defaults too.
+RECIPE_NEUTRAL = {'recipe_sha256':'', 'visual_variant':'canonical_illustrated'}
 
 
 class Marker(BaseModel):
@@ -45,6 +48,8 @@ class ProductionSpec(BaseModel):
     occasional_variations: bool = False
     variation_seed: int = Field(default=0, ge=0, le=2**31-1)
     contextual_actions: list[ContextualAction] = Field(default_factory=list, max_length=3)
+    recipe_sha256: str = Field(default='', pattern=r'^(|[a-f0-9]{64})$')
+    visual_variant: Literal['canonical_illustrated', 'pixel_art_reviewed'] = 'canonical_illustrated'
 
     @model_validator(mode='after')
     def scene_rules(self):
@@ -137,10 +142,12 @@ def task_prompt(spec, scene, action):
     return f'Same canonical adult girl and cat from the approved episode {SCENES[spec.scenario]["label"]}, locked camera and identical framing, original outfit and props only (visible: {", ".join(scene["props"])}). Scene direction: {spec.scene_brief}. Action: {description} Natural clearly readable motion, consistent hands, face, cat anatomy, contact and occlusion. Start and finish at the specified pose anchors; no text, speech, camera cuts, new props or added characters.'
 
 
-def compile_spec(spec: ProductionSpec):
+def compile_spec(spec: ProductionSpec, music=None):
     scene=resolve(spec);legacy=spec.scenario in LEGACY
+    # A reviewed pixel variant is a separate clip library: never mixed with canonical clips.
+    style_lock='illustration_style' if spec.visual_variant=='canonical_illustrated' else 'reviewed_pixel_art_variant_of_canonical'
     identity = {'character_reference': spec.character_reference, 'cat_reference': spec.cat_reference,
-                'preserve': ['face', 'hair', 'adult_character', 'cat_markings', 'illustration_style'],
+                'preserve': ['face', 'hair', 'adult_character', 'cat_markings', style_lock],
                 'shirt_color': spec.shirt_color, 'cushion_color': spec.shirt_color,
                 'props': ['phone_on_table', 'cat_cushion'], 'cushion_text': 'lo+fi vibe coding',
                 'text_method': 'tracked_local_overlay_not_generated_lettering'}
@@ -173,6 +180,7 @@ def compile_spec(spec: ProductionSpec):
     fingerprint_identity=identity if legacy else {k:v for k,v in identity.items() if k!='shirt_color'}
     for action in unique:
         prompt = task_prompt(spec,scene,action)
+        if spec.visual_variant!='canonical_illustrated':prompt+=' Render as the reviewed pixel-art variant of the same canonical girl and cat; identical identity, framing and props.'
         task={'action':action, 'method':'reuse_then_local_then_quoted_ai', 'ai_method_if_needed':'reference_conditioned_ai_clip', 'status':'missing',
               'prompt':prompt, 'required_capabilities':['reference_identity','articulated_character_motion','contact_and_occlusion','pose_anchors'], 'cache_fingerprint':hashlib.sha256(json.dumps([fingerprint_identity,spec.scenario,action,prompt],sort_keys=True).encode()).hexdigest(),
               'reuse_scope':'same_workspace_same_identity_scene_color_and_action', 'paid_retry':False}
@@ -193,10 +201,11 @@ def compile_spec(spec: ProductionSpec):
               'loop_boundary':'requires_reviewed_transition_no_instant_reset'}
     if scene['overlay']:lighting['overlay']=scene['overlay']
     if object_keyframes:lighting['object_keyframes']=object_keyframes
-    result={'render_policy':defaults(), 'spec':spec.model_dump(), 'identity':identity, 'duration_seconds':spec.hours*3600,
+    dumped={k:v for k,v in spec.model_dump().items() if not (k in RECIPE_NEUTRAL and v==RECIPE_NEUTRAL[k])}
+    result={'render_policy':defaults(), 'spec':dumped, 'identity':identity, 'duration_seconds':spec.hours*3600,
             'cycle_seconds':3600, 'default_action':'typing_idle', 'events':events,
             'lighting':lighting,
-            'audio':{'prompt':audio_prompt(spec.music_style,spec.music_brief),
+            'audio':{'prompt':audio_prompt(spec.music_style,spec.music_brief,music),
                      'no_track_repetition_to_claim_original_duration':True,'no_sudden_loudness_changes':True,
                      'human_listening_review_required':True,'measured_duration_required':True},
             'asset_tasks':tasks, 'local_layers':local_layers,
@@ -215,8 +224,15 @@ def compile_spec(spec: ProductionSpec):
     return result
 
 
-def audio_prompt(style, brief):
-    return AUDIO[style] + '\nUser musical direction: ' + brief + '\nComplete original instrumental composition around 120 seconds, natural musical ending, no vocals, named artist imitation, copied melodies, silence padding or loud attention effects. Preserve long-listening dynamics; vary motifs and arrangements between tracks.'
+def audio_prompt(style, brief, music=None):
+    """Without a recipe the prompt stays byte-identical to earlier batches."""
+    direction=AUDIO[style]
+    if music:
+        direction=music.get('bible') or direction
+        if music.get('instruments'):direction+='\nInstrumentation: '+', '.join(music['instruments'])+'.'
+        if music.get('bpm_range'):direction+='\nTempo range: {}-{} BPM.'.format(*music['bpm_range'])
+        if music.get('avoid'):direction+='\nAvoid: '+', '.join(music['avoid'])+'.'
+    return direction + '\nUser musical direction: ' + brief + '\nComplete original instrumental composition around 120 seconds, natural musical ending, no vocals, named artist imitation, copied melodies, silence padding or loud attention effects. Preserve long-listening dynamics; vary motifs and arrangements between tracks.'
 
 
 def assess_delivery(compiled, receipts):
