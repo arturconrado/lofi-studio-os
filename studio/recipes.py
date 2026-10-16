@@ -200,11 +200,11 @@ def ensure(c):
 
 def refresh_builtin_copy(c):
     """Untouched built-in recipes move to the viewer-first description, as a new revision."""
-    from .copywriting import OLD_TEMPLATE,DEFAULT_TEMPLATE
+    from .copywriting import PREVIOUS_TEMPLATES,DEFAULT_TEMPLATE
     rows=c.execute('''SELECT r.id,v.data FROM recipes r JOIN recipe_revisions v ON v.recipe_id=r.id AND v.revision=r.current_revision
-      WHERE r.origin='builtin' AND v.data->'copy'->>'description_template'=%s''',(OLD_TEMPLATE,)).fetchall()
+      WHERE r.origin='builtin' AND v.data->'copy'->>'description_template'=ANY(%s)''',(list(PREVIOUS_TEMPLATES),)).fetchall()
     for row in rows:
-        data=row['data'];data['copy']=data['copy']|{'description_template':DEFAULT_TEMPLATE,'hashtags':['#lofi','#codingmusic','#studymusic']}
+        data=row['data'];data['copy']=data['copy']|{'description_template':DEFAULT_TEMPLATE}
         model=RecipeData.model_validate(data);sha=digest(model)
         if c.execute('SELECT 1 FROM recipe_revisions WHERE sha256=%s',(sha,)).fetchone():continue
         revision=c.execute('SELECT max(revision)+1 n FROM recipe_revisions WHERE recipe_id=%s',(row['id'],)).fetchone()['n']

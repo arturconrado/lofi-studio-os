@@ -93,7 +93,8 @@ def test_pixel_recipe_waits_for_reference_review(client):
 
 @DB
 def test_builtin_recipes_move_to_viewer_first_copy(client):
-    from studio.copywriting import OLD_TEMPLATE,DEFAULT_TEMPLATE
+    from studio.copywriting import PREVIOUS_TEMPLATES,DEFAULT_TEMPLATE
+    OLD_TEMPLATE=PREVIOUS_TEMPLATES[1]
     from studio.recipes import refresh_builtin_copy
     from studio.core import db
     from studio.tenancy import WORKSPACE

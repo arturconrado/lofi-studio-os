@@ -1,4 +1,5 @@
-from studio.copywriting import organic,chapter,DEFAULT_TEMPLATE,OLD_TEMPLATE
+import re
+from studio.copywriting import organic,chapter,DEFAULT_TEMPLATE,PREVIOUS_TEMPLATES
 
 
 def test_organic_drops_process_paragraphs_and_template_labels():
@@ -17,4 +18,6 @@ def test_chapters_lose_internal_codes():
 
 def test_default_template_is_viewer_first():
     for word in ('AI','generated','Lyria','OpenRouter'):assert word not in DEFAULT_TEMPLATE
-    assert '{hashtags}' in DEFAULT_TEMPLATE and DEFAULT_TEMPLATE!=OLD_TEMPLATE
+    assert DEFAULT_TEMPLATE not in PREVIOUS_TEMPLATES and '#' not in DEFAULT_TEMPLATE and '{hashtags}' not in DEFAULT_TEMPLATE
+    assert not re.search('[\U0001F300-\U0001FAFF\u2600-\u27BF]',DEFAULT_TEMPLATE)
+    assert 'subscribe' in DEFAULT_TEMPLATE and 'comments' in DEFAULT_TEMPLATE

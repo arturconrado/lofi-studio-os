@@ -337,8 +337,8 @@ def pilot_draft(pid:uuid.UUID):
     with db() as c:p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s',(pid,)).fetchone()
     if not p or not ready_pilot(p):raise HTTPException(409,'Este arquivo não é um vídeo completo de 1h validado tecnicamente.')
     key=p['report'].get('delivery_assets',{}).get('description')
-    from .copywriting import organic,HASHTAGS
-    description='One hour of warm instrumental lo-fi jazzhop for coding, studying and quiet focus.\n\nWhat are you working on today? Tell us in the comments 👇\n\n'+HASHTAGS
+    from .copywriting import organic
+    description='One hour of warm lofi jazz for coding, studying and quiet focus.\n\nWhat are you working on today? Tell us in the comments.\nIf these sessions help you, subscribe. New places to focus are on the way.'
     if key:
         obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=key)
         try:description=organic(obj['Body'].read(20000).decode('utf-8'),p['title'])[:5000] or description

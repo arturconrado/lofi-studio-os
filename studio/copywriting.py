@@ -8,7 +8,6 @@ import re
 
 PROCESS = re.compile(r'\b(AI|A\.I\.|artificial intelligence|generated|generative|Lyria|OpenRouter|Seedream|Veo|Gemini|prompt|model)\b', re.I)
 LABELS = re.compile(r'^\s*(TITLE|DESCRIPTION|TRACKLIST)\s*$', re.I)
-HASHTAGS = '#lofi #codingmusic #studymusic'
 
 
 def organic(text, title=None):
@@ -28,9 +27,19 @@ def chapter(line):
     return re.sub(r'\s*·\s*\d+\s*$', '', line)
 
 
-DEFAULT_TEMPLATE = ('Settle in at {scene_title} for {hours_label} of {style_title}: slow beats and warm melodies '
-                    'to keep you company while you code, study or read.\n\n{idea}\n\n'
-                    'Headphones on, notifications off. Leave it on loop for longer sessions.\n\n'
-                    'What are you working on today? Tell us in the comments 👇\n'
-                    'Subscribe for more cozy focus sessions.\n\n{hashtags}')
+# Plain and human: no emoji, no hashtags; a hook with what people search, a reason to save,
+# a question that starts a conversation and a reason to subscribe.
+DEFAULT_TEMPLATE = ('{style_title} for coding and studying at {scene_title}. {hours_label} of slow beats and warm melodies '
+                    'to keep you company while you work.\n\n{idea}\n\n'
+                    'Save it to a playlist so it is there the next time you sit down to focus.\n\n'
+                    'What are you working on today? Tell us in the comments, and tell us where the next session should take place.\n'
+                    'If these sessions help you, subscribe. New places to focus are on the way.')
+PREVIOUS_TEMPLATES = (
+    'Original instrumental {style_title} for coding, studying and deep focus, set in {scene_title}.\n\n{idea}\n\n{hashtags}',
+    'Settle in at {scene_title} for {hours_label} of {style_title}: slow beats and warm melodies '
+    'to keep you company while you code, study or read.\n\n{idea}\n\n'
+    'Headphones on, notifications off. Leave it on loop for longer sessions.\n\n'
+    'What are you working on today? Tell us in the comments 👇\n'
+    'Subscribe for more cozy focus sessions.\n\n{hashtags}',
+)
 OLD_TEMPLATE = 'Original instrumental {style_title} for coding, studying and deep focus, set in {scene_title}.\n\n{idea}\n\n{hashtags}'
