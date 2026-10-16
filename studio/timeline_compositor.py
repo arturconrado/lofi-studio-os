@@ -226,7 +226,9 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
     for sha,path in sources.items():
         if file_hash(path)!=sha:raise ValueError('Source hash changed')
     duration,_=measure(audio,'audio')
-    if duration+.001<target+compiled.get('audio_offset_seconds',0):raise ValueError('Audio shorter than target')
+    windows=compiled.get('audio_windows')
+    if windows and max(a+d for a,d in windows)>duration+.001:raise ValueError('Audio shorter than sampled windows')
+    if not windows and duration+.001<target+compiled.get('audio_offset_seconds',0):raise ValueError('Audio shorter than target')
     needed=math.ceil(target*2_000_000/8*3+512*1024**2)
     if shutil.disk_usage(folder).free<needed:raise ValueError('Insufficient local scratch capacity')
     binding=checkpoint_binding(compiled,plan,environment,file_hash(audio),width,height,fps)
@@ -264,6 +266,13 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
             filters += ffmpeg_filters(last,mask_label,environment['recolor_color'],width,height)
             last='recolored'
         if 'weather' in masks:filters += [f'[{last}][{names["weather"]}:v]overlay=shortest=1[weathered]'];last='weathered'
+        if segment.get('label'):
+            # Condensed previews name the real program minute of each sample.
+            tag=folder/f'sample-label-{hashlib.sha256(segment["label"].encode()).hexdigest()[:12]}.png'
+            if not tag.exists():
+                im=Image.new('RGBA',(width,max(14,height//14)),(10,12,20,170));ImageDraw.Draw(im).text((6,2),segment['label'],font=ImageFont.load_default(size=max(10,height//22)),fill=(240,236,255,255));im.save(tag)
+            tag_index=args.count('-i');args+=['-loop','1','-framerate',str(fps),'-i',str(tag)]
+            filters += [f'[{last}][{tag_index}:v]overlay=x=0:y=0:shortest=1[tagged]'];last='tagged'
         if 'label' in masks:
             x,y,_,_=environment['cushion_box']
             filters += [f'[{last}][{names["label"]}:v]overlay=x={round(x*width)}:y={round(y*height)}:shortest=1[labelled]'];last='labelled'
@@ -284,11 +293,15 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
         if progress:progress(index+1,len(segments),segment['end'])
         if shutil.disk_usage(folder).free<512*1024**2:raise ValueError('Scratch capacity exhausted')
     listing=folder/'chunks.txt';listing.write_text(''.join(f"file '{p.name}'\n" for p in chunks))
-    subprocess.run(['ffmpeg','-v','error','-y','-threads','1','-f','concat','-safe','1','-i',str(listing),'-ss',str(compiled.get('audio_offset_seconds',0)),'-i',str(audio),'-map','0:v:0','-map','1:a:0','-c:v','copy','-af','alimiter=limit=0.95','-c:a','aac','-b:a','192k','-t',str(target),'-movflags','+faststart',str(output)],check=True,timeout=max(120,int(target)),stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    if windows:
+        from .timeline_preview import condensed_audio
+        audio=condensed_audio(audio,windows,folder/'condensed-audio.wav')
+    subprocess.run(['ffmpeg','-v','error','-y','-threads','1','-f','concat','-safe','1','-i',str(listing),'-ss',str(0 if windows else compiled.get('audio_offset_seconds',0)),'-i',str(audio),'-map','0:v:0','-map','1:a:0','-c:v','copy','-af','alimiter=limit=0.95','-c:a','aac','-b:a','192k','-t',str(target),'-movflags','+faststart',str(output)],check=True,timeout=max(120,int(target)),stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
     from .video_guardrails import inspect
     evidence=inspect(output)
     if evidence['duration_seconds']+.001<target or not evidence['full_decode_pass']:raise ValueError('Final duration or decode check failed')
     evidence.update(demo_only=False,timeline_coverage_seconds=target,source_preserved=True,
                     continuous_transitions_reviewed=False,perceptible_motion_reviewed=False,time_progression_reviewed=False)
     return {'video':evidence,'segments':receipts,'local_resources':{'elapsed_seconds':round(time.monotonic()-started,3),'output_bytes':output.stat().st_size,'checkpoint_reused_segments':sum(bool(s['checkpoint_reused']) for s in receipts),'infrastructure_cost_usd':None},'paid_calls':0,'environment_clock':'absolute_no_hourly_reset',
-            'eligible_for_live':False,'final_human_review_required':True,'target_seconds':target,'preview_only':compiled.get('preview_only',False),'parent_spec_sha256':compiled.get('spec_sha256'),'clock_offset_seconds':compiled.get('clock_offset_seconds',0)}
+            'eligible_for_live':False,'final_human_review_required':True,'target_seconds':target,'preview_only':compiled.get('preview_only',False),'parent_spec_sha256':compiled.get('spec_sha256'),'clock_offset_seconds':compiled.get('clock_offset_seconds',0),
+            'preview_mode':compiled.get('preview_mode','window' if compiled.get('preview_only') else None),'sample_map':compiled.get('sample_map')}

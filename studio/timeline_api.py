@@ -2,6 +2,7 @@
 import hashlib,json,math,os,tempfile,uuid
 from pathlib import Path
 from fastapi import APIRouter,HTTPException,UploadFile,File,Request
+from typing import Literal
 from pydantic import BaseModel,Field,model_validator
 from .core import db,storage,audit
 from .channels import profile
@@ -156,6 +157,8 @@ def public_job(row):
     p=row['payload'];return {'id':row['id'],'state':row['status'],'detail':row['detail'],
         'progress':p.get('progress'),'report':p.get('report'),'review':p.get('review'),
         'preview_url':f'/api/creator/assembly/jobs/{row["id"]}/video' if p.get('video_key') else None,
+        'storyboard_url':f'/api/creator/assembly/jobs/{row["id"]}/storyboard' if p.get('storyboard_key') else None,
+        'preview_mode':p.get('preview_mode','window'),
         'paid_calls':0,'broadcast_started':False,'preview_only':p.get('preview_only',False)}
 
 
@@ -344,6 +347,7 @@ class RenderRequest(BaseModel):
     request_id:uuid.UUID
     preview_only:bool=False
     preview_start_seconds:int=Field(default=0,ge=0,le=28800)
+    preview_mode:Literal['window','condensed']='window'
     confirm_local_render:bool=False
 
 
@@ -355,18 +359,20 @@ def enqueue(pid:uuid.UUID,body:RenderRequest):
         compiled,result=materials(row);fingerprint=inputs_hash(row,result)
         old=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone()
         if old:
-            if old['kind']!=KIND or old['payload'].get('plan_id')!=str(pid) or old['payload'].get('input_sha256')!=fingerprint or bool(old['payload'].get('preview_only'))!=body.preview_only or old['payload'].get('preview_start_seconds',0)!=body.preview_start_seconds:raise HTTPException(409,'Identificador já utilizado para outra versão dos materiais')
+            if old['kind']!=KIND or old['payload'].get('plan_id')!=str(pid) or old['payload'].get('input_sha256')!=fingerprint or bool(old['payload'].get('preview_only'))!=body.preview_only or old['payload'].get('preview_start_seconds',0)!=body.preview_start_seconds or old['payload'].get('preview_mode','window')!=(body.preview_mode if body.preview_only else 'window'):raise HTTPException(409,'Identificador já utilizado para outra versão dos materiais')
             return public_job(old)
         render_compiled,render_assembly=compiled,result['assembly']
         if body.preview_only:
             if any(f!='action_clips_missing' for f in result['failures']):raise HTTPException(409,'Revise a trilha e as áreas da cena antes da prévia')
-            from .timeline_preview import window
-            try:render_compiled,render_assembly=window(compiled,result['assembly'],body.preview_start_seconds)
-            except ValueError:raise HTTPException(409,'Falta um movimento aprovado nesse trecho da prévia') from None
+            from .timeline_preview import window,condensed
+            try:
+                if body.preview_mode=='condensed':render_compiled,render_assembly=condensed(compiled,result['assembly'])
+                else:render_compiled,render_assembly=window(compiled,result['assembly'],body.preview_start_seconds)
+            except ValueError as error:raise HTTPException(409,'Falta um movimento aprovado nesse trecho da prévia'+(' · '+str(error).split(' at ',1)[1] if ' at ' in str(error) else '')) from None
         elif not result['ready']:raise HTTPException(409,'Faltam clipes aprovados, trilha completa ou áreas da cena revisadas')
         if not c.execute("SELECT 1 FROM factory_tasks WHERE id=%s AND kind=%s AND updated_at>now()-interval '45 seconds'",(HEARTBEAT,WORKER)).fetchone():raise HTTPException(503,'Motor de montagem indisponível; nenhum pedido iniciado')
         if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND status IN ('QUEUED','RUNNING')",(KIND,)).fetchone():raise HTTPException(409,'Uma montagem já está em andamento neste espaço')
-        payload={'plan_id':str(pid),'input_sha256':fingerprint,'channel_id':str(row['channel_id']),'compiled':render_compiled,'assembly':render_assembly,'preview_only':body.preview_only,'preview_start_seconds':body.preview_start_seconds,
+        payload={'plan_id':str(pid),'input_sha256':fingerprint,'channel_id':str(row['channel_id']),'compiled':render_compiled,'assembly':render_assembly,'preview_only':body.preview_only,'preview_start_seconds':body.preview_start_seconds,'preview_mode':body.preview_mode if body.preview_only else 'window',
                  'spec_sha256':production_spec_hash(row['data']['production_spec']),'audio':row['data']['assembly_audio'],
                  'environment':row['data']['assembly_environment'],'actual_cost_usd':0}
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_ffmpeg_v1',%s,0,'QUEUED','Aguardando montagem local; nenhuma geração paga')",(body.request_id,KIND,json.dumps(payload,ensure_ascii=False)))
@@ -409,6 +415,14 @@ def video(jid:uuid.UUID,request:Request):
     if row['status']!='COMPLETED' or not row['payload'].get('video_key'):raise HTTPException(409,'Montagem ainda indisponível')
     from .miniobs import media
     return media(request,row['payload']['video_key'],'video/mp4')
+
+
+@router.get('/jobs/{jid}/storyboard')
+def storyboard_image(jid:uuid.UUID,request:Request):
+    with db() as c:row=get_job(c,jid)
+    if row['status']!='COMPLETED' or not row['payload'].get('storyboard_key'):raise HTTPException(409,'Storyboard indisponível')
+    from .miniobs import media
+    return media(request,row['payload']['storyboard_key'],'image/jpeg')
 
 
 class FinalReview(BaseModel):
