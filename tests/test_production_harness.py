@@ -116,3 +116,40 @@ def test_program_budget_is_persisted_planning_not_spending_authorization():
     assert p['cost_policy']['validation_total_cap_usd']==2
     assert not p['render_ready']
     assert production_spec_hash(spec)==production_spec_hash(ProductionSpec(hours=4,program_budget_usd=0))
+
+
+def test_quarter_hour_preset_keeps_legacy_hash_and_has_no_actor_conflicts():
+    from studio.production_harness import production_spec_hash
+    legacy=ProductionSpec(hours=1).model_dump()
+    old=dict(legacy);old.pop('cadence')
+    assert production_spec_hash(old)==production_spec_hash(legacy)
+    current=compile_spec(ProductionSpec(hours=8,cadence='quarter_hour_v2'))
+    assert production_spec_hash(current['spec'])!=production_spec_hash(legacy)
+    events=current['events']
+    assert len([e for e in events if e['action']=='pet_cat'])==16
+    assert len([e for e in events if e['action']=='pick_phone_scroll_messages'])==8
+    assert [e['start'] for e in events if e['action']=='close_eyes_deep_satisfied_breath'][:2]==[900,2700]
+    assert next(e['start'] for e in events if e['action']=='cat_slow_jump_exit')==1800
+    assert all(a['end']<=b['start'] for a,b in zip(events,events[1:]))
+    # Changing cadence does not invalidate reviewed individual motions.
+    before={a['action']:a['cache_fingerprint'] for a in compile_spec(ProductionSpec())['asset_tasks']}
+    assert all(before[a['action']]==a['cache_fingerprint'] for a in current['asset_tasks'])
+
+
+def test_schedule_tracks_phone_hands_and_cat_without_claiming_motion_rendered():
+    from copy import deepcopy
+    from studio.action_states import validate
+    c=compile_spec(ProductionSpec(hours=4,cadence='quarter_hour_v2'))
+    assert validate(c['events'])==[]
+    event=next(e for e in c['events'] if e['action']=='pet_cat')
+    assert event['pose_before']['cat']=='near_girl' and event['pose_after']['hands']=='cat'
+    assert event['visual_pose_review_required']
+    altered=deepcopy(c['events']);altered[0]['pose_before']['phone']='hand'
+    assert 'pose_or_resource_conflict' in validate(altered)
+
+
+def test_batch_tempo_respects_brief_instead_of_overriding_with_jazz_defaults():
+    from studio.music_styles import requested_tempo
+    assert requested_tempo('8-bit at 78 BPM',5)==78
+    assert requested_tempo('soft pulse waves, 80–84 BPM',3)==82
+    assert requested_tempo('No tempo specified',1)==70

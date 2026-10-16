@@ -57,7 +57,9 @@ def public(row):
 def sources(channel_id:uuid.UUID):
     with db() as c:
         profile(c,channel_id)
-        return c.execute('SELECT s.batch_id,s.id,s.title FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.image_key IS NOT NULL ORDER BY s.batch_id,s.position',(channel_id,)).fetchall()
+        rows=c.execute('SELECT s.batch_id,s.id,s.title,s.image_key FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.image_key IS NOT NULL ORDER BY s.batch_id,s.position',(channel_id,)).fetchall()
+    from .visual_identity import REGISTRY
+    return [{k:v for k,v in r.items() if k!='image_key'} for r in rows if r['image_key'] not in REGISTRY['rejected_keys'] and any(r['image_key'].startswith('ambient-pilots/'+b['pilot_id']+'/') for b in REGISTRY['approved_episodes'])]
 
 
 @router.get('/quote')
@@ -93,12 +95,21 @@ def submit(body:Pilot):
         if not plan or not plan['data'].get('production_spec'):raise HTTPException(404,'Salve o roteiro deste programa antes de produzir seus assets')
         source=c.execute('SELECT s.image_key FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.batch_id=%s AND s.id=%s',(body.channel_id,body.batch_id,body.scene_id)).fetchone()
         if not source:raise HTTPException(404,'Referência não encontrada neste canal')
+        from .visual_identity import assert_usable
+        assert_usable(source['image_key'])
+        from .visual_identity import REGISTRY
+        selected=next((b for b in REGISTRY['approved_episodes'] if source['image_key'].startswith('ambient-pilots/'+b['pilot_id']+'/')),None)
+        spec=plan['data']['production_spec']
+        if not selected or spec.get('character_reference')!='reviewed:'+selected['files']['source']['sha256']+':girl' or spec.get('cat_reference')!='reviewed:'+selected['files']['source']['sha256']+':cat':
+            raise HTTPException(409,'Escolha a identidade e a cena do mesmo episódio canônico antes de gerar movimento')
+        source=dict(source,image_key=selected['files']['source']['key'])
     obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=source['image_key'])
     try:raw=obj['Body'].read(10*1024*1024+1)
     finally:obj['Body'].close()
     if len(raw)>10*1024*1024:raise HTTPException(422,'Referência excede 10MB')
     image=Image.open(io.BytesIO(raw)).convert('RGB');image.thumbnail((1280,720));encoded=io.BytesIO();image.save(encoded,format='JPEG',quality=92)
-    source_sha=hashlib.sha256(raw).hexdigest()
+    from .visual_identity import verify_source
+    source_sha=verify_source(raw,source['image_key'])
     spec_sha=production_spec_hash(plan['data']['production_spec'])
     # Reuse before reservation: a repeated request for the same approved reference
     # must not buy the same source/brief animation again.

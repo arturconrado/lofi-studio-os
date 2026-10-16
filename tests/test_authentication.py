@@ -464,7 +464,7 @@ def test_free_storyboard_is_saved_scoped_and_never_queues_generation(client):
 
 
 def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeypatch):
-    import json,io
+    import json,io,hashlib
     from PIL import Image
     from decimal import Decimal
     from studio import motion_validation as mv
@@ -476,9 +476,12 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     try:
         with db() as c:
             c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,channel_id) VALUES(%s,'draft',3600,0,%s)",(bid,cid))
-            c.execute("INSERT INTO program_scenes(batch_id,id,title,video_key,image_key,duration_seconds,width,height,fps,technique,position) VALUES(%s,'ref','reference','old.mp4','old.jpg',60,1280,720,30,'test',0)",(bid,));c.commit()
+            c.execute("INSERT INTO program_scenes(batch_id,id,title,video_key,image_key,duration_seconds,width,height,fps,technique,position) VALUES(%s,'ref','reference','old.mp4','ambient-pilots/test-approved/source.png',60,1280,720,30,'test',0)",(bid,));c.commit()
     finally:WORKSPACE.reset(marker)
     image=io.BytesIO();Image.new('RGB',(16,9)).save(image,format='JPEG')
+    from studio import visual_identity
+    source_sha=hashlib.sha256(image.getvalue()).hexdigest()
+    monkeypatch.setattr(visual_identity,'REGISTRY',{'approved_episodes':[{'pilot_id':'test-approved','files':{'source':{'key':'ambient-pilots/test-approved/source.png','sha256':source_sha}}}],'rejected_keys':[]})
     class Storage:
         def get_object(self,**kw):return {'Body':io.BytesIO(image.getvalue())}
     class Client:
@@ -494,7 +497,7 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     import studio.financial
     monkeypatch.setattr(studio.financial,'check_available',lambda c,amount:None)
     monkeypatch.setenv('S3_BUCKET','disposable-test')
-    saved=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':{'hours':8,'asset_budget_usd':2}},headers=headers).json()
+    saved=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':{'hours':8,'asset_budget_usd':2,'character_reference':'reviewed:'+source_sha+':girl','cat_reference':'reviewed:'+source_sha+':cat'}},headers=headers).json()
     body=dict(request_id=tid,plan_id=saved['id'],channel_id=cid,batch_id=bid,scene_id='ref',max_reservation_usd='.64',confirm_cost=True)
     r=client.post('/api/creator/motion-validation',json=body,headers=headers)
     assert r.status_code==200,r.text

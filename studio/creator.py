@@ -13,7 +13,7 @@ def saved_plans(channel_id:uuid.UUID=uuid.UUID('00000000-0000-0000-0000-00000000
  with db() as c:
   from .channels import profile
   profile(c,channel_id)
-  rows=c.execute("SELECT id,theme,minutes,data AS plan,status,created_at FROM creator_plans WHERE channel_id=%s AND status='draft' ORDER BY created_at DESC LIMIT 20",(channel_id,)).fetchall()
+  rows=c.execute("SELECT p.id,p.theme,p.minutes,p.data AS plan,p.status,p.created_at,b.budget FROM creator_plans p LEFT JOIN production_batches b ON b.id=p.program_id WHERE p.channel_id=%s AND (p.status='draft' OR (p.status='failed' AND b.video_key IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.track_id LIKE b.id||'-%%'))) ORDER BY p.created_at DESC LIMIT 20",(channel_id,)).fetchall()
  from .production_harness import production_spec_hash
  for row in rows:
   if row['plan'].get('production_spec'):row['spec_sha256']=production_spec_hash(row['plan']['production_spec'])
@@ -32,6 +32,7 @@ def usage(c):
 from .production_harness import ProductionSpec,compile_spec
 class CreativePlan(BaseModel):
  production_spec:ProductionSpec|None=None
+ mix_crossfade_seconds:float=Field(default=1.5,ge=0,le=5)
  title:str=Field(min_length=1,max_length=100)
  description:str=Field(max_length=4000)
  theme:str=Field(min_length=1,max_length=2000)
@@ -86,6 +87,7 @@ class CreateRequest(BaseModel):
  plan:CreativePlan
  budget:Decimal=Field(default=12,ge=Decimal('.08'),le=12)
  confirm_cost:bool=False
+ visual_source_pilot_id:uuid.UUID|None=None
 @router.post('/produce')
 def produce(body:CreateRequest):
  if body.plan.production_spec is not None:
@@ -96,10 +98,31 @@ def produce(body:CreateRequest):
   if not runtime.settings(c)['enabled']:raise HTTPException(409,'Geração paga desativada')
   p=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(body.plan_id,)).fetchone()
   if not p or not p['data']:raise HTTPException(404,'Plano não encontrado')
-  if p['program_id']:return {'id':p['program_id'],'reused':True}
+  if p['program_id']:
+   # Explicit portal resubmission can resume only before any audio request.
+   bid=p['program_id']
+   b=c.execute('SELECT * FROM production_batches WHERE id=%s FOR UPDATE',(bid,)).fetchone()
+   if b and b['state']=='failed' and b['video_key'] and not c.execute('SELECT 1 FROM jobs WHERE track_id LIKE %s',(bid+'-%',)).fetchone():
+    if c.execute("SELECT 1 FROM production_batches WHERE channel_id=%s AND id<>%s AND state IN ('producing','waiting','queued')",(b['channel_id'],bid)).fetchone():raise HTTPException(409,'Este canal já tem outro pedido em produção')
+    if Decimal(body.budget)!=Decimal(b['budget']):raise HTTPException(409,'Retome com o mesmo teto do pedido original')
+    c.execute("UPDATE production_batches SET state='queued',detail='Retomada autorizada no portal; visual existente preservado',updated_at=now() WHERE id=%s",(bid,))
+    c.execute("UPDATE creator_plans SET status='queued' WHERE id=%s",(p['id'],))
+    audit(c,'CREATOR_RESUME_BEFORE_AUDIO',bid,'Existing visual; no prior audio requests');c.commit()
+   return {'id':bid,'reused':True}
   if c.execute("SELECT 1 FROM production_batches WHERE channel_id=%s AND state IN ('producing','waiting','queued')",(p.get('channel_id','00000000-0000-0000-0000-000000000001'),)).fetchone():raise HTTPException(409,'Este canal já tem um lote em produção ou na fila. Aguarde antes de criar outro para ele.')
-  if body.budget<Decimal('.15')+Decimal(p['minutes'])/2*Decimal('.08'):raise HTTPException(422,'O orçamento deve cobrir a estimativa de músicas e a reserva de US$0,15 para o visual. A duração real pode exigir faixas adicionais.')
-  estimate=Decimal('.15')+Decimal(p['minutes'])/2*Decimal('.08')
+  if not body.visual_source_pilot_id:raise HTTPException(422,'Escolha um dos vídeos de 1h do canal como referência visual; nenhuma imagem nova será gerada')
+  reference=None
+  if body.visual_source_pilot_id:
+   from .youtube_publish import ready_pilot
+   source=c.execute("SELECT a.* FROM ambient_pilots a JOIN youtube_publications y ON y.pilot_id=a.id WHERE a.id=%s AND a.channel_id=%s AND y.channel_id=%s AND y.state='uploaded'",(body.visual_source_pilot_id,p['channel_id'],p['channel_id'])).fetchone()
+   if not source or not ready_pilot(source):raise HTTPException(404,'Escolha um episódio de 1h publicado neste canal')
+   reference={'pilot_id':str(source['id']),'title':source['title'],'silent_key':source['silent_key'],'report':source['report']}
+  image_reserve=Decimal('0') if reference else Decimal('.15')
+  from .audio_mix import estimated_tracks
+  estimate=image_reserve+Decimal(estimated_tracks(p['minutes']*60,body.plan.mix_crossfade_seconds))*Decimal('.08')
+  if body.budget<estimate:raise HTTPException(422,'O teto precisa cobrir as músicas e o visual escolhido; a duração real pode exigir faixas adicionais.')
+  plan_data=body.plan.model_dump()
+  if reference:plan_data['visual_reference']=reference
   booked=c.execute("""SELECT COALESCE(sum(GREATEST(b.budget-
     COALESCE((SELECT sum(GREATEST(j.estimated_cost,COALESCE(j.actual_cost,0))) FROM jobs j WHERE j.track_id LIKE b.id||'-%'),0)-
     COALESCE((SELECT sum(f.reserved_cost) FROM factory_tasks f WHERE f.payload->>'batch'=b.id),0),0)),0) n
@@ -108,7 +131,7 @@ def produce(body:CreateRequest):
   if estimate>remaining:raise HTTPException(409,f'A estimativa de US${estimate:.2f} supera o limite disponível de US${max(remaining,Decimal(0)):.2f}. Ajuste o limite acumulado antes de produzir.')
   bid='LOFI-'+str(body.plan_id).split('-')[0].upper()
   c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,detail,channel_id) VALUES(%s,'queued',%s,%s,'Aguardando produção autorizada pelo usuário',%s)",(bid,p['minutes']*60,body.budget,p.get('channel_id','00000000-0000-0000-0000-000000000001')))
-  c.execute("UPDATE creator_plans SET program_id=%s,data=%s,status='queued' WHERE id=%s",(bid,json.dumps(body.plan.model_dump()),body.plan_id))
+  c.execute("UPDATE creator_plans SET program_id=%s,data=%s,status='queued' WHERE id=%s",(bid,json.dumps(plan_data),body.plan_id))
   c.execute('INSERT INTO program_metadata(program_id,title,description,theme,music_description,alternatives,keywords) VALUES(%s,%s,%s,%s,%s,%s,%s)',(bid,body.plan.title,body.plan.description,body.plan.theme,body.plan.music_description,json.dumps(body.plan.alternative_titles),json.dumps(body.plan.keywords)));audit(c,'CREATOR_BATCH_AUTHORIZED',bid,str(body.budget));c.commit()
  return {'id':bid}
 class Metadata(BaseModel):
@@ -169,6 +192,8 @@ def storyboard(body:StoryboardRequest):
  with db() as c:
   from .channels import profile
   profile(c,body.channel_id)
+  from .harness_profiles import require_version
+  require_version(c,body.channel_id,body.spec.niche_pack_sha256)
   assets=[]
   if body.draft_id:
    prior=c.execute('SELECT data FROM creator_plans WHERE id=%s AND channel_id=%s',(body.draft_id,body.channel_id)).fetchone()
@@ -189,6 +214,8 @@ def save_storyboard(body:StoryboardRequest):
   theme=body.spec.scenario,music_brief=compiled['audio']['prompt'],visual_prompt='Reference-conditioned character and cat actions; see production_spec.',production_spec=body.spec).model_dump()
  with db() as c:
   profile(c,body.channel_id)
+  from .harness_profiles import require_version
+  require_version(c,body.channel_id,body.spec.niche_pack_sha256)
   if body.draft_id:
    prior=c.execute("SELECT id,data FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL FOR UPDATE",(body.draft_id,body.channel_id)).fetchone()
    if not prior:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
@@ -216,3 +243,6 @@ router.include_router(form_assistant_router)
 
 from .timeline_api import router as timeline_router
 router.include_router(timeline_router)
+
+from .harness_profiles import router as harness_profiles_router
+router.include_router(harness_profiles_router)

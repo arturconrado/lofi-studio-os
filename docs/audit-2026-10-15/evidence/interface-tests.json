@@ -1,0 +1,38 @@
+[
+  {
+    "script": "test_storyboard_state.cjs",
+    "exit_code": 0,
+    "stdout": "CREATION_STEPS_PASS: only selected step visible; navigation never submits a production request\nSTORYBOARD_STATE_PASS: fresh workspace cannot overwrite resumed plan; stale compilation ignored\n",
+    "stderr": ""
+  },
+  {
+    "script": "test_form_assistant.cjs",
+    "exit_code": 0,
+    "stdout": "FORM_ASSISTANT_PASS: only selected creative fields change; budget and unselected content preserved; no production call\n",
+    "stderr": ""
+  },
+  {
+    "script": "test_studio_interface.cjs",
+    "exit_code": 0,
+    "stdout": "STUDIO_INTERFACE_PASS: empty workspace, escaping, channel filtering, guarded exports, queue preservation, settings contracts\n",
+    "stderr": ""
+  },
+  {
+    "script": "test_ui.cjs",
+    "exit_code": 0,
+    "stdout": "UI_PASS: metrics, source/master players, escaping, free QC action, no generation, editorial evidence fields\n",
+    "stderr": ""
+  },
+  {
+    "script": "test_login.cjs",
+    "exit_code": 0,
+    "stdout": "LOGIN_PASS: separate endpoints, CSRF handoff, signup gating, recovery navigation, reset completion, accessible password toggle\n",
+    "stderr": ""
+  },
+  {
+    "script": "test_timeline_assembly.cjs",
+    "exit_code": 0,
+    "stdout": "TIMELINE_UI_PASS: explicit local consent, stable request, no budget changes, escaped status, final review required\n",
+    "stderr": ""
+  }
+]

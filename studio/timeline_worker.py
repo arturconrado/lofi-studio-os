@@ -36,7 +36,7 @@ def tick():
         row=c.execute("UPDATE factory_tasks SET status='RUNNING',detail='Conferindo fontes da montagem',updated_at=now() WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s AND status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *",(KIND,)).fetchone();c.commit()
     if not row:return False
     folder=CACHE/'timeline'/str(row['id']);folder.mkdir(parents=True,exist_ok=True)
-    p=row['payload'];last_update=0
+    p=row['payload'];last_update=0;completed=False
     def progress(done,total,seconds):
         nonlocal last_update
         if time.monotonic()-last_update<2 and done<total:return
@@ -50,8 +50,11 @@ def tick():
         for segment in p['assembly']['segments']:
             sha=segment['asset_sha256']
             if sha in sources:continue
-            path=folder/(sha+'.mp4');fetch(segment['asset_key'],path,sha,64*1024**2);sources[sha]=path
-        audio=folder/'source-audio.mp3';fetch(p['audio']['audio_key'],audio,p['audio']['sha256'],1024**3)
+            path=folder/(sha+'.mp4')
+            if not path.exists() or file_hash(path)!=sha:fetch(segment['asset_key'],path,sha,64*1024**2)
+            sources[sha]=path
+        audio=folder/'source-audio.mp3'
+        if not audio.exists() or file_hash(audio)!=p['audio']['sha256']:fetch(p['audio']['audio_key'],audio,p['audio']['sha256'],1024**3)
         final=folder/'final.mp4'
         report=render(p['compiled'],p['assembly'],sources,audio,p['environment'],final,progress)
         with db() as c:c.execute("UPDATE factory_tasks SET detail='Conferindo áudio e salvando arquivo privado',updated_at=now() WHERE id=%s",(row['id'],));c.commit()
@@ -67,11 +70,13 @@ def tick():
         storage().put_object(Bucket=os.environ['S3_BUCKET'],Key=report_key,Body=json.dumps(report).encode(),ContentType='application/json')
         with db() as c:
             c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Montagem pronta para assistir e revisar',updated_at=now() WHERE id=%s",(json.dumps({'video_key':key,'report_key':report_key,'report':report}),row['id']));audit(c,'TIMELINE_RENDER_COMPLETED',str(row['id']),p['plan_id']);c.commit()
+        completed=True
     except Exception as error:
         with db() as c:
             c.execute("UPDATE factory_tasks SET status='FAILED',detail=%s,updated_at=now() WHERE id=%s",('Montagem pausada ('+type(error).__name__+'). Confira arquivos e espaço no servidor; nenhuma geração paga ou nova tentativa automática.',row['id']));audit(c,'TIMELINE_RENDER_FAILED',str(row['id']));c.commit()
     finally:
-        # Disposable files of this exact job only. Originals and catalog untouched.
-        for path in folder.iterdir():
-            if path.is_file():path.unlink()
+        # Retain exact job checkpoints after interruption; no automatic retry.
+        if completed:
+            for path in folder.iterdir():
+                if path.is_file():path.unlink()
     return True

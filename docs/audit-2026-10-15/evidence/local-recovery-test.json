@@ -1,0 +1,117 @@
+{
+  "original_motion_sources": [
+    {
+      "episode": 5,
+      "input": "baseline/media/episode-05/motion-source.mp4",
+      "decode_exit_code": 0,
+      "sha256": "6c954ebaf01a0fca7c6c24df93c2cab2f8de7d46320fabf9b18af20960feabbd"
+    },
+    {
+      "episode": 6,
+      "input": "baseline/media/episode-06/motion-source.mp4",
+      "decode_exit_code": 0,
+      "sha256": "d41a4e07d80d7a5f780240e644e8a6bd03bf1aeaafdd5304caa66b561fd915f8"
+    },
+    {
+      "episode": 7,
+      "input": "baseline/media/episode-07/motion-source.mp4",
+      "decode_exit_code": 0,
+      "sha256": "8411287e999bd6baab00b097c2298a2c85f3c745461e9356a42d2c442dcd644b"
+    }
+  ],
+  "restored_code": [
+    {
+      "file": "studio/creator.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/creator_service.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/scene_animation.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/ambient_animation.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/ambient_fast.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/production_harness.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/timeline_api.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/timeline_compositor.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/timeline_worker.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/temporal_preview.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/quality_gate.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/qc_service.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/batch_factory.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/provider.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/exports.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/video_export.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/live_presentation.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/motion_validation.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/tenancy.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/youtube_publish.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/form_assistant.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/render_policy.py",
+      "sha256_matches": true
+    },
+    {
+      "file": "studio/financial.py",
+      "sha256_matches": true
+    }
+  ],
+  "offsite_full_disaster_restore_tested": false
+}

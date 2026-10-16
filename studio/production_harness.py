@@ -10,6 +10,8 @@ from .music_styles import DIRECTIONS as AUDIO
 
 class ProductionSpec(BaseModel):
     version: Literal[1] = 1
+    niche_pack_sha256: str = Field(default='',pattern=r'^(|[a-f0-9]{64})$')
+    cadence: Literal['legacy_10_25_45', 'quarter_hour_v2'] = 'legacy_10_25_45'
     hours: int = Field(default=8, ge=1, le=8)
     music_style: Literal['lofi_hiphop','chillhop','jazz_lofi','sleep_lofi','piano_lofi','guitar_lofi','bossa_lofi','8bit_lofi','synth_lofi','custom'] = 'jazz_lofi'
     music_brief: str = Field(default='', max_length=2000)
@@ -26,6 +28,8 @@ def production_spec_hash(spec):
     # Empty optional scene direction was added after existing approved references.
     # Preserve those approvals when no creative requirement changed.
     normalized=spec.model_dump() if isinstance(spec,ProductionSpec) else dict(spec)
+    if not normalized.get('niche_pack_sha256'):normalized.pop('niche_pack_sha256',None)
+    if normalized.get('cadence') == 'legacy_10_25_45':normalized.pop('cadence',None)
     normalized.pop('program_budget_usd',None)  # Planning cap does not change creative identity.
     if not normalized.get('scene_brief'):normalized.pop('scene_brief',None)
     return hashlib.sha256(json.dumps(normalized,sort_keys=True).encode()).hexdigest()
@@ -41,7 +45,7 @@ def compile_spec(spec: ProductionSpec):
     for hour in range(spec.hours):
         base = hour * 3600
         # No actions at minute zero or the hour boundary: return to typing first.
-        for minute in (10, 20, 30, 40, 50):
+        for minute in ((15, 45) if spec.cadence == 'quarter_hour_v2' else (10, 20, 30, 40, 50)):
             t = base + minute * 60
             for action, seconds, actors in [
                 ('close_eyes_deep_satisfied_breath', 8, ['girl']),
@@ -49,7 +53,7 @@ def compile_spec(spec: ProductionSpec):
                 ('pet_cat', 10, ['girl', 'cat']),
                 ('cat_returns_to_cushion', 7, ['cat'])]:
                 events.append(dict(start=t, end=t+seconds, action=action, actors=actors));t += seconds
-        for minute in (25, 45):
+        for minute in ((30,) if spec.cadence == 'quarter_hour_v2' else (25, 45)):
             t = base + minute * 60
             for action, seconds, actors in [
                 ('cat_slow_jump_exit', 6, ['cat']),
@@ -60,6 +64,9 @@ def compile_spec(spec: ProductionSpec):
                 ('put_phone_on_table', 3, ['girl'])]:
                 events.append(dict(start=t, end=t+seconds, action=action, actors=actors));t += seconds
     events.sort(key=lambda e:e['start'])
+    from .action_states import annotate,validate
+    events=annotate(events)
+    if validate(events):raise ValueError('Invalid pose/resource schedule')
     if spec.scenario == 'city_sunset':
         light = [{'minute':0,'night':0,'city_lights':0}, {'minute':15,'night':1,'city_lights':1},
                  {'minute':48,'night':1,'city_lights':1}, {'minute':50,'night':1,'city_lights':.5},

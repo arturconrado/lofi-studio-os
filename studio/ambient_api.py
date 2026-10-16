@@ -10,7 +10,9 @@ def init(c):
 @router.get('/pilots')
 def pilots():
  with db() as c:
-  return c.execute('SELECT id,channel_id,title,report,plan,status,approved_at FROM ambient_pilots ORDER BY created_at DESC').fetchall()
+  rows=c.execute('SELECT id,channel_id,title,report,plan,status,approved_at FROM ambient_pilots ORDER BY created_at DESC').fetchall()
+ from .visual_identity import reference_approval
+ return [r|{'identity_reference_approved':reference_approval(r)} for r in rows]
 @router.get('/pilots/{pid}/video')
 def video(pid:uuid.UUID,request:Request):
  from .miniobs import media

@@ -346,6 +346,15 @@ def reprocess_qc(aid:uuid.UUID,body:ReprocessQC):
     except ValueError as e:
         raise HTTPException(404 if str(e)=='ASSET_NOT_FOUND' else 409,str(e))
 
+@app.post('/api/assets/{aid}/qc/inspect')
+def inspect_qc(aid:uuid.UUID):
+    from .qc_service import inspect_original
+    try:return inspect_original(aid)
+    except ValueError as error:
+        if str(error)=='ASSET_NOT_FOUND':raise HTTPException(404,'Áudio não encontrado') from None
+        raise HTTPException(422,'Não foi possível verificar a integridade do áudio') from None
+
+
 @app.get('/api/assets/{aid}/qc/history')
 def qc_history(aid:uuid.UUID):
     with db() as c:return c.execute('SELECT id,version,result,created_at FROM qc_runs WHERE asset_id=%s ORDER BY created_at DESC',(aid,)).fetchall()

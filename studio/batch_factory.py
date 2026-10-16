@@ -10,7 +10,8 @@ from studio.provider import generate, PartialGenerationError
 BATCH=os.environ['CREATOR_BATCH']
 with db() as c:
     config=c.execute('SELECT p.data,b.target_seconds,b.budget,b.channel_id FROM creator_plans p JOIN production_batches b ON b.id=p.program_id WHERE p.program_id=%s',(BATCH,)).fetchone()
-TARGET=int(config['target_seconds']);CAP=Decimal(config['budget'])-Decimal('.15')
+TARGET=int(config['target_seconds']);CAP=Decimal(config['budget'])-(Decimal('0') if config['data'].get('visual_reference') else Decimal('.15'))
+FADE=float(config['data'].get('mix_crossfade_seconds',0))
 MODEL='google/lyria-3-pro-preview'
 from studio.production_harness import audio_prompt
 REFERENCE=audio_prompt('custom',config['data']['music_brief'])
@@ -43,10 +44,11 @@ def reserve_next():
             update(c,'failed','Ten provider failures; production paused for inspection');c.commit();return None
         p=progress(c)
         # Approved reference counts once; no repeated music counts toward the target.
-        total=float(p['seconds'])
+        from studio.audio_mix import coverage
+        total=coverage(p['seconds'],p['completed'],FADE)
         if total>=TARGET:
             update(c,'generated','Meta de músicas inéditas concluída');c.commit();return None
-        if total+p['active']*120>=TARGET:
+        if total+p['active']*(120-FADE)>=TARGET:
             update(c,'waiting','Waiting for measured durations of current requests');c.commit();return 'wait'
         if p['reserved']+Decimal('.08')>CAP:
             update(c,'budget_limit','Teto autorizado do lote atingido');c.commit();return None
@@ -55,7 +57,8 @@ def reserve_next():
         tid=f'{BATCH}-{seq:03}';jid=uuid.uuid4()
         moods=['warm late-night calm','reflective rainy-window comfort','gentle hopeful intimacy','quiet moonlit warmth','soft morning contemplation','tender dusk nostalgia']
         keys=['D minor','F major','A minor','B-flat major','G minor','E-flat major']
-        bpm=[70,72,74,71,73,68][(seq-1)%6]
+        from studio.music_styles import requested_tempo
+        bpm=requested_tempo(config['data']['music_brief'],seq)
         theme=['Tema I','Tema II','Tema III','Tema IV','Tema V','Tema VI'][(seq-1)%6]
         title=f"{config['data']['title'][:55]} · {seq:03}"
         prompt=REFERENCE+f'\nComposition title: {title}. Tempo: {bpm} BPM.'
@@ -90,13 +93,18 @@ def produce(item):
         info=json.loads(result.stdout);duration=float(info['format']['duration']);st=next(s for s in info['streams'] if s['codec_type']=='audio')
         # Full decoding verifies playable bytes; it does not gate artistic quality or alter them.
         subprocess.run(['ffmpeg','-v','error','-xerror','-i',str(p),'-f','null','-'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=60)
-    qc={'version':'not_run','status':'PENDING','batch':BATCH,'provider_stream_complete':not partial,'sha256':sha,'duration_s':duration,'channels':st['channels'],'sample_rate':st['sample_rate'],'playback_decode_verified':True,'artistic_quality':'not_verified'}
+    from .quality_gate import analyze
+    qc=analyze(raw,MODEL,120)
+    qc.update(batch=BATCH,provider_stream_complete=not partial,playback_decode_verified=True)
+    if partial:
+        qc['status']='REJECT';qc['reasons'].append({'code':'INCOMPLETE_PROVIDER_STREAM','state':'REJECT'})
+    rejected=qc['status']=='REJECT'
     with db() as c:
-        c.execute("INSERT INTO assets(id,track_id,object_key,sha256,mime,duration_seconds,model,qc,technical_status,editorial_status,review_note) VALUES(%s,%s,%s,%s,'audio/mpeg',%s,%s,%s,'PENDING','PENDING','Lote autorizado: original preservado, sem gate ou masterização; aguarda audição')",(jid,tid,key,sha,duration,MODEL,json.dumps(qc)))
-        c.execute("UPDATE jobs SET status=%s,detail=%s,updated_at=now() WHERE id=%s",('FAILED' if partial else 'COMPLETED','Partial preserved; batch paused' if partial else 'Original decoded and stored; review pending',jid))
-        update(c,'failed' if partial else 'producing','Partial provider stream; no retry' if partial else '')
+        c.execute("INSERT INTO assets(id,track_id,object_key,sha256,mime,duration_seconds,model,qc,technical_status,editorial_status,review_note) VALUES(%s,%s,%s,%s,'audio/mpeg',%s,%s,%s,%s,'PENDING','Original preservado; diagnóstico técnico sem masterização; aguarda audição')",(jid,tid,key,sha,duration,MODEL,json.dumps(qc),qc['status']))
+        c.execute("UPDATE jobs SET status=%s,detail=%s,updated_at=now() WHERE id=%s",('FAILED' if partial or rejected else 'COMPLETED','Original preserved; technical rejection; batch paused' if partial or rejected else 'Original decoded and measured; listening pending',jid))
+        update(c,'failed' if partial or rejected else 'producing','Diagnóstico técnico reprovado; original preservado, sem nova geração automática' if partial or rejected else '')
         audit(c,'BATCH_ORIGINAL_STORED',tid,sha);c.commit()
-    if partial:stop.set()
+    if partial or rejected:stop.set()
     print(json.dumps({'event':'stored','track_id':tid,'seconds':duration,'cost':str(cost),'partial':partial}),flush=True)
 
 def worker():
@@ -114,7 +122,8 @@ def main():
     verified=next(m for m in runtime.availability() if m['id']==MODEL)
     assert verified['available'] and verified['price_verified']
     with db() as c:
-        assert not original_settings(c)['enabled']
+        assert original_settings(c)['enabled'], 'Paid generation disabled'
+        assert c.execute("SELECT 1 FROM creator_plans WHERE program_id=%s AND status='processing'",(BATCH,)).fetchone(), 'Authorized creator job required'
         assert not c.execute('SELECT enabled FROM factory_control WHERE id=1').fetchone()['enabled']
         assert not c.execute("SELECT 1 FROM jobs WHERE status IN ('QUEUED','RUNNING')").fetchone()
         c.execute("CREATE TABLE IF NOT EXISTS production_batches(id TEXT PRIMARY KEY,state TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',seconds NUMERIC NOT NULL DEFAULT 0,completed INTEGER NOT NULL DEFAULT 0,reserved NUMERIC NOT NULL DEFAULT 0,target_seconds INTEGER NOT NULL,budget NUMERIC NOT NULL,video_key TEXT,audio_key TEXT,manifest_key TEXT,updated_at TIMESTAMPTZ NOT NULL DEFAULT now())")

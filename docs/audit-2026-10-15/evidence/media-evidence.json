@@ -1,0 +1,797 @@
+{
+  "captured_utc": "2026-10-15T23:09:58.017116+00:00",
+  "episodes": [
+    {
+      "id": "1192acca-4cea-5d5b-9cf2-0a436909fc0e",
+      "title": "Snowy Night Studio | 1 Hour of Lo-Fi Jazzhop for Coding",
+      "episode": 5,
+      "copies": {
+        "video": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-05/video-silent-with-audio.mp4",
+            "exists": true,
+            "sha256": "3b75990c14919cdfb9fc3104009a69d88171d7f1956f25f54f9405640ff59b21",
+            "bytes": 913085370
+          },
+          "object": {
+            "sha256": "3b75990c14919cdfb9fc3104009a69d88171d7f1956f25f54f9405640ff59b21",
+            "bytes": 913085370
+          },
+          "object_key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/video.mp4",
+          "recorded_sha256": "3b75990c14919cdfb9fc3104009a69d88171d7f1956f25f54f9405640ff59b21",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "silent": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-05/silent-derived.mp4",
+            "exists": true,
+            "sha256": "42ea47c53e993703239d56b81aa74c42e166d6a02488ee34235a8be8ad8b40b5",
+            "bytes": 824725239
+          },
+          "object": {
+            "sha256": "42ea47c53e993703239d56b81aa74c42e166d6a02488ee34235a8be8ad8b40b5",
+            "bytes": 824725239
+          },
+          "object_key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/silent.mp4",
+          "recorded_sha256": "42ea47c53e993703239d56b81aa74c42e166d6a02488ee34235a8be8ad8b40b5",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "source": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-05/source.png",
+            "exists": true,
+            "sha256": "9991b4a2cd478bde5d84974db134e8f2a333100ebd72a627460239726bccb7aa",
+            "bytes": 902472
+          },
+          "object": {
+            "sha256": "9991b4a2cd478bde5d84974db134e8f2a333100ebd72a627460239726bccb7aa",
+            "bytes": 902472
+          },
+          "object_key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/source.png",
+          "recorded_sha256": "9991b4a2cd478bde5d84974db134e8f2a333100ebd72a627460239726bccb7aa",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "motion-source": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-05/motion-source.mp4",
+            "exists": true,
+            "sha256": "6c954ebaf01a0fca7c6c24df93c2cab2f8de7d46320fabf9b18af20960feabbd",
+            "bytes": 2163457
+          },
+          "object": {
+            "sha256": "6c954ebaf01a0fca7c6c24df93c2cab2f8de7d46320fabf9b18af20960feabbd",
+            "bytes": 2163457
+          },
+          "object_key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/motion-source.mp4",
+          "recorded_sha256": "6c954ebaf01a0fca7c6c24df93c2cab2f8de7d46320fabf9b18af20960feabbd",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "audio": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-05/audio-review.m4a",
+            "exists": true,
+            "sha256": "0a38b4e7a6caed576de60950cf50c4664dcb95656fa9e74f4ba61c688c640497",
+            "bytes": 87586116
+          },
+          "object": {
+            "sha256": "0a38b4e7a6caed576de60950cf50c4664dcb95656fa9e74f4ba61c688c640497",
+            "bytes": 87586116
+          },
+          "object_key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/audio.m4a",
+          "recorded_sha256": "0a38b4e7a6caed576de60950cf50c4664dcb95656fa9e74f4ba61c688c640497",
+          "copies_match": true,
+          "record_matches": true
+        }
+      },
+      "frames": [
+        {
+          "t": 0,
+          "file": "episode-05/frame-0000.00.png",
+          "png_sha256": "c5bd3fb855f80b0bd16f7e5cc7c0df666ca8f0b1361cfe0731071e779f960fb9"
+        },
+        {
+          "t": 3,
+          "file": "episode-05/frame-0003.00.png",
+          "png_sha256": "8d15ae7f7ae8af489e013e846706f3f6207049f8020d64f0684aa894cfef152a"
+        },
+        {
+          "t": 7.46,
+          "file": "episode-05/frame-0007.46.png",
+          "png_sha256": "49d72ade96fce63c962cb2973a0c748292820b9baf59673761c4b541f05cd0fd"
+        },
+        {
+          "t": 7.5,
+          "file": "episode-05/frame-0007.50.png",
+          "png_sha256": "49d72ade96fce63c962cb2973a0c748292820b9baf59673761c4b541f05cd0fd"
+        },
+        {
+          "t": 719.96,
+          "file": "episode-05/frame-0719.96.png",
+          "png_sha256": "c5bd3fb855f80b0bd16f7e5cc7c0df666ca8f0b1361cfe0731071e779f960fb9"
+        },
+        {
+          "t": 720,
+          "file": "episode-05/frame-0720.00.png",
+          "png_sha256": "c5bd3fb855f80b0bd16f7e5cc7c0df666ca8f0b1361cfe0731071e779f960fb9"
+        },
+        {
+          "t": 900,
+          "file": "episode-05/frame-0900.00.png",
+          "png_sha256": "ca7961e09b1754bece2a0d521f40d773bf6b38d1d9583945e8debcf795f96c24"
+        },
+        {
+          "t": 1800,
+          "file": "episode-05/frame-1800.00.png",
+          "png_sha256": "8cbb9636910aabfd8315db12b78e0a97f186f241625a9c53726f511249578a93"
+        },
+        {
+          "t": 2700,
+          "file": "episode-05/frame-2700.00.png",
+          "png_sha256": "41265ef40b5a44b34bccd345d52a6fc308295763c78313c44b75e5233072430e"
+        },
+        {
+          "t": 3599.7,
+          "file": "episode-05/frame-3599.70.png",
+          "png_sha256": "b7a4ddd5f80b603de7c77fb32e4cc8dcbc6da9c844607d4b62404e3b23c22a7a"
+        }
+      ],
+      "receipts": {
+        "delivery-plan.json": {
+          "sha256_original": "9ef1153fad96520ba66bf58270e5ccca7001cbd12d9fcea9ddc9c7e57cb3ca93",
+          "sanitized": true
+        },
+        "delivery-report.json": {
+          "sha256_original": "35039715f6255d363126e9098f9ff94e11200026d29999eafff791f0eb6c2305",
+          "sanitized": true
+        },
+        "image-receipt.json": {
+          "sha256_original": "1c0d2d3c2acbdc6172d44e21a1553d9e9982b88cc45ca109cf9e4d8b9cfcf2cd",
+          "sanitized": true
+        },
+        "video-receipt.json": {
+          "sha256_original": "623ad1179ad0791085675af3a5ecd68f973a43cd43bfa502bb4d405a8b740170",
+          "sanitized": true
+        },
+        "video-request.json": {
+          "sha256_original": "2c209be6df822114becdf84bed81a00ba59fa1acf8c949115f8bea2f687c5e40",
+          "sanitized": true
+        },
+        "video-job.json": {
+          "sha256_original": "8a74286e05fd2cd1469bdae393f89aaa44a65e4644b03336ff78a0990efb7373",
+          "sanitized": true
+        },
+        "audio-review.json": {
+          "sha256_original": "92a623c3ba64fbe0c670c1198644e717006f6b1025f5049d6ba2e7937165dc98",
+          "sanitized": true
+        }
+      },
+      "probe": {
+        "duration": "3600.000000",
+        "streams": [
+          {
+            "codec_type": "video",
+            "codec_name": "h264",
+            "width": 1280,
+            "height": 720,
+            "r_frame_rate": "24/1"
+          }
+        ]
+      },
+      "audio_measurement": {
+        "method": "Full source decode + volumedetect and silencedetect to null; no output audio created",
+        "exit_code": 0,
+        "mean_volume_dbfs": [
+          "-18.6"
+        ],
+        "max_volume_dbfs": [
+          "-2.6"
+        ],
+        "silence_events": [
+          "[silencedetect @ 0x60eee19d7300] silence_start: 13.3367",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 15.6834 | silence_duration: 2.34673",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 120.378",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 121.413 | silence_duration: 1.03575",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 132.224",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 134.532 | silence_duration: 2.30771",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 256.811",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 259.406 | silence_duration: 2.59417",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 378.732",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 381.198 | silence_duration: 2.46517",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 500.531",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 502.37 | silence_duration: 1.83815",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 620.799",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 623.582 | silence_duration: 2.7824",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 741.525",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 744.283 | silence_duration: 2.75796",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 863.05",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 865.681 | silence_duration: 2.63098",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 985.231",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 987.986 | silence_duration: 2.75444",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 1107.42",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 1110 | silence_duration: 2.58331",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 1228.69",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 1230.89 | silence_duration: 2.19929",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 1350.8",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 1352.82 | silence_duration: 2.0204",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 1469.13",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 1471.43 | silence_duration: 2.29419",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 1588.32",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 1589.53 | silence_duration: 1.21346",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 1708.75",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 1711.42 | silence_duration: 2.66712",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 1825.19",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 1827.95 | silence_duration: 2.76775",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 1945.87",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 1948.22 | silence_duration: 2.35542",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 2179.26",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 2182.04 | silence_duration: 2.7826",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 2292.74",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 2294.23 | silence_duration: 1.49019",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 2413.99",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 2416.66 | silence_duration: 2.66954",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 2537.62",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 2540.41 | silence_duration: 2.79706",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 2659.6",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 2662.84 | silence_duration: 3.23542",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 2780.66",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 2783.45 | silence_duration: 2.79273",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 2902.01",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 2904.75 | silence_duration: 2.73477",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 3023.07",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 3025.84 | silence_duration: 2.7694",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 3144.41",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 3147.2 | silence_duration: 2.79071",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 3384",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 3386.57 | silence_duration: 2.57781",
+          "[silencedetect @ 0x60eee19d7300] silence_start: 3506.42",
+          "[silencedetect @ 0x60eee19d7300] silence_end: 3509.17 | silence_duration: 2.74844"
+        ],
+        "silence_diagnostic_threshold_dbfs": -50,
+        "silence_diagnostic_min_seconds": 1,
+        "previous_loudness_receipt": {
+          "sha256": "0a38b4e7a6caed576de60950cf50c4664dcb95656fa9e74f4ba61c688c640497",
+          "channels": 2,
+          "sample_rate": "48000",
+          "true_peak_dbtp": -2.6,
+          "integrated_lufs": -17.0,
+          "duration_seconds": 3600.0,
+          "loudness_range_lu": 11.1,
+          "full_decode_exit_code": 0
+        },
+        "acceptance_thresholds_not_calibrated": true
+      }
+    },
+    {
+      "id": "277ef275-73f0-53fb-ba14-9046186151fd",
+      "title": "Autumn Bookshop Coding | 1 Hour of Lo-Fi Jazzhop for Coding",
+      "episode": 7,
+      "copies": {
+        "video": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-07/video-silent-with-audio.mp4",
+            "exists": true,
+            "sha256": "8700f93594e17b13384c682b74b6b011d24c145139c5bcf6238e81e6c8cc32a9",
+            "bytes": 726730640
+          },
+          "object": {
+            "sha256": "8700f93594e17b13384c682b74b6b011d24c145139c5bcf6238e81e6c8cc32a9",
+            "bytes": 726730640
+          },
+          "object_key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/video.mp4",
+          "recorded_sha256": "8700f93594e17b13384c682b74b6b011d24c145139c5bcf6238e81e6c8cc32a9",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "silent": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-07/silent-derived.mp4",
+            "exists": true,
+            "sha256": "d786e4b6ff4ef202e6642f5519ebe4dfc38e9ace7fc277b60e5c83f3b8eed6f8",
+            "bytes": 638317412
+          },
+          "object": {
+            "sha256": "d786e4b6ff4ef202e6642f5519ebe4dfc38e9ace7fc277b60e5c83f3b8eed6f8",
+            "bytes": 638317412
+          },
+          "object_key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/silent.mp4",
+          "recorded_sha256": "d786e4b6ff4ef202e6642f5519ebe4dfc38e9ace7fc277b60e5c83f3b8eed6f8",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "source": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-07/source.png",
+            "exists": true,
+            "sha256": "e51e27c94d632de323af6791fbdadcdaf6147d5cd50f49b4d86600114a7f9fd1",
+            "bytes": 837048
+          },
+          "object": {
+            "sha256": "e51e27c94d632de323af6791fbdadcdaf6147d5cd50f49b4d86600114a7f9fd1",
+            "bytes": 837048
+          },
+          "object_key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/source.png",
+          "recorded_sha256": "e51e27c94d632de323af6791fbdadcdaf6147d5cd50f49b4d86600114a7f9fd1",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "motion-source": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-07/motion-source.mp4",
+            "exists": true,
+            "sha256": "8411287e999bd6baab00b097c2298a2c85f3c745461e9356a42d2c442dcd644b",
+            "bytes": 1619411
+          },
+          "object": {
+            "sha256": "8411287e999bd6baab00b097c2298a2c85f3c745461e9356a42d2c442dcd644b",
+            "bytes": 1619411
+          },
+          "object_key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/motion-source.mp4",
+          "recorded_sha256": "8411287e999bd6baab00b097c2298a2c85f3c745461e9356a42d2c442dcd644b",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "audio": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-07/audio-review.m4a",
+            "exists": true,
+            "sha256": "4e5550f141b1688cea8ababe753e986f08f0a91278e4e69098b143481c97f86c",
+            "bytes": 87635837
+          },
+          "object": {
+            "sha256": "4e5550f141b1688cea8ababe753e986f08f0a91278e4e69098b143481c97f86c",
+            "bytes": 87635837
+          },
+          "object_key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/audio.m4a",
+          "recorded_sha256": "4e5550f141b1688cea8ababe753e986f08f0a91278e4e69098b143481c97f86c",
+          "copies_match": true,
+          "record_matches": true
+        }
+      },
+      "frames": [
+        {
+          "t": 0,
+          "file": "episode-07/frame-0000.00.png",
+          "png_sha256": "b309da44a837632c75a8afc30a46a26b159999539cf906fbb61f12c1994edeeb"
+        },
+        {
+          "t": 3,
+          "file": "episode-07/frame-0003.00.png",
+          "png_sha256": "8db62041476ebba5590867abe87ca0f1efc4b5f964b860fbd8bbe6598165dba9"
+        },
+        {
+          "t": 7.46,
+          "file": "episode-07/frame-0007.46.png",
+          "png_sha256": "7061e6a8d2d27e581b955ac94053ecd4cc3090de1896dadb413c7cfe899bb35a"
+        },
+        {
+          "t": 7.5,
+          "file": "episode-07/frame-0007.50.png",
+          "png_sha256": "7061e6a8d2d27e581b955ac94053ecd4cc3090de1896dadb413c7cfe899bb35a"
+        },
+        {
+          "t": 719.96,
+          "file": "episode-07/frame-0719.96.png",
+          "png_sha256": "b309da44a837632c75a8afc30a46a26b159999539cf906fbb61f12c1994edeeb"
+        },
+        {
+          "t": 720,
+          "file": "episode-07/frame-0720.00.png",
+          "png_sha256": "b309da44a837632c75a8afc30a46a26b159999539cf906fbb61f12c1994edeeb"
+        },
+        {
+          "t": 900,
+          "file": "episode-07/frame-0900.00.png",
+          "png_sha256": "16ef223cbae72e68ef5acc1719ca0a6e705cb90c4765f7d56202651fea2a0f14"
+        },
+        {
+          "t": 1800,
+          "file": "episode-07/frame-1800.00.png",
+          "png_sha256": "d8716f05bd443f65e6175830f53a342626e1deead0845f9d99d2a338933fe5a4"
+        },
+        {
+          "t": 2700,
+          "file": "episode-07/frame-2700.00.png",
+          "png_sha256": "89fc7d7458460d84f9da916e78f1adfd4195812914a756c2cf53790dff4034e7"
+        },
+        {
+          "t": 3599.7,
+          "file": "episode-07/frame-3599.70.png",
+          "png_sha256": "74a63689c8c96d5f2b9c423962e73b2665cf9b4e6c442460f86ff3991b49a443"
+        }
+      ],
+      "receipts": {
+        "delivery-plan.json": {
+          "sha256_original": "1e3fd4a94f4d81f0860d1152898b55455fe444ab574eb000f4d3717e92cce3b1",
+          "sanitized": true
+        },
+        "delivery-report.json": {
+          "sha256_original": "dbd9d7d02daec9abaea34f2a1f5268af46168cf29de4582b14196c2381ca853e",
+          "sanitized": true
+        },
+        "image-receipt.json": {
+          "sha256_original": "3ca6bda1c3808e5d657a96915a7dc327341543d086425fc55e98ee3f6b412695",
+          "sanitized": true
+        },
+        "video-receipt.json": {
+          "sha256_original": "04d058410fd5fbf1c89255df2d065b3899a20de4020bcc2cba40ff0c534ac506",
+          "sanitized": true
+        },
+        "video-request.json": {
+          "sha256_original": "4eb2ba55cd04d61bd4c8c35dc83181bbe837388200713631cd7799f263861ab5",
+          "sanitized": true
+        },
+        "video-job.json": {
+          "sha256_original": "03825b3b9e224b5774e8af65fa3a999fe8448a8577417fc93c231ff4ac3366c4",
+          "sanitized": true
+        },
+        "audio-review.json": {
+          "sha256_original": "bf6078dbe213f2a892cc65831009e4ad12dd55c830c8e2779204a1d9a48a0409",
+          "sanitized": true
+        }
+      },
+      "probe": {
+        "duration": "3600.000000",
+        "streams": [
+          {
+            "codec_type": "video",
+            "codec_name": "h264",
+            "width": 1280,
+            "height": 720,
+            "r_frame_rate": "24/1"
+          }
+        ]
+      },
+      "audio_measurement": {
+        "method": "Full source decode + volumedetect and silencedetect to null; no output audio created",
+        "exit_code": 0,
+        "mean_volume_dbfs": [
+          "-18.5"
+        ],
+        "max_volume_dbfs": [
+          "-3.1"
+        ],
+        "silence_events": [
+          "[silencedetect @ 0x629215791640] silence_start: 61.454",
+          "[silencedetect @ 0x629215791640] silence_end: 64.0603 | silence_duration: 2.60633",
+          "[silencedetect @ 0x629215791640] silence_start: 183.314",
+          "[silencedetect @ 0x629215791640] silence_end: 186.096 | silence_duration: 2.78283",
+          "[silencedetect @ 0x629215791640] silence_start: 306.366",
+          "[silencedetect @ 0x629215791640] silence_end: 308.933 | silence_duration: 2.56667",
+          "[silencedetect @ 0x629215791640] silence_start: 548.721",
+          "[silencedetect @ 0x629215791640] silence_end: 551.376 | silence_duration: 2.65548",
+          "[silencedetect @ 0x629215791640] silence_start: 669.34",
+          "[silencedetect @ 0x629215791640] silence_end: 672.15 | silence_duration: 2.80971",
+          "[silencedetect @ 0x629215791640] silence_start: 791.52",
+          "[silencedetect @ 0x629215791640] silence_end: 794.312 | silence_duration: 2.79198",
+          "[silencedetect @ 0x629215791640] silence_start: 913.721",
+          "[silencedetect @ 0x629215791640] silence_end: 916.275 | silence_duration: 2.554",
+          "[silencedetect @ 0x629215791640] silence_start: 1035.84",
+          "[silencedetect @ 0x629215791640] silence_end: 1038.4 | silence_duration: 2.56417",
+          "[silencedetect @ 0x629215791640] silence_start: 1156.93",
+          "[silencedetect @ 0x629215791640] silence_end: 1159.73 | silence_duration: 2.79598",
+          "[silencedetect @ 0x629215791640] silence_start: 1279.14",
+          "[silencedetect @ 0x629215791640] silence_end: 1281.68 | silence_duration: 2.54169",
+          "[silencedetect @ 0x629215791640] silence_start: 1400.53",
+          "[silencedetect @ 0x629215791640] silence_end: 1402.18 | silence_duration: 1.65844",
+          "[silencedetect @ 0x629215791640] silence_start: 1521.46",
+          "[silencedetect @ 0x629215791640] silence_end: 1524.17 | silence_duration: 2.71771",
+          "[silencedetect @ 0x629215791640] silence_start: 1641.89",
+          "[silencedetect @ 0x629215791640] silence_end: 1643.78 | silence_duration: 1.89835",
+          "[silencedetect @ 0x629215791640] silence_start: 1885.04",
+          "[silencedetect @ 0x629215791640] silence_end: 1887.18 | silence_duration: 2.13446",
+          "[silencedetect @ 0x629215791640] silence_start: 2004.47",
+          "[silencedetect @ 0x629215791640] silence_end: 2006.89 | silence_duration: 2.42625",
+          "[silencedetect @ 0x629215791640] silence_start: 2125.13",
+          "[silencedetect @ 0x629215791640] silence_end: 2127.87 | silence_duration: 2.73925",
+          "[silencedetect @ 0x629215791640] silence_start: 2246.35",
+          "[silencedetect @ 0x629215791640] silence_end: 2249.07 | silence_duration: 2.71542",
+          "[silencedetect @ 0x629215791640] silence_start: 2370.63",
+          "[silencedetect @ 0x629215791640] silence_end: 2373.45 | silence_duration: 2.81542",
+          "[silencedetect @ 0x629215791640] silence_start: 2493.64",
+          "[silencedetect @ 0x629215791640] silence_end: 2496.35 | silence_duration: 2.71215",
+          "[silencedetect @ 0x629215791640] silence_start: 2615.59",
+          "[silencedetect @ 0x629215791640] silence_end: 2617.77 | silence_duration: 2.1804",
+          "[silencedetect @ 0x629215791640] silence_start: 2736.92",
+          "[silencedetect @ 0x629215791640] silence_end: 2739.44 | silence_duration: 2.52323",
+          "[silencedetect @ 0x629215791640] silence_start: 2878.34",
+          "[silencedetect @ 0x629215791640] silence_end: 2880.4 | silence_duration: 2.06083",
+          "[silencedetect @ 0x629215791640] silence_start: 3118.93",
+          "[silencedetect @ 0x629215791640] silence_end: 3121.66 | silence_duration: 2.73425",
+          "[silencedetect @ 0x629215791640] silence_start: 3241.96",
+          "[silencedetect @ 0x629215791640] silence_end: 3244.6 | silence_duration: 2.63781",
+          "[silencedetect @ 0x629215791640] silence_start: 3371.15",
+          "[silencedetect @ 0x629215791640] silence_end: 3373.91 | silence_duration: 2.7556",
+          "[silencedetect @ 0x629215791640] silence_start: 3492.57",
+          "[silencedetect @ 0x629215791640] silence_end: 3495.18 | silence_duration: 2.61346"
+        ],
+        "silence_diagnostic_threshold_dbfs": -50,
+        "silence_diagnostic_min_seconds": 1,
+        "previous_loudness_receipt": {
+          "sha256": "4e5550f141b1688cea8ababe753e986f08f0a91278e4e69098b143481c97f86c",
+          "channels": 2,
+          "sample_rate": "48000",
+          "true_peak_dbtp": -2.8,
+          "integrated_lufs": -17.0,
+          "duration_seconds": 3600.0,
+          "loudness_range_lu": 10.8,
+          "full_decode_exit_code": 0
+        },
+        "acceptance_thresholds_not_calibrated": true
+      }
+    },
+    {
+      "id": "013eb0ef-06e3-578f-a9f8-a49532b5478b",
+      "title": "Greenhouse Rain Study | 1 Hour of Lo-Fi Jazzhop for Coding",
+      "episode": 6,
+      "copies": {
+        "video": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-06/video-silent-with-audio.mp4",
+            "exists": true,
+            "sha256": "2821a23df03deed4f6cdc44351735eeba8eecd5d7d6ab823e9d3e813e8bd68f7",
+            "bytes": 929810245
+          },
+          "object": {
+            "sha256": "2821a23df03deed4f6cdc44351735eeba8eecd5d7d6ab823e9d3e813e8bd68f7",
+            "bytes": 929810245
+          },
+          "object_key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/video.mp4",
+          "recorded_sha256": "2821a23df03deed4f6cdc44351735eeba8eecd5d7d6ab823e9d3e813e8bd68f7",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "silent": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-06/silent-derived.mp4",
+            "exists": true,
+            "sha256": "68ed43994968f608a7845f18cc7d6149e096c0db85f88e7effc2af646b7bcc8f",
+            "bytes": 841306582
+          },
+          "object": {
+            "sha256": "68ed43994968f608a7845f18cc7d6149e096c0db85f88e7effc2af646b7bcc8f",
+            "bytes": 841306582
+          },
+          "object_key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/silent.mp4",
+          "recorded_sha256": "68ed43994968f608a7845f18cc7d6149e096c0db85f88e7effc2af646b7bcc8f",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "source": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-06/source.png",
+            "exists": true,
+            "sha256": "0432d5b2be6470dfc4ae0435eaaca832b51eca5a5abad6fa7b7a39ad294eb9f0",
+            "bytes": 1109404
+          },
+          "object": {
+            "sha256": "0432d5b2be6470dfc4ae0435eaaca832b51eca5a5abad6fa7b7a39ad294eb9f0",
+            "bytes": 1109404
+          },
+          "object_key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/source.png",
+          "recorded_sha256": "0432d5b2be6470dfc4ae0435eaaca832b51eca5a5abad6fa7b7a39ad294eb9f0",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "motion-source": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-06/motion-source.mp4",
+            "exists": true,
+            "sha256": "d41a4e07d80d7a5f780240e644e8a6bd03bf1aeaafdd5304caa66b561fd915f8",
+            "bytes": 2188811
+          },
+          "object": {
+            "sha256": "d41a4e07d80d7a5f780240e644e8a6bd03bf1aeaafdd5304caa66b561fd915f8",
+            "bytes": 2188811
+          },
+          "object_key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/motion-source.mp4",
+          "recorded_sha256": "d41a4e07d80d7a5f780240e644e8a6bd03bf1aeaafdd5304caa66b561fd915f8",
+          "copies_match": true,
+          "record_matches": true
+        },
+        "audio": {
+          "cached": {
+            "path": "/cache/seven-hours/episode-06/audio-review.m4a",
+            "exists": true,
+            "sha256": "b3e919d1f24c95b9a9e272e44877fc5a17f056412df138febfafec897e4aa34b",
+            "bytes": 87727244
+          },
+          "object": {
+            "sha256": "b3e919d1f24c95b9a9e272e44877fc5a17f056412df138febfafec897e4aa34b",
+            "bytes": 87727244
+          },
+          "object_key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/audio.m4a",
+          "recorded_sha256": "b3e919d1f24c95b9a9e272e44877fc5a17f056412df138febfafec897e4aa34b",
+          "copies_match": true,
+          "record_matches": true
+        }
+      },
+      "frames": [
+        {
+          "t": 0,
+          "file": "episode-06/frame-0000.00.png",
+          "png_sha256": "93137ea450c0c99749113b9e599079f5a8d53da5561d598ccced46bdc7ac51a7"
+        },
+        {
+          "t": 3,
+          "file": "episode-06/frame-0003.00.png",
+          "png_sha256": "f13435120ffe528503a4567e87459cc47b61875c2f5e8249d221e9d627f9b487"
+        },
+        {
+          "t": 7.46,
+          "file": "episode-06/frame-0007.46.png",
+          "png_sha256": "2368faa46108cdc3c473c42c2d0b734fb50c8ba7f9597f7b4f34437a0df7bb95"
+        },
+        {
+          "t": 7.5,
+          "file": "episode-06/frame-0007.50.png",
+          "png_sha256": "2368faa46108cdc3c473c42c2d0b734fb50c8ba7f9597f7b4f34437a0df7bb95"
+        },
+        {
+          "t": 719.96,
+          "file": "episode-06/frame-0719.96.png",
+          "png_sha256": "93137ea450c0c99749113b9e599079f5a8d53da5561d598ccced46bdc7ac51a7"
+        },
+        {
+          "t": 720,
+          "file": "episode-06/frame-0720.00.png",
+          "png_sha256": "93137ea450c0c99749113b9e599079f5a8d53da5561d598ccced46bdc7ac51a7"
+        },
+        {
+          "t": 900,
+          "file": "episode-06/frame-0900.00.png",
+          "png_sha256": "61e8812dfd05c6e63b1aa4e4a7d625d0b79deac6065166d6bad379db1a000472"
+        },
+        {
+          "t": 1800,
+          "file": "episode-06/frame-1800.00.png",
+          "png_sha256": "887b72f05bd5eff904be1b5dd96ad612339b2ecdbbfa899ea34c66ee1fd2b322"
+        },
+        {
+          "t": 2700,
+          "file": "episode-06/frame-2700.00.png",
+          "png_sha256": "f9465629868172f4bd2e726ea17a6e40cc708f50b92401622d4339b7c7cdc33b"
+        },
+        {
+          "t": 3599.7,
+          "file": "episode-06/frame-3599.70.png",
+          "png_sha256": "d60387060b58c73fb2fcdc6b45352ac91bd8929ce76d10175cb8a1e297a86ac4"
+        }
+      ],
+      "receipts": {
+        "delivery-plan.json": {
+          "sha256_original": "317bf0fea04c0004fa7c00092fa851c3750f1bd6505c58acadfcfc60764d8021",
+          "sanitized": true
+        },
+        "delivery-report.json": {
+          "sha256_original": "b59795c11fab532fc0840ce3df45130b909c37f41646ce39268a6354f2ac8b65",
+          "sanitized": true
+        },
+        "image-receipt.json": {
+          "sha256_original": "1607b4841040bc511b5b3f9bff1b94b8d6b045f97d51b13a77ff0aa202db7d3a",
+          "sanitized": true
+        },
+        "image-repair-receipt.json": {
+          "sha256_original": "96f4ae8481d0f9fb1bc7f6a0fc512349945ea303024dc28800e7cca344085e8b",
+          "sanitized": true
+        },
+        "image-repair-v2-receipt.json": {
+          "sha256_original": "25a839f825b92fe60f3073f87a51a0a4d3f8c802f3394fea974c507eb99e56f8",
+          "sanitized": true
+        },
+        "video-receipt.json": {
+          "sha256_original": "a7187b77c1461c9cd9004581c06ee44be720dbebefc41bcba9c0e864f8d18aa9",
+          "sanitized": true
+        },
+        "video-request.json": {
+          "sha256_original": "2a96402c87c70d728ad0f367d8134cef77b7036b22823d93b0dff4af7daca44d",
+          "sanitized": true
+        },
+        "video-job.json": {
+          "sha256_original": "6c7df7e83c15ceb300408c08d4e725bedfb906aaf58709e19cb4c24dc701f5a2",
+          "sanitized": true
+        },
+        "audio-review.json": {
+          "sha256_original": "2b55437a07310cb5281d6cd4e5e12e3870ed11c6fdd967c0d81b95b8ad1bb955",
+          "sanitized": true
+        }
+      },
+      "probe": {
+        "duration": "3600.000000",
+        "streams": [
+          {
+            "codec_type": "video",
+            "codec_name": "h264",
+            "width": 1280,
+            "height": 720,
+            "r_frame_rate": "24/1"
+          }
+        ]
+      },
+      "audio_measurement": {
+        "method": "Full source decode + volumedetect and silencedetect to null; no output audio created",
+        "exit_code": 0,
+        "mean_volume_dbfs": [
+          "-18.6"
+        ],
+        "max_volume_dbfs": [
+          "-2.2"
+        ],
+        "silence_events": [
+          "[silencedetect @ 0x5a057449d080] silence_start: 29.2281",
+          "[silencedetect @ 0x5a057449d080] silence_end: 32.623 | silence_duration: 3.39487",
+          "[silencedetect @ 0x5a057449d080] silence_start: 150.216",
+          "[silencedetect @ 0x5a057449d080] silence_end: 152.345 | silence_duration: 2.12896",
+          "[silencedetect @ 0x5a057449d080] silence_start: 270.897",
+          "[silencedetect @ 0x5a057449d080] silence_end: 272.139 | silence_duration: 1.24188",
+          "[silencedetect @ 0x5a057449d080] silence_start: 391.468",
+          "[silencedetect @ 0x5a057449d080] silence_end: 393.713 | silence_duration: 2.24546",
+          "[silencedetect @ 0x5a057449d080] silence_start: 512.217",
+          "[silencedetect @ 0x5a057449d080] silence_end: 514.895 | silence_duration: 2.67754",
+          "[silencedetect @ 0x5a057449d080] silence_start: 633.774",
+          "[silencedetect @ 0x5a057449d080] silence_end: 635.462 | silence_duration: 1.68852",
+          "[silencedetect @ 0x5a057449d080] silence_start: 754.454",
+          "[silencedetect @ 0x5a057449d080] silence_end: 756.81 | silence_duration: 2.35631",
+          "[silencedetect @ 0x5a057449d080] silence_start: 994.436",
+          "[silencedetect @ 0x5a057449d080] silence_end: 997.22 | silence_duration: 2.78346",
+          "[silencedetect @ 0x5a057449d080] silence_start: 1114.04",
+          "[silencedetect @ 0x5a057449d080] silence_end: 1115.62 | silence_duration: 1.58098",
+          "[silencedetect @ 0x5a057449d080] silence_start: 1233.88",
+          "[silencedetect @ 0x5a057449d080] silence_end: 1235.65 | silence_duration: 1.77027",
+          "[silencedetect @ 0x5a057449d080] silence_start: 1354.04",
+          "[silencedetect @ 0x5a057449d080] silence_end: 1355.64 | silence_duration: 1.6055",
+          "[silencedetect @ 0x5a057449d080] silence_start: 1593.45",
+          "[silencedetect @ 0x5a057449d080] silence_end: 1595.85 | silence_duration: 2.40256",
+          "[silencedetect @ 0x5a057449d080] silence_start: 1718.91",
+          "[silencedetect @ 0x5a057449d080] silence_end: 1721.55 | silence_duration: 2.63656",
+          "[silencedetect @ 0x5a057449d080] silence_start: 1839.35",
+          "[silencedetect @ 0x5a057449d080] silence_end: 1842.13 | silence_duration: 2.77273",
+          "[silencedetect @ 0x5a057449d080] silence_start: 1964.57",
+          "[silencedetect @ 0x5a057449d080] silence_end: 1966.64 | silence_duration: 2.06688",
+          "[silencedetect @ 0x5a057449d080] silence_start: 2086.12",
+          "[silencedetect @ 0x5a057449d080] silence_end: 2088.75 | silence_duration: 2.63742",
+          "[silencedetect @ 0x5a057449d080] silence_start: 2207.07",
+          "[silencedetect @ 0x5a057449d080] silence_end: 2209.05 | silence_duration: 1.98758",
+          "[silencedetect @ 0x5a057449d080] silence_start: 2327.02",
+          "[silencedetect @ 0x5a057449d080] silence_end: 2329.2 | silence_duration: 2.18125",
+          "[silencedetect @ 0x5a057449d080] silence_start: 2566.82",
+          "[silencedetect @ 0x5a057449d080] silence_end: 2568.14 | silence_duration: 1.31158",
+          "[silencedetect @ 0x5a057449d080] silence_start: 2687.53",
+          "[silencedetect @ 0x5a057449d080] silence_end: 2690.04 | silence_duration: 2.51421",
+          "[silencedetect @ 0x5a057449d080] silence_start: 2808.35",
+          "[silencedetect @ 0x5a057449d080] silence_end: 2810.21 | silence_duration: 1.86448",
+          "[silencedetect @ 0x5a057449d080] silence_start: 2929.3",
+          "[silencedetect @ 0x5a057449d080] silence_end: 2931.73 | silence_duration: 2.42362",
+          "[silencedetect @ 0x5a057449d080] silence_start: 3051.64",
+          "[silencedetect @ 0x5a057449d080] silence_end: 3054.08 | silence_duration: 2.43958",
+          "[silencedetect @ 0x5a057449d080] silence_start: 3172.56",
+          "[silencedetect @ 0x5a057449d080] silence_end: 3174.38 | silence_duration: 1.82104",
+          "[silencedetect @ 0x5a057449d080] silence_start: 3294.5",
+          "[silencedetect @ 0x5a057449d080] silence_end: 3297.2 | silence_duration: 2.70035",
+          "[silencedetect @ 0x5a057449d080] silence_start: 3418.89",
+          "[silencedetect @ 0x5a057449d080] silence_end: 3421.64 | silence_duration: 2.74869",
+          "[silencedetect @ 0x5a057449d080] silence_start: 3539.85",
+          "[silencedetect @ 0x5a057449d080] silence_end: 3542.84 | silence_duration: 2.98521"
+        ],
+        "silence_diagnostic_threshold_dbfs": -50,
+        "silence_diagnostic_min_seconds": 1,
+        "previous_loudness_receipt": {
+          "sha256": "b3e919d1f24c95b9a9e272e44877fc5a17f056412df138febfafec897e4aa34b",
+          "channels": 2,
+          "sample_rate": "48000",
+          "true_peak_dbtp": -2.2,
+          "integrated_lufs": -17.1,
+          "duration_seconds": 3600.0,
+          "loudness_range_lu": 11.0,
+          "full_decode_exit_code": 0
+        },
+        "acceptance_thresholds_not_calibrated": true
+      }
+    }
+  ],
+  "no_paid_generation": true,
+  "no_long_render": true
+}

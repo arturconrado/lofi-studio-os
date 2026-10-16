@@ -1,0 +1,9 @@
+{
+  "source_snapshot_commit": "bf5c851",
+  "media_archive_bytes": 25974932,
+  "media_archive_sha256": "00d1b8bf785027fd9babb3b16d0996677002363ee8f116982a14830af259412d",
+  "local_original_inputs_and_motion_copies": true,
+  "complete_final_mp4s_local_backup": false,
+  "frame_copies": "JPEG contact-sheet derivatives; raw-frame PNG SHA retained",
+  "credential_redactions": 0
+}

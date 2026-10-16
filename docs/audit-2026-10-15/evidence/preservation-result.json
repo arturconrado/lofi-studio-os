@@ -1,0 +1,12 @@
+{
+  "preservation_digests_equal": true,
+  "changed_tables": {},
+  "jobs_before_after": [
+    256,
+    256
+  ],
+  "factory_task_ids_equal": true,
+  "publications_equal": true,
+  "channels_equal": true,
+  "paid_generation_started_by_audit": false
+}

@@ -23,7 +23,7 @@ def test_absolute_environment_clock_has_no_hourly_reset():
 
 
 @pytest.mark.skipif(not shutil.which('ffmpeg'),reason='FFmpeg required')
-def test_real_local_render_measures_output_and_never_certifies_artistic_review(tmp_path):
+def test_real_local_render_measures_output_and_never_certifies_artistic_review(tmp_path,monkeypatch):
     source=tmp_path/'source.mp4';audio=tmp_path/'audio.wav'
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=160x90:rate=24:duration=2','-c:v','libx264','-threads','1','-pix_fmt','yuv420p',str(source)],check=True)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','sine=frequency=220:duration=5',str(audio)],check=True)
@@ -38,6 +38,18 @@ def test_real_local_render_measures_output_and_never_certifies_artistic_review(t
     assert report['paid_calls']==0 and not report['eligible_for_live']
     assert report['segments'][1]['transition_seconds']==.35
     assert not report['video']['continuous_transitions_reviewed']
+    from studio import timeline_compositor as compositor
+    calls=[];encoder=compositor.encode_chunk
+    def counted(*args,**kwargs):calls.append(True);return encoder(*args,**kwargs)
+    monkeypatch.setattr(compositor,'encode_chunk',counted)
+    again=render(compiled,{'assets_ready':True,'segments':segments},{sha:source},audio,environment,tmp_path/'final.mp4',width=160,height=90)
+    assert not calls and all(s['checkpoint_reused'] for s in again['segments'])
+    # An interrupted or corrupt segment must not inherit its old receipt.
+    (tmp_path/'chunk-0001.mp4').write_bytes(b'broken')
+    repaired=render(compiled,{'assets_ready':True,'segments':segments},{sha:source},audio,environment,tmp_path/'final.mp4',width=160,height=90)
+    assert len(calls)==1 and repaired['segments'][0]['checkpoint_reused']
+    assert not repaired['segments'][1]['checkpoint_reused']
+
 
 
 def test_interactions_cannot_be_extended_by_looping(tmp_path):
@@ -52,9 +64,28 @@ def test_preflight_requires_exact_reviews_and_current_audio_style_binding():
              'status':'APPROVED_ACTION','full_decode_pass':True,'source_preserved':True,'pose_anchors_reviewed':True,
              'seconds':minimum_seconds(c,t['action']),'loop_seam_reviewed':True,'video_key':'reviewed.mp4'} for t in c['asset_tasks']]
     audio={'sha256':sha,'human_review_sha256':sha,'style_reviewed':True,'source_preserved':True,'spec_sha256':digest,'seconds':3600,'unique_measured_seconds':3600}
-    environment={'reviewed':True,'spec_sha256':digest}
+    environment={'reviewed':True,'spec_sha256':digest,'region_asset_shas':[sha]}
     assert preflight(c,assets,audio,environment)['ready']
     assert not preflight(c,assets,audio|{'spec_sha256':'changed'},environment)['ready']
     assert not preflight(c,assets,audio|{'unique_measured_seconds':120},environment)['ready']
+    assert not preflight(c,assets,audio,environment|{'region_asset_shas':['b'*64]})['ready']
     assets[0]['human_review_sha256']='b'*64
     assert not preflight(c,assets,audio,environment)['ready']
+
+
+@pytest.mark.skipif(not shutil.which('ffmpeg'),reason='FFmpeg required')
+def test_recolor_filter_and_preview_use_real_encoder_with_absolute_offsets(tmp_path):
+    from studio.timeline_preview import window
+    source=tmp_path/'motion.mp4';audio=tmp_path/'audio.wav'
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=160x90:rate=24:duration=2','-c:v','libx264','-threads','1',str(source)],check=True)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','sine=frequency=330:duration=30',str(audio)],check=True)
+    sha=file_hash(source)
+    compiled={'duration_seconds':30,'spec_sha256':'test-spec','lighting':{'keyframes':[{'minute':0,'night':0},{'minute':1,'night':1}]}}
+    assembly={'segments':[{'start':0,'end':20,'action':'typing_idle','asset_sha256':sha,'repeat_short_clip':True}, {'start':20,'end':22,'action':'pet_cat','asset_sha256':sha,'repeat_short_clip':False}, {'start':22,'end':30,'action':'typing_idle','asset_sha256':sha,'repeat_short_clip':True}]}
+    c,p=window(compiled,assembly,15)
+    env={'sky':[[.7,0],[1,0],[1,.3]],'lights':[],'cushion_box':[.1,.8,.35,.15], 'recolor':True,'recolor_color':'pink','shirt':[[.1,.4],[.4,.4],[.4,.7]],'cushion_color':[[.5,.8],[.7,.8],[.7,1]], 'protected_girl':[[.1,.1],[.5,.1],[.5,.4]],'protected_cat':[[.7,.4],[1,.4],[1,.8]],'protected_hands':[[.4,.6],[.6,.6],[.6,.7]]}
+    report=render(c,p,{sha:source},audio,env,tmp_path/'preview.mp4',width=160,height=90)
+    assert report['preview_only'] and report['clock_offset_seconds']==15
+    assert report['parent_spec_sha256']=='test-spec'
+    assert report['video']['full_decode_pass'] and report['video']['duration_seconds']>=10
+    assert not report['eligible_for_live']

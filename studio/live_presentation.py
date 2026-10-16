@@ -25,7 +25,8 @@ def sources(cid:uuid.UUID):
         if not c.execute("SELECT to_regclass('youtube_publications') found").fetchone()['found']:return []
         rows=c.execute("SELECT DISTINCT a.id,a.title,a.report FROM ambient_pilots a JOIN youtube_publications p ON p.pilot_id=a.id WHERE a.channel_id=%s AND p.channel_id=%s AND p.state='uploaded'",(cid,cid)).fetchall()
     from .youtube_publish import ready_pilot
-    return [{'pilot_id':r['id'],'title':r['title'],'seconds':r['report']['duration_seconds']} for r in rows if ready_pilot(r)]
+    from .visual_identity import baseline
+    return [{'pilot_id':r['id'],'title':r['title'],'seconds':r['report']['duration_seconds'],'canonical_reference':bool(baseline(r['id']))} for r in rows if ready_pilot(r)]
 
 class VisualSource(BaseModel):
     program_id:str=Field(min_length=1,max_length=40)

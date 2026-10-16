@@ -15,3 +15,13 @@ DIRECTIONS={s['id']:s['direction'] for s in STYLES}
 
 def catalog():
  return {'styles':STYLES,'ranking_available':False,'note':'Referências de grandes rádios e opções editoriais. Não é um ranking global de reproduções; chuva, café, noite e coding são temas, não estilos musicais.'}
+
+
+def requested_tempo(brief, sequence):
+    """Prompt intention only; never report it as measured BPM."""
+    import re
+    match=re.search(r'\b(\d{2,3})(?:\s*[-–]\s*(\d{2,3}))?\s*bpm\b',brief,re.I)
+    if match:
+        low=int(match[1]);high=int(match[2] or low)
+        if 35<=low<=high<=180:return low+(sequence-1)%(high-low+1)
+    return [70,72,74,71,73,68][(sequence-1)%6]

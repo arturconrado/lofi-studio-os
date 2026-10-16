@@ -1,0 +1,1088 @@
+{
+  "commit": "bf5c851dcbf7c9c58141171d2437855708fd9270",
+  "files": [
+    {
+      "file": "studio/creator.py",
+      "sha256": "a504a3390d64bcfdb1da9199a35dc58576f6b465c12b48251dea2714f2cdd27c",
+      "functions": [
+        {
+          "name": "saved_plans",
+          "line": 12,
+          "end_line": 20
+        },
+        {
+          "name": "init",
+          "line": 22,
+          "end_line": 26
+        },
+        {
+          "name": "usage",
+          "line": 27,
+          "end_line": 31
+        },
+        {
+          "name": "CreativePlan",
+          "line": 33,
+          "end_line": 42
+        },
+        {
+          "name": "PlanRequest",
+          "line": 43,
+          "end_line": 48
+        },
+        {
+          "name": "plan",
+          "line": 50,
+          "end_line": 83
+        },
+        {
+          "name": "CreateRequest",
+          "line": 84,
+          "end_line": 89
+        },
+        {
+          "name": "produce",
+          "line": 91,
+          "end_line": 134
+        },
+        {
+          "name": "Metadata",
+          "line": 135,
+          "end_line": 141
+        },
+        {
+          "name": "metadata",
+          "line": 143,
+          "end_line": 146
+        },
+        {
+          "name": "save_metadata",
+          "line": 148,
+          "end_line": 152
+        },
+        {
+          "name": "PackagingRequest",
+          "line": 154,
+          "end_line": 156
+        },
+        {
+          "name": "suggest_metadata",
+          "line": 158,
+          "end_line": 163
+        },
+        {
+          "name": "suggest_track",
+          "line": 165,
+          "end_line": 171
+        },
+        {
+          "name": "TrackCopy",
+          "line": 172,
+          "end_line": 174
+        },
+        {
+          "name": "save_track_copy",
+          "line": 176,
+          "end_line": 180
+        },
+        {
+          "name": "StoryboardRequest",
+          "line": 184,
+          "end_line": 187
+        },
+        {
+          "name": "storyboard",
+          "line": 189,
+          "end_line": 201
+        },
+        {
+          "name": "save_storyboard",
+          "line": 204,
+          "end_line": 225
+        },
+        {
+          "name": "music_styles",
+          "line": 228,
+          "end_line": 230
+        }
+      ]
+    },
+    {
+      "file": "studio/creator_service.py",
+      "sha256": "b4956099e18bb520f8d01ddac4ce958fad6f939f0668665d30e1ce9194501db4",
+      "functions": [
+        {
+          "name": "visual",
+          "line": 12,
+          "end_line": 56
+        },
+        {
+          "name": "package",
+          "line": 58,
+          "end_line": 86
+        },
+        {
+          "name": "tick",
+          "line": 88,
+          "end_line": 107
+        },
+        {
+          "name": "main",
+          "line": 108,
+          "end_line": 113
+        }
+      ]
+    },
+    {
+      "file": "studio/scene_animation.py",
+      "sha256": "fb7ddc8f28edeb0d835f43aeaec62bb007c257f3db502d6b65f713799da60905",
+      "functions": [
+        {
+          "name": "render",
+          "line": 10,
+          "end_line": 61
+        }
+      ]
+    },
+    {
+      "file": "studio/ambient_animation.py",
+      "sha256": "9565f02d72f410822f38e64be470a65d7f5f20ffd20377a5d80ae1ea44742766",
+      "functions": [
+        {
+          "name": "events",
+          "line": 7,
+          "end_line": 11
+        },
+        {
+          "name": "envelope",
+          "line": 13,
+          "end_line": 17
+        },
+        {
+          "name": "Scene",
+          "line": 19,
+          "end_line": 82
+        },
+        {
+          "name": "render",
+          "line": 84,
+          "end_line": 101
+        },
+        {
+          "name": "prepare_hour",
+          "line": 103,
+          "end_line": 108
+        },
+        {
+          "name": "__init__",
+          "line": 20,
+          "end_line": 43
+        },
+        {
+          "name": "frame",
+          "line": 44,
+          "end_line": 82
+        }
+      ]
+    },
+    {
+      "file": "studio/ambient_fast.py",
+      "sha256": "6ce7a363aafe6928b7944a03b3ff2f9ab0052b39bfb9d9fd6972f94bc7cfd263",
+      "functions": [
+        {
+          "name": "FastScene",
+          "line": 7,
+          "end_line": 56
+        },
+        {
+          "name": "render_hour",
+          "line": 58,
+          "end_line": 73
+        },
+        {
+          "name": "__init__",
+          "line": 8,
+          "end_line": 20
+        },
+        {
+          "name": "blend",
+          "line": 21,
+          "end_line": 22
+        },
+        {
+          "name": "overlay",
+          "line": 23,
+          "end_line": 24
+        },
+        {
+          "name": "frame",
+          "line": 25,
+          "end_line": 56
+        }
+      ]
+    },
+    {
+      "file": "studio/production_harness.py",
+      "sha256": "5bcd8b85f3d7891e0d5700777ad9c2e4fe9c716b4a78291b5b6ac1b6327a093d",
+      "functions": [
+        {
+          "name": "ProductionSpec",
+          "line": 11,
+          "end_line": 22
+        },
+        {
+          "name": "production_spec_hash",
+          "line": 25,
+          "end_line": 31
+        },
+        {
+          "name": "compile_spec",
+          "line": 34,
+          "end_line": 112
+        },
+        {
+          "name": "audio_prompt",
+          "line": 115,
+          "end_line": 116
+        },
+        {
+          "name": "assess_delivery",
+          "line": 119,
+          "end_line": 136
+        },
+        {
+          "name": "asset_inventory",
+          "line": 139,
+          "end_line": 151
+        },
+        {
+          "name": "assembly_plan",
+          "line": 154,
+          "end_line": 191
+        }
+      ]
+    },
+    {
+      "file": "studio/timeline_api.py",
+      "sha256": "e5d4f67a86e3ef1dcaef1ec0fe44f5d80a7008ce5d28b41afad2b3faa4489756",
+      "functions": [
+        {
+          "name": "get_plan",
+          "line": 16,
+          "end_line": 20
+        },
+        {
+          "name": "minimum_seconds",
+          "line": 23,
+          "end_line": 25
+        },
+        {
+          "name": "materials",
+          "line": 28,
+          "end_line": 33
+        },
+        {
+          "name": "compatible_assets",
+          "line": 36,
+          "end_line": 52
+        },
+        {
+          "name": "reuse",
+          "line": 56,
+          "end_line": 68
+        },
+        {
+          "name": "identity_sources",
+          "line": 71,
+          "end_line": 82
+        },
+        {
+          "name": "IdentitySelection",
+          "line": 85,
+          "end_line": 86
+        },
+        {
+          "name": "select_identity",
+          "line": 90,
+          "end_line": 97
+        },
+        {
+          "name": "inputs_hash",
+          "line": 100,
+          "end_line": 101
+        },
+        {
+          "name": "public_job",
+          "line": 104,
+          "end_line": 108
+        },
+        {
+          "name": "status",
+          "line": 112,
+          "end_line": 129
+        },
+        {
+          "name": "upload_clip",
+          "line": 133,
+          "end_line": 167
+        },
+        {
+          "name": "clip_video",
+          "line": 171,
+          "end_line": 176
+        },
+        {
+          "name": "ClipReview",
+          "line": 179,
+          "end_line": 184
+        },
+        {
+          "name": "review_clip",
+          "line": 188,
+          "end_line": 196
+        },
+        {
+          "name": "Soundtrack",
+          "line": 199,
+          "end_line": 201
+        },
+        {
+          "name": "bind_soundtrack",
+          "line": 205,
+          "end_line": 224
+        },
+        {
+          "name": "Regions",
+          "line": 227,
+          "end_line": 242
+        },
+        {
+          "name": "save_regions",
+          "line": 246,
+          "end_line": 253
+        },
+        {
+          "name": "RenderRequest",
+          "line": 256,
+          "end_line": 258
+        },
+        {
+          "name": "enqueue",
+          "line": 262,
+          "end_line": 280
+        },
+        {
+          "name": "get_job",
+          "line": 283,
+          "end_line": 287
+        },
+        {
+          "name": "video",
+          "line": 291,
+          "end_line": 295
+        },
+        {
+          "name": "FinalReview",
+          "line": 298,
+          "end_line": 302
+        },
+        {
+          "name": "final_review",
+          "line": 306,
+          "end_line": 323
+        },
+        {
+          "name": "coordinates",
+          "line": 233,
+          "end_line": 242
+        }
+      ]
+    },
+    {
+      "file": "studio/timeline_compositor.py",
+      "sha256": "a5991a8b23fa4b1a05fd341db2044c27f9f02a7f7ef5a68f5801383517b82a6f",
+      "functions": [
+        {
+          "name": "file_hash",
+          "line": 17,
+          "end_line": 21
+        },
+        {
+          "name": "probe",
+          "line": 24,
+          "end_line": 25
+        },
+        {
+          "name": "measure",
+          "line": 28,
+          "end_line": 32
+        },
+        {
+          "name": "preflight",
+          "line": 35,
+          "end_line": 46
+        },
+        {
+          "name": "smooth_value",
+          "line": 49,
+          "end_line": 55
+        },
+        {
+          "name": "clock_expression",
+          "line": 58,
+          "end_line": 66
+        },
+        {
+          "name": "environment_files",
+          "line": 69,
+          "end_line": 87
+        },
+        {
+          "name": "encode_chunk",
+          "line": 90,
+          "end_line": 104
+        },
+        {
+          "name": "render",
+          "line": 107,
+          "end_line": 161
+        }
+      ]
+    },
+    {
+      "file": "studio/timeline_worker.py",
+      "sha256": "683ec70a9314712c4c70f3eb9464287794242e3ed5d945001c9c82290e18dd3f",
+      "functions": [
+        {
+          "name": "heartbeat",
+          "line": 9,
+          "end_line": 10
+        },
+        {
+          "name": "interrupted",
+          "line": 13,
+          "end_line": 14
+        },
+        {
+          "name": "fetch",
+          "line": 17,
+          "end_line": 28
+        },
+        {
+          "name": "tick",
+          "line": 31,
+          "end_line": 77
+        },
+        {
+          "name": "progress",
+          "line": 40,
+          "end_line": 46
+        }
+      ]
+    },
+    {
+      "file": "studio/temporal_preview.py",
+      "sha256": "b557fb6bc2fa34a5283bef67d3cc343e109ba099a2b14da68ae5997d0eb9660c",
+      "functions": [
+        {
+          "name": "smooth",
+          "line": 13,
+          "end_line": 13
+        },
+        {
+          "name": "Environment",
+          "line": 15,
+          "end_line": 46
+        },
+        {
+          "name": "composition",
+          "line": 48,
+          "end_line": 51
+        },
+        {
+          "name": "render",
+          "line": 53,
+          "end_line": 67
+        },
+        {
+          "name": "__init__",
+          "line": 16,
+          "end_line": 25
+        },
+        {
+          "name": "frame",
+          "line": 26,
+          "end_line": 46
+        }
+      ]
+    },
+    {
+      "file": "studio/quality_gate.py",
+      "sha256": "5a792528daa94e1eefbe88dd4d0957ebc345d9c86b7ca10f64010b871b353a5c",
+      "functions": [
+        {
+          "name": "policy",
+          "line": 12,
+          "end_line": 17
+        },
+        {
+          "name": "run",
+          "line": 19,
+          "end_line": 20
+        },
+        {
+          "name": "loudness",
+          "line": 22,
+          "end_line": 29
+        },
+        {
+          "name": "finite",
+          "line": 31,
+          "end_line": 33
+        },
+        {
+          "name": "analyze",
+          "line": 35,
+          "end_line": 132
+        },
+        {
+          "name": "master",
+          "line": 134,
+          "end_line": 175
+        },
+        {
+          "name": "reason",
+          "line": 39,
+          "end_line": 39
+        }
+      ]
+    },
+    {
+      "file": "studio/qc_service.py",
+      "sha256": "c130960fda87aa5b77878fa21df481a0d86d9382771bff2e3867ce3ae0855932",
+      "functions": [
+        {
+          "name": "reprocess",
+          "line": 6,
+          "end_line": 47
+        }
+      ]
+    },
+    {
+      "file": "studio/batch_factory.py",
+      "sha256": "bd9c4bfccf3b14e26de2b6bbb8661258a147380daa948cb7c9fe5f486fe80cdb",
+      "functions": [
+        {
+          "name": "authorized_settings",
+          "line": 20,
+          "end_line": 21
+        },
+        {
+          "name": "progress",
+          "line": 24,
+          "end_line": 29
+        },
+        {
+          "name": "update",
+          "line": 31,
+          "end_line": 34
+        },
+        {
+          "name": "reserve_next",
+          "line": 36,
+          "end_line": 66
+        },
+        {
+          "name": "produce",
+          "line": 68,
+          "end_line": 100
+        },
+        {
+          "name": "worker",
+          "line": 102,
+          "end_line": 111
+        },
+        {
+          "name": "main",
+          "line": 113,
+          "end_line": 128
+        }
+      ]
+    },
+    {
+      "file": "studio/provider.py",
+      "sha256": "0ab531861d495ab243f8845d7e8a20266e5b0493076bd7dd389614ec35891c15",
+      "functions": [
+        {
+          "name": "decode_chunk",
+          "line": 9,
+          "end_line": 14
+        },
+        {
+          "name": "PartialGenerationError",
+          "line": 16,
+          "end_line": 19
+        },
+        {
+          "name": "collect_stream",
+          "line": 21,
+          "end_line": 45
+        },
+        {
+          "name": "generate",
+          "line": 47,
+          "end_line": 60
+        },
+        {
+          "name": "__init__",
+          "line": 17,
+          "end_line": 19
+        }
+      ]
+    },
+    {
+      "file": "studio/exports.py",
+      "sha256": "a6078951228753de1e2c739e9ecee3a51999eba41d627154706ac364c34b988f",
+      "functions": [
+        {
+          "name": "initialize",
+          "line": 14,
+          "end_line": 21
+        },
+        {
+          "name": "ExportRequest",
+          "line": 23,
+          "end_line": 26
+        },
+        {
+          "name": "listing",
+          "line": 29,
+          "end_line": 33
+        },
+        {
+          "name": "create",
+          "line": 36,
+          "end_line": 54
+        },
+        {
+          "name": "download",
+          "line": 57,
+          "end_line": 64
+        },
+        {
+          "name": "preview",
+          "line": 68,
+          "end_line": 71
+        },
+        {
+          "name": "tick",
+          "line": 74,
+          "end_line": 109
+        },
+        {
+          "name": "main",
+          "line": 112,
+          "end_line": 127
+        },
+        {
+          "name": "heartbeat",
+          "line": 119,
+          "end_line": 123
+        }
+      ]
+    },
+    {
+      "file": "studio/video_export.py",
+      "sha256": "4730b8c482432e0aaad361ffb566609b15ea4f4825ff7fc8a827df7c73c99dd1",
+      "functions": [
+        {
+          "name": "export",
+          "line": 9,
+          "end_line": 52
+        },
+        {
+          "name": "probe",
+          "line": 14,
+          "end_line": 15
+        }
+      ]
+    },
+    {
+      "file": "studio/live_presentation.py",
+      "sha256": "7e0c7de19f01bb2484175cc149b8ea937c9a59c920ad0295e14b5ca45751f958",
+      "functions": [
+        {
+          "name": "ensure",
+          "line": 10,
+          "end_line": 13
+        },
+        {
+          "name": "program",
+          "line": 15,
+          "end_line": 19
+        },
+        {
+          "name": "sources",
+          "line": 22,
+          "end_line": 28
+        },
+        {
+          "name": "VisualSource",
+          "line": 30,
+          "end_line": 32
+        },
+        {
+          "name": "import_scene",
+          "line": 35,
+          "end_line": 53
+        },
+        {
+          "name": "suggestions",
+          "line": 56,
+          "end_line": 64
+        },
+        {
+          "name": "get_copy",
+          "line": 67,
+          "end_line": 71
+        },
+        {
+          "name": "LiveCopy",
+          "line": 73,
+          "end_line": 77
+        },
+        {
+          "name": "save_copy",
+          "line": 80,
+          "end_line": 89
+        },
+        {
+          "name": "motion_study",
+          "line": 95,
+          "end_line": 100
+        },
+        {
+          "name": "motion_study_info",
+          "line": 103,
+          "end_line": 105
+        },
+        {
+          "name": "motion_study_video",
+          "line": 108,
+          "end_line": 111
+        }
+      ]
+    },
+    {
+      "file": "studio/motion_validation.py",
+      "sha256": "ae7193ac20b5afb1b822c92d69b9f71d5e75d798894cbe1c90535b73fc1ffe7a",
+      "functions": [
+        {
+          "name": "quote_model",
+          "line": 22,
+          "end_line": 32
+        },
+        {
+          "name": "catalog_quote",
+          "line": 35,
+          "end_line": 39
+        },
+        {
+          "name": "get_task",
+          "line": 42,
+          "end_line": 45
+        },
+        {
+          "name": "public",
+          "line": 48,
+          "end_line": 53
+        },
+        {
+          "name": "sources",
+          "line": 57,
+          "end_line": 60
+        },
+        {
+          "name": "quote",
+          "line": 64,
+          "end_line": 69
+        },
+        {
+          "name": "Pilot",
+          "line": 72,
+          "end_line": 79
+        },
+        {
+          "name": "submit",
+          "line": 83,
+          "end_line": 141
+        },
+        {
+          "name": "refresh",
+          "line": 145,
+          "end_line": 171
+        },
+        {
+          "name": "video",
+          "line": 175,
+          "end_line": 180
+        },
+        {
+          "name": "history",
+          "line": 183,
+          "end_line": 187
+        },
+        {
+          "name": "AssetReview",
+          "line": 189,
+          "end_line": 192
+        },
+        {
+          "name": "review",
+          "line": 195,
+          "end_line": 209
+        }
+      ]
+    },
+    {
+      "file": "studio/tenancy.py",
+      "sha256": "e613d017ec2873860bc22414fb74acaa1926762f13860df838257bc2c9b6a604",
+      "functions": [
+        {
+          "name": "schema_name",
+          "line": 8,
+          "end_line": 9
+        },
+        {
+          "name": "active_workspace",
+          "line": 11,
+          "end_line": 13
+        },
+        {
+          "name": "ScopedStorage",
+          "line": 15,
+          "end_line": 33
+        },
+        {
+          "name": "ScopedQueue",
+          "line": 35,
+          "end_line": 40
+        },
+        {
+          "name": "__init__",
+          "line": 16,
+          "end_line": 18
+        },
+        {
+          "name": "key",
+          "line": 19,
+          "end_line": 22
+        },
+        {
+          "name": "get_object",
+          "line": 23,
+          "end_line": 24
+        },
+        {
+          "name": "head_object",
+          "line": 25,
+          "end_line": 26
+        },
+        {
+          "name": "put_object",
+          "line": 27,
+          "end_line": 28
+        },
+        {
+          "name": "download_file",
+          "line": 29,
+          "end_line": 30
+        },
+        {
+          "name": "upload_file",
+          "line": 31,
+          "end_line": 32
+        },
+        {
+          "name": "head_bucket",
+          "line": 33,
+          "end_line": 33
+        },
+        {
+          "name": "__init__",
+          "line": 36,
+          "end_line": 37
+        },
+        {
+          "name": "set",
+          "line": 38,
+          "end_line": 38
+        },
+        {
+          "name": "exists",
+          "line": 39,
+          "end_line": 39
+        },
+        {
+          "name": "ping",
+          "line": 40,
+          "end_line": 40
+        }
+      ]
+    },
+    {
+      "file": "studio/youtube_publish.py",
+      "sha256": "da96944888cb262eb90adea722f5dd7dd280b83e49fb27442b163abeecfda3a1",
+      "functions": [
+        {
+          "name": "ensure",
+          "line": 15,
+          "end_line": 29
+        },
+        {
+          "name": "upload_allowed",
+          "line": 33,
+          "end_line": 33
+        },
+        {
+          "name": "secure_session",
+          "line": 34,
+          "end_line": 37
+        },
+        {
+          "name": "Publication",
+          "line": 39,
+          "end_line": 48
+        },
+        {
+          "name": "listing",
+          "line": 51,
+          "end_line": 54
+        },
+        {
+          "name": "create",
+          "line": 57,
+          "end_line": 81
+        },
+        {
+          "name": "resume",
+          "line": 84,
+          "end_line": 89
+        },
+        {
+          "name": "access_token",
+          "line": 91,
+          "end_line": 103
+        },
+        {
+          "name": "progress",
+          "line": 105,
+          "end_line": 107
+        },
+        {
+          "name": "accepted_offset",
+          "line": 109,
+          "end_line": 114
+        },
+        {
+          "name": "finish",
+          "line": 116,
+          "end_line": 121
+        },
+        {
+          "name": "run_one",
+          "line": 123,
+          "end_line": 167
+        },
+        {
+          "name": "main",
+          "line": 169,
+          "end_line": 182
+        },
+        {
+          "name": "ready_pilot",
+          "line": 185,
+          "end_line": 187
+        },
+        {
+          "name": "pilot_draft",
+          "line": 190,
+          "end_line": 199
+        },
+        {
+          "name": "PilotPublication",
+          "line": 201,
+          "end_line": 208
+        },
+        {
+          "name": "create_pilot",
+          "line": 211,
+          "end_line": 230
+        },
+        {
+          "name": "verify_pilot_media",
+          "line": 232,
+          "end_line": 240
+        },
+        {
+          "name": "set_pilot_thumbnail",
+          "line": 242,
+          "end_line": 252
+        }
+      ]
+    },
+    {
+      "file": "studio/form_assistant.py",
+      "sha256": "64afbee212343e3ba46609716e0a813ed7c25df38a11a2f065e15b032efbc6de",
+      "functions": [
+        {
+          "name": "Patch",
+          "line": 15,
+          "end_line": 22
+        },
+        {
+          "name": "AssistRequest",
+          "line": 23,
+          "end_line": 29
+        },
+        {
+          "name": "filter_patch",
+          "line": 31,
+          "end_line": 33
+        },
+        {
+          "name": "suggest",
+          "line": 36,
+          "end_line": 85
+        }
+      ]
+    },
+    {
+      "file": "studio/render_policy.py",
+      "sha256": "04c55dca108d84341d5501423ef07a1cacc590628cc0b817ed18933b328e9d91",
+      "functions": [
+        {
+          "name": "choose_asset",
+          "line": 8,
+          "end_line": 21
+        },
+        {
+          "name": "defaults",
+          "line": 24,
+          "end_line": 29
+        }
+      ]
+    },
+    {
+      "file": "studio/financial.py",
+      "sha256": "ffbf00ed50fd23be7d36bfabe4d5660fbb635ee960b8f310d834c4d306e07f2f",
+      "functions": [
+        {
+          "name": "check_available",
+          "line": 6,
+          "end_line": 17
+        }
+      ]
+    }
+  ]
+}
