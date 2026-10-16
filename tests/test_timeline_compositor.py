@@ -63,7 +63,7 @@ def test_preflight_requires_exact_reviews_and_current_audio_style_binding():
     assets=[{'role':'action_clip','cache_fingerprint':t['cache_fingerprint'],'sha256':sha,'human_review_sha256':sha,
              'status':'APPROVED_ACTION','full_decode_pass':True,'source_preserved':True,'pose_anchors_reviewed':True,
              'seconds':minimum_seconds(c,t['action']),'loop_seam_reviewed':True,'video_key':'reviewed.mp4'} for t in c['asset_tasks']]
-    audio={'sha256':sha,'human_review_sha256':sha,'style_reviewed':True,'source_preserved':True,'spec_sha256':digest,'seconds':3600,'unique_measured_seconds':3600}
+    audio={'audio_key':'reviewed-audio.mp3','sha256':sha,'human_review_sha256':sha,'style_reviewed':True,'source_preserved':True,'spec_sha256':digest,'seconds':3600,'unique_measured_seconds':3600}
     environment={'reviewed':True,'spec_sha256':digest,'region_asset_shas':[sha]}
     assert preflight(c,assets,audio,environment)['ready']
     assert not preflight(c,assets,audio|{'spec_sha256':'changed'},environment)['ready']
@@ -71,6 +71,22 @@ def test_preflight_requires_exact_reviews_and_current_audio_style_binding():
     assert not preflight(c,assets,audio,environment|{'region_asset_shas':['b'*64]})['ready']
     assets[0]['human_review_sha256']='b'*64
     assert not preflight(c,assets,audio,environment)['ready']
+
+
+def test_pixel_art_episode_requires_style_review_bound_to_each_clip_hash():
+    c=compile_spec(ProductionSpec(hours=1,visual_variant='pixel_art_original'))
+    digest=production_spec_hash(c['spec']);sha='c'*64
+    from studio.timeline_api import minimum_seconds
+    assets=[{'role':'action_clip','cache_fingerprint':t['cache_fingerprint'],'sha256':sha,'human_review_sha256':sha,
+             'status':'APPROVED_ACTION','full_decode_pass':True,'source_preserved':True,'pose_anchors_reviewed':True,
+             'seconds':minimum_seconds(c,t['action']),'loop_seam_reviewed':True,'video_key':'reviewed.mp4'} for t in c['asset_tasks']]
+    audio={'audio_key':'reviewed-audio.mp3','sha256':sha,'human_review_sha256':sha,'style_reviewed':True,'source_preserved':True,
+           'spec_sha256':digest,'seconds':3600,'unique_measured_seconds':3600}
+    environment={'reviewed':True,'spec_sha256':digest,'region_asset_shas':[sha]}
+    assert 'visual_style_review_missing' in preflight(c,assets,audio,environment)['failures']
+    for asset in assets:
+        asset['visual_style_reviewed']=True;asset['visual_style_review_sha256']=sha
+    assert 'visual_style_review_missing' not in preflight(c,assets,audio,environment)['failures']
 
 
 @pytest.mark.skipif(not shutil.which('ffmpeg'),reason='FFmpeg required')

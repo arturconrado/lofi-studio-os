@@ -143,7 +143,7 @@ export function RecipeEditor({ id }: { id?: string }) {
 
       <section class="card stack">
         <h3>Cadência de eventos</h3>
-        <div class="notice warn">Os movimentos só entram no vídeo na montagem por timeline, com clipes de ação aprovados. Produções que reutilizam o episódio aprovado geram música nova sem executar estes marcos; a tela Produzir avisa e pede confirmação.</div>
+        <div class="notice warn">Os movimentos só entram no vídeo com clipes de ação aprovados e montagem por timeline. A referência visual nunca substitui esses clipes; a produção fica bloqueada até a montagem desta jornada estar disponível.</div>
         <Segmented label="Cadência" value={cad.preset} onChange={x => set('cadence', 'preset', x)} options={[{ value: 'custom_markers', label: 'Marcos próprios' }, { value: 'quarter_hour_v2', label: '15/30/45' }, { value: 'legacy_10_25_45', label: 'Clássica' }]} />
         {cad.preset === 'custom_markers' && <div class="stack">
           {cad.markers.map((mk: any, i: number) => (

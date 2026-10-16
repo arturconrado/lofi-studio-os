@@ -28,6 +28,36 @@ def fetch(key,path,sha,limit):
     finally:obj['Body'].close()
 
 
+def prepare_audio(audio_binding,folder,target_seconds):
+    """Fetch and verify original reviewed blocks, then concatenate without looping."""
+    sources=audio_binding.get('audio_sources') or []
+    if not sources:
+        audio=folder/'source-audio.mp3'
+        if not audio.exists() or file_hash(audio)!=audio_binding['sha256']:
+            fetch(audio_binding['audio_key'],audio,audio_binding['sha256'],8*1024**3)
+        return audio
+    if len(sources)>8 or len({s.get('program_id') for s in sources})!=len(sources):
+        raise ValueError('Invalid soundtrack source list')
+    paths=[]
+    for index,source in enumerate(sources):
+        sha=source.get('sha256','')
+        if len(sha)!=64 or not source.get('audio_key'):raise ValueError('Invalid soundtrack source binding')
+        path=folder/f'soundtrack-{index:02d}-{sha[:16]}.mp3'
+        if not path.exists() or file_hash(path)!=sha:fetch(source['audio_key'],path,sha,1024**3)
+        paths.append(path)
+    listing=folder/'soundtrack.ffconcat'
+    def quote(path):return "'"+str(path).replace("'","'\\''")+"'"
+    listing.write_text(''.join('file '+quote(path)+'\n' for path in paths))
+    audio=folder/'source-audio.mp3'
+    subprocess.run(['ffmpeg','-v','error','-y','-threads','1','-f','concat','-safe','0','-i',str(listing),
+                    '-vn','-c:a','libmp3lame','-q:a','2',str(audio)],check=True,timeout=max(600,target_seconds),
+                   stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    from .timeline_compositor import measure
+    seconds,_=measure(audio,'audio')
+    if seconds+0.15<target_seconds:raise ValueError('Concatenated original audio is shorter than the full episode')
+    return audio
+
+
 def tick():
     from .radio import CACHE
     with db() as c:
@@ -53,8 +83,7 @@ def tick():
             path=folder/(sha+'.mp4')
             if not path.exists() or file_hash(path)!=sha:fetch(segment['asset_key'],path,sha,64*1024**2)
             sources[sha]=path
-        audio=folder/'source-audio.mp3'
-        if not audio.exists() or file_hash(audio)!=p['audio']['sha256']:fetch(p['audio']['audio_key'],audio,p['audio']['sha256'],1024**3)
+        audio=prepare_audio(p['audio'],folder,p['compiled']['duration_seconds'])
         final=folder/'final.mp4'
         report=render(p['compiled'],p['assembly'],sources,audio,p['environment'],final,progress)
         with db() as c:c.execute("UPDATE factory_tasks SET detail='Conferindo áudio e salvando arquivo privado',updated_at=now() WHERE id=%s",(row['id'],));c.commit()
