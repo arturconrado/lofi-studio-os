@@ -36,6 +36,11 @@ class Snapshot(BaseModel):
     watch_hours: float | None = Field(default=None,ge=0,allow_inf_nan=False)
     returning_viewers: int | None = Field(default=None,ge=0)
     concurrent_peak: int | None = Field(default=None,ge=0)
+    # Audience retention read in YouTube Studio at the event markers (percent still watching).
+    retention_15_percent: float | None = Field(default=None,ge=0,le=100,allow_inf_nan=False)
+    retention_30_percent: float | None = Field(default=None,ge=0,le=100,allow_inf_nan=False)
+    retention_45_percent: float | None = Field(default=None,ge=0,le=100,allow_inf_nan=False)
+    event_markers: Literal['unknown','with_markers','without_markers'] = 'unknown'
     notes: str = Field(default='',max_length=4000)
 
     @model_validator(mode='after')
@@ -49,7 +54,7 @@ class Snapshot(BaseModel):
 
 class Experiment(BaseModel):
     hypothesis: str = Field(min_length=5,max_length=2000)
-    variable: Literal['title','thumbnail','visual','music_selection','schedule']
+    variable: Literal['title','thumbnail','visual','music_selection','schedule','event_markers']
     status: Literal['planned','running','completed','inconclusive','cancelled'] = 'planned'
     human_results: str = Field(default='',max_length=5000)
 

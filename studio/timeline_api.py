@@ -188,12 +188,14 @@ def status(pid:uuid.UUID):
         state=derive(row,result,jobs,inputs_hash(row,result),published(c,row))
     from .visual_identity import REGISTRY
     scenes=[{k:v for k,v in scene.items() if k!='image_key'} for scene in scenes if scene['image_key'] not in REGISTRY['rejected_keys']]
+    from .pose_library import library
     actions=[]
     for task in compiled['asset_tasks']:
         entries=[{'id':k,'seconds':a.get('seconds'),'reviewed':a.get('status')=='APPROVED_ACTION' and a.get('human_review_sha256')==a.get('sha256'),
                   'sha256':a.get('sha256'),'preview_url':f'/api/creator/assembly/plans/{pid}/clips/{k}/video'}
                  for k,a in row['data'].get('production_assets',{}).items() if a.get('role')=='action_clip' and a.get('cache_fingerprint')==task['cache_fingerprint']]
-        actions.append({'action':task['action'],'minimum_seconds':minimum_seconds(compiled,task['action']),
+        contract=library()['actions'].get(task['action'],{})
+        actions.append({'action':task['action'],'minimum_seconds':minimum_seconds(compiled,task['action']),'pose':contract,
                         'ready':task['action'] not in result['assembly']['missing_actions'],'clips':entries,'direction':task['prompt']})
     return {'plan_id':pid,'input_sha256':inputs_hash(row,result),'preflight':result,'actions':actions,'audio_programs':programs,'scene_sources':scenes,
             'audio':{k:v for k,v in (row['data'].get('assembly_audio') or {}).items() if k not in ('audio_key',)},

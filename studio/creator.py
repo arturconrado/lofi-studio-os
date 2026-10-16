@@ -196,7 +196,7 @@ def storyboard(body:StoryboardRequest):
   from .channels import profile
   profile(c,body.channel_id)
   from .harness_profiles import require_version
-  require_version(c,body.channel_id,body.spec.niche_pack_sha256)
+  require_version(c,body.channel_id,body.spec.niche_pack_sha256,body.spec)
   assets=[]
   if body.draft_id:
    prior=c.execute('SELECT data FROM creator_plans WHERE id=%s AND channel_id=%s',(body.draft_id,body.channel_id)).fetchone()
@@ -218,7 +218,7 @@ def save_storyboard(body:StoryboardRequest):
  with db() as c:
   profile(c,body.channel_id)
   from .harness_profiles import require_version
-  require_version(c,body.channel_id,body.spec.niche_pack_sha256)
+  require_version(c,body.channel_id,body.spec.niche_pack_sha256,body.spec)
   if body.draft_id:
    prior=c.execute("SELECT id,data FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL FOR UPDATE",(body.draft_id,body.channel_id)).fetchone()
    if not prior:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
@@ -252,3 +252,9 @@ router.include_router(harness_profiles_router)
 
 from .event_proposals import router as event_proposals_router
 router.include_router(event_proposals_router)
+
+
+@router.get('/pose-library')
+def pose_library():
+ from .pose_library import library
+ return library()
