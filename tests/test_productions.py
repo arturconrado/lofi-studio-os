@@ -45,7 +45,7 @@ def test_quote_books_nothing_and_uses_recipe(client,monkeypatch):
     assert q.status_code==200,q.text
     body=q.json()
     assert body['reference']['pilot_id']==SNOWY and body['estimate_per_block_usd']==2.48 and body['estimate_usd']==4.96
-    assert 'pulse-wave' in body['audio_prompt'] and body['copy']['title'].startswith('Snowy Night Studio | 2 Hours of 8-Bit')
+    assert 'pulse-wave' in body['audio_prompt'] and body['copy']['title']=='8-Bit Lo-Fi for Coding & Studying | Snowy Night Studio (2 Hours)'
     assert not sql(owner,'SELECT 1 FROM production_batches')
     assert client.post('/api/creator/productions/quote',json={'channel_id':cid,'hours':1,'scenario':'city_sunset'},headers=h).status_code==409
 

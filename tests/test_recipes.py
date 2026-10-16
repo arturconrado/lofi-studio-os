@@ -36,7 +36,7 @@ def test_variant_needs_reference_and_templates_are_closed():
 def test_copy_renders_from_recipe():
     data=builtin('8bit_lofi')
     copy=render_copy(data,'snowy_night_studio',4,'pixel snow')
-    assert copy['title']=='Snowy Night Studio | 4 Hours of 8-Bit Lo-Fi for Coding'
+    assert copy['title']=='8-Bit Lo-Fi for Coding & Studying | Snowy Night Studio (4 Hours)'
     assert 'pixel snow' in copy['description'] and 'jazz' not in copy['live_title'].lower()
 
 
@@ -105,10 +105,12 @@ def test_builtin_recipes_move_to_viewer_first_copy(client):
         with db() as c:
             rid=recipes['jazz-lofi']['id']
             # As in production: revision 1 carries the old template and its own digest.
-            c.execute("UPDATE recipe_revisions SET data=jsonb_set(data,'{copy,description_template}',to_jsonb(%s::text)),sha256=%s WHERE recipe_id=%s",(OLD_TEMPLATE,'e'*64,rid))
+            c.execute("UPDATE recipe_revisions SET data=jsonb_set(jsonb_set(data,'{copy,description_template}',to_jsonb(%s::text)),'{copy,title_template}',to_jsonb(%s::text)),sha256=%s WHERE recipe_id=%s",(OLD_TEMPLATE,'{scene_title} | {hours_label} of {style_title} for Coding','e'*64,rid))
             refresh_builtin_copy(c);c.commit()
             row=c.execute("SELECT r.current_revision,v.data FROM recipes r JOIN recipe_revisions v ON v.recipe_id=r.id AND v.revision=r.current_revision WHERE r.id=%s",(rid,)).fetchone()
             assert row['current_revision']==2 and row['data']['copy']['description_template']==DEFAULT_TEMPLATE
+            from studio.copywriting import DEFAULT_TITLE
+            assert row['data']['copy']['title_template']==DEFAULT_TITLE
             refresh_builtin_copy(c);c.commit()
             assert c.execute('SELECT count(*) n FROM recipe_revisions WHERE recipe_id=%s',(rid,)).fetchone()['n']==2
     finally:WORKSPACE.reset(marker)

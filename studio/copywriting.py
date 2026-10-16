@@ -34,6 +34,9 @@ DEFAULT_TEMPLATE = ('{style_title} for coding and studying at {scene_title}. {ho
                     'Save it to a playlist so it is there the next time you sit down to focus.\n\n'
                     'What are you working on today? Tell us in the comments, and tell us where the next session should take place.\n'
                     'If these sessions help you, subscribe. New places to focus are on the way.')
+# Search intent first (genre and use), then the scene that sets the video apart, then the length.
+DEFAULT_TITLE = '{style_title} for Coding & Studying | {scene_title} ({hours_label})'
+PREVIOUS_TITLES = ('{scene_title} | {hours_label} of {style_title} for Coding',)
 PREVIOUS_TEMPLATES = (
     'Original instrumental {style_title} for coding, studying and deep focus, set in {scene_title}.\n\n{idea}\n\n{hashtags}',
     'Settle in at {scene_title} for {hours_label} of {style_title}: slow beats and warm melodies '
