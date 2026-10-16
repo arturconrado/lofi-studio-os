@@ -227,7 +227,9 @@ def clip_briefs(pid:uuid.UUID):
                        'acceptance':['mesma garota, gato, roupa e objetos da referência','câmera travada, sem cortes ou zoom',
                                      'começa e termina nas poses indicadas','mãos, rosto e anatomia do gato coerentes',
                                      'cobre a ação inteira sem câmera lenta' if task['action']!='typing_idle' else 'loop sem salto entre fim e início']})
+    from .visual_identity import reference_brief
     return {'plan_id':pid,'identity':{'character_reference':spec.get('character_reference'),'cat_reference':spec.get('cat_reference')},
+            'reference':reference_brief(spec['scenario']),
             'viewpoint':viewpoint(spec['scenario']),'briefs':briefs,'paid_calls':0,
             'note':'Produza fora ou cote no estúdio; cada clipe volta pelo envio e pela revisão normais.'}
 

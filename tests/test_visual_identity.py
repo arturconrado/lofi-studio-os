@@ -26,3 +26,15 @@ def test_visual_baseline_label_does_not_approve_changed_video_receipt():
     assert reference_approval(row)
     row['report']['artifact_sha256']['video']='0'*64
     assert not reference_approval(row)
+
+
+def test_reference_briefs_describe_each_approved_episode():
+    from studio.visual_identity import REGISTRY,reference_brief
+    from studio.scene_profiles import SCENES
+    for scenario in ('snowy_night_studio','autumn_bookshop','greenhouse_rain_study'):
+        ref=reference_brief(scenario)
+        assert ref['pilot_id']==SCENES[scenario]['approved_pilot_id']
+        assert 'headphones' in ref['text'] and 'tabby' in ref['text'] and ref['scene']['setting'] in ref['text']
+        assert ref['source_still_sha256']==next(e for e in REGISTRY['approved_episodes'] if e['pilot_id']==ref['pilot_id'])['files']['source']['sha256']
+    assert reference_brief('city_sunset')['scene'] is None  # no approved episode: identity only
+    assert 'face' in REGISTRY['canonical_identity']['invariants']

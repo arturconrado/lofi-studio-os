@@ -16,6 +16,23 @@ def baseline(pilot_id):
     return next((b for b in REGISTRY['approved_episodes'] if b['pilot_id'] == str(pilot_id)), None)
 
 
+def reference_brief(scenario=None, pilot_id=None):
+    """Text the harness carries about an approved episode: canonical identity plus that scene.
+
+    Lets clip briefs, reviews and variants keep the pattern without needing the published video;
+    the approved stills (by sha256) stay the authority when text and pixels disagree.
+    """
+    identity=REGISTRY.get('canonical_identity')
+    entry=next((b for b in REGISTRY['approved_episodes'] if (pilot_id and b['pilot_id']==str(pilot_id)) or
+                (scenario and b.get('reference_brief',{}).get('scenario')==scenario)),None)
+    scene=(entry or {}).get('reference_brief')
+    if not identity:return None
+    text=' '.join([identity['style'],'Girl: '+identity['girl'],'Cat: '+identity['cat'],'Composition: '+identity['composition']]+
+                  (['Setting: '+scene['setting'],'Cat pose: '+scene['cat_pose'],'Palette: '+scene['palette'],'Light: '+scene['light']] if scene else []))
+    return {'pilot_id':entry['pilot_id'] if entry else None,'title':entry['title'] if entry else None,'identity':identity,'scene':scene,
+            'source_still_sha256':entry['files']['source']['sha256'] if entry else None,'text':text}
+
+
 def verify_baseline(pilot_id, key, sha256):
     """Approval never transfers to replacement bytes at the same object key."""
     assert_usable(key, sha256)

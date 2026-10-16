@@ -1,81 +1,145 @@
 {
-  "version": 1,
-  "approval_basis": "Owner confirmation 2026-10-15; visual identity approval only, not rights or scheduled-action certification",
-  "approved_episodes": [
-    {
-      "pilot_id": "1192acca-4cea-5d5b-9cf2-0a436909fc0e",
-      "title": "Snowy Night Studio | 1 Hour of Lo-Fi Jazzhop for Coding",
-      "files": {
-        "silent": {
-          "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/silent.mp4",
-          "sha256": "42ea47c53e993703239d56b81aa74c42e166d6a02488ee34235a8be8ad8b40b5"
-        },
-        "source": {
-          "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/source.png",
-          "sha256": "9991b4a2cd478bde5d84974db134e8f2a333100ebd72a627460239726bccb7aa"
-        },
-        "motion-source": {
-          "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/motion-source.mp4",
-          "sha256": "6c954ebaf01a0fca7c6c24df93c2cab2f8de7d46320fabf9b18af20960feabbd"
-        },
-        "video": {
-          "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/video.mp4",
-          "sha256": "3b75990c14919cdfb9fc3104009a69d88171d7f1956f25f54f9405640ff59b21"
-        }
-      }
+ "version": 1,
+ "approval_basis": "Owner confirmation 2026-10-15; visual identity approval only, not rights or scheduled-action certification",
+ "approved_episodes": [
+  {
+   "pilot_id": "1192acca-4cea-5d5b-9cf2-0a436909fc0e",
+   "title": "Snowy Night Studio | 1 Hour of Lo-Fi Jazzhop for Coding",
+   "files": {
+    "silent": {
+     "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/silent.mp4",
+     "sha256": "42ea47c53e993703239d56b81aa74c42e166d6a02488ee34235a8be8ad8b40b5"
     },
-    {
-      "pilot_id": "277ef275-73f0-53fb-ba14-9046186151fd",
-      "title": "Autumn Bookshop Coding | 1 Hour of Lo-Fi Jazzhop for Coding",
-      "files": {
-        "silent": {
-          "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/silent.mp4",
-          "sha256": "d786e4b6ff4ef202e6642f5519ebe4dfc38e9ace7fc277b60e5c83f3b8eed6f8"
-        },
-        "source": {
-          "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/source.png",
-          "sha256": "e51e27c94d632de323af6791fbdadcdaf6147d5cd50f49b4d86600114a7f9fd1"
-        },
-        "motion-source": {
-          "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/motion-source.mp4",
-          "sha256": "8411287e999bd6baab00b097c2298a2c85f3c745461e9356a42d2c442dcd644b"
-        },
-        "video": {
-          "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/video.mp4",
-          "sha256": "8700f93594e17b13384c682b74b6b011d24c145139c5bcf6238e81e6c8cc32a9"
-        }
-      }
+    "source": {
+     "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/source.png",
+     "sha256": "9991b4a2cd478bde5d84974db134e8f2a333100ebd72a627460239726bccb7aa"
     },
-    {
-      "pilot_id": "013eb0ef-06e3-578f-a9f8-a49532b5478b",
-      "title": "Greenhouse Rain Study | 1 Hour of Lo-Fi Jazzhop for Coding",
-      "files": {
-        "silent": {
-          "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/silent.mp4",
-          "sha256": "68ed43994968f608a7845f18cc7d6149e096c0db85f88e7effc2af646b7bcc8f"
-        },
-        "source": {
-          "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/source.png",
-          "sha256": "0432d5b2be6470dfc4ae0435eaaca832b51eca5a5abad6fa7b7a39ad294eb9f0"
-        },
-        "motion-source": {
-          "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/motion-source.mp4",
-          "sha256": "d41a4e07d80d7a5f780240e644e8a6bd03bf1aeaafdd5304caa66b561fd915f8"
-        },
-        "video": {
-          "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/video.mp4",
-          "sha256": "2821a23df03deed4f6cdc44351735eeba8eecd5d7d6ab823e9d3e813e8bd68f7"
-        }
-      }
+    "motion-source": {
+     "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/motion-source.mp4",
+     "sha256": "6c954ebaf01a0fca7c6c24df93c2cab2f8de7d46320fabf9b18af20960feabbd"
+    },
+    "video": {
+     "key": "ambient-pilots/1192acca-4cea-5d5b-9cf2-0a436909fc0e/video.mp4",
+     "sha256": "3b75990c14919cdfb9fc3104009a69d88171d7f1956f25f54f9405640ff59b21"
     }
+   },
+   "reference_brief": {
+    "scenario": "snowy_night_studio",
+    "setting": "Rustic log cabin at night. Stone fireplace with a lively orange fire on the left, terracotta jugs and a small woven basket on the mantel, a cream knitted blanket over the chair behind her. A large dark-framed window on the right shows snowy mountains under a deep blue night sky, pine trees and steadily falling snow.",
+    "props": [
+     "stone fireplace with fire",
+     "floral cream mug (foreground left)",
+     "leather notebook with pen",
+     "spiral notepad",
+     "cream knitted blanket"
+    ],
+    "cat_pose": "Lying in a loaf on the table, front paws tucked, tail hanging off the right edge.",
+    "palette": "Amber and orange firelight inside against cobalt and navy snow light outside.",
+    "light": "Firelight from the left, cool moonlit snow from the window; static period."
+   }
+  },
+  {
+   "pilot_id": "277ef275-73f0-53fb-ba14-9046186151fd",
+   "title": "Autumn Bookshop Coding | 1 Hour of Lo-Fi Jazzhop for Coding",
+   "files": {
+    "silent": {
+     "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/silent.mp4",
+     "sha256": "d786e4b6ff4ef202e6642f5519ebe4dfc38e9ace7fc277b60e5c83f3b8eed6f8"
+    },
+    "source": {
+     "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/source.png",
+     "sha256": "e51e27c94d632de323af6791fbdadcdaf6147d5cd50f49b4d86600114a7f9fd1"
+    },
+    "motion-source": {
+     "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/motion-source.mp4",
+     "sha256": "8411287e999bd6baab00b097c2298a2c85f3c745461e9356a42d2c442dcd644b"
+    },
+    "video": {
+     "key": "ambient-pilots/277ef275-73f0-53fb-ba14-9046186151fd/video.mp4",
+     "sha256": "8700f93594e17b13384c682b74b6b011d24c145139c5bcf6238e81e6c8cc32a9"
+    }
+   },
+   "reference_brief": {
+    "scenario": "autumn_bookshop",
+    "setting": "Corner table of a cosy bookshop on a rainy autumn evening. Brass desk lamp switched on at the far left, shelves of orange and brown books behind her, a window top-left framing a branch of orange maple leaves, and a large window on the right onto a wet cobblestone street with a lamppost and a glowing shopfront in the rain.",
+    "props": [
+     "brass desk lamp (on)",
+     "bookshelves with orange books",
+     "stacked books beside the cat",
+     "leaf-pattern cream mug on a coaster (foreground left)"
+    ],
+    "cat_pose": "Sitting upright on the table by the window, tail hanging down the front edge.",
+    "palette": "Burnt orange, rust and warm wood inside; slate grey and muted teal rain outside.",
+    "light": "Warm lamp pool from the left, grey rainy daylight from the window."
+   }
+  },
+  {
+   "pilot_id": "013eb0ef-06e3-578f-a9f8-a49532b5478b",
+   "title": "Greenhouse Rain Study | 1 Hour of Lo-Fi Jazzhop for Coding",
+   "files": {
+    "silent": {
+     "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/silent.mp4",
+     "sha256": "68ed43994968f608a7845f18cc7d6149e096c0db85f88e7effc2af646b7bcc8f"
+    },
+    "source": {
+     "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/source.png",
+     "sha256": "0432d5b2be6470dfc4ae0435eaaca832b51eca5a5abad6fa7b7a39ad294eb9f0"
+    },
+    "motion-source": {
+     "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/motion-source.mp4",
+     "sha256": "d41a4e07d80d7a5f780240e644e8a6bd03bf1aeaafdd5304caa66b561fd915f8"
+    },
+    "video": {
+     "key": "ambient-pilots/013eb0ef-06e3-578f-a9f8-a49532b5478b/video.mp4",
+     "sha256": "2821a23df03deed4f6cdc44351735eeba8eecd5d7d6ab823e9d3e813e8bd68f7"
+    }
+   },
+   "reference_brief": {
+    "scenario": "greenhouse_rain_study",
+    "setting": "Glass greenhouse study during rain. Green-tinted glass roof and walls with rain streaks, strings of warm hanging bulbs, large ferns framing left and right, potted plants and background desks with books and small candles.",
+    "props": [
+     "ferns left and right",
+     "hanging warm bulbs",
+     "background desks with books and candles",
+     "plain cream mug with brown rim (foreground left)"
+    ],
+    "cat_pose": "Lying curled on the table to the right of the laptop, tail along the table.",
+    "palette": "Emerald and teal glass and foliage around a golden, honey-lit table.",
+    "light": "Soft rainy daylight through glass plus warm bulb glow; static period."
+   }
+  }
+ ],
+ "rejected_keys": [
+  "programs/LOFI-3A590745/visual.mp4",
+  "programs/LOFI-3A590745/image.png",
+  "programs/LOFI-3A590745/preview.jpg"
+ ],
+ "rejected_sha256": [
+  "b45e4e427526eea270458c3a5b6f18b893a3fc98d5011a293481661e22dc3fcb",
+  "ba93cfaddcd709c46eb279fbf344285ca7189290ceadf187a314a4718cb0f79b"
+ ],
+ "canonical_identity": {
+  "source": "Described from the approved source stills (sha256 in files.source) on 2026-10-16; the stills remain the authority.",
+  "style": "Painterly anime-influenced lo-fi illustration, 16:9, soft warm interior light against a cooler exterior, gentle grain, clean readable shapes; no text, logos or watermarks.",
+  "girl": "Young adult woman with voluminous shoulder-length dark brown curly hair, warm light skin, brown eyes and a calm soft smile, gaze lowered to the laptop. Black over-ear headphones with bronze rims. Oversized moss/olive-green chunky knit cardigan over a dark charcoal top, thin delicate necklace with a small pendant. Sits on a dark wooden chair, both hands on the keyboard.",
+  "cat": "Grey-brown tabby with dark stripes, white chest, muzzle and paws, green eyes, long ringed striped tail often hanging over the table edge. Calm and still; lives on the table to the right of the laptop.",
+  "composition": "Camera locked at seated table height. Girl left of centre (about 20-45% width), dark grey laptop seen from the back at centre-right (about 37-72%), cat at the right (about 78-95%), a large window or glass wall on the right half, warm wooden table across the bottom third, a ceramic mug in the lower-left foreground.",
+  "invariants": [
+   "face",
+   "hair",
+   "headphones",
+   "adult proportions",
+   "cat markings and eye colour",
+   "camera framing and lens",
+   "illustration style",
+   "laptop position"
   ],
-  "rejected_keys": [
-    "programs/LOFI-3A590745/visual.mp4",
-    "programs/LOFI-3A590745/image.png",
-    "programs/LOFI-3A590745/preview.jpg"
-  ],
-  "rejected_sha256": [
-    "b45e4e427526eea270458c3a5b6f18b893a3fc98d5011a293481661e22dc3fcb",
-    "ba93cfaddcd709c46eb279fbf344285ca7189290ceadf187a314a4718cb0f79b"
+  "adaptable": [
+   "cardigan colour by local mask recolor (never redrawn)",
+   "weather overlay and intensity inside the window/sky region",
+   "time-of-day light and lamp/fire glow",
+   "event poses from the reviewed action library",
+   "pixel-art rendering only as a reviewed variant of this same identity"
   ]
+ }
 }
