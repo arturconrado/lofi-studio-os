@@ -307,6 +307,9 @@ router.include_router(productions_router)
 from .inbox import router as inbox_router
 router.include_router(inbox_router)
 
+from .workshop_api import router as workshop_router
+router.include_router(workshop_router)
+
 
 @router.get('/pose-library')
 def pose_library():
