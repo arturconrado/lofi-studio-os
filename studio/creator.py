@@ -95,7 +95,8 @@ def recipe_prompt(prompt,recipe):
  """The recipe replaces the default jazzhop/painterly examples instead of competing with them."""
  from .music_styles import DIRECTIONS
  m=recipe['music'];v=recipe['visual']
- prompt=prompt.replace(' or jazzhop,',',').replace('painterly lo-fi illustration',v['image_prompt_suffix'].rstrip('.') if v['variant']=='canonical_illustrated' else 'reviewed pixel-art variant of the canonical lo-fi illustration')
+ visual_direction=v['image_prompt_suffix'].rstrip('.') if v['variant'] in ('canonical_illustrated','pixel_art_original') else 'reviewed pixel-art variant of the canonical lo-fi illustration'
+ prompt=prompt.replace(' or jazzhop,',',').replace('painterly lo-fi illustration',visual_direction)
  if v['variant']!='canonical_illustrated':
   from .visual_identity import reference_brief
   ref=reference_brief(v.get('default_scenario'))
@@ -154,6 +155,7 @@ def produce(body:CreateRequest):
    source=c.execute("SELECT a.* FROM ambient_pilots a JOIN youtube_publications y ON y.pilot_id=a.id WHERE a.id=%s AND a.channel_id=%s AND y.channel_id=%s AND y.state='uploaded'",(body.visual_source_pilot_id,p['channel_id'],p['channel_id'])).fetchone()
    if not source or not ready_pilot(source):raise HTTPException(404,'Escolha um episódio de 1h publicado neste canal')
    reference={'pilot_id':str(source['id']),'title':source['title'],'silent_key':source['silent_key'],'report':source['report']}
+   raise HTTPException(409,'Este fluxo ainda não reinterpreta a imagem de referência; produzir está bloqueado para não copiar o MP4. Use a montagem temporal com clipes revisados. Nenhum custo foi reservado.')
   plan_data=body.plan.model_dump()
   if reference:plan_data['visual_reference']=reference
   bid=authorize_batch(c,body.plan_id,plan_data,p['minutes'],p.get('channel_id','00000000-0000-0000-0000-000000000001'),body.budget);c.commit()

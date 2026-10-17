@@ -49,7 +49,7 @@ class ProductionSpec(BaseModel):
     variation_seed: int = Field(default=0, ge=0, le=2**31-1)
     contextual_actions: list[ContextualAction] = Field(default_factory=list, max_length=3)
     recipe_sha256: str = Field(default='', pattern=r'^(|[a-f0-9]{64})$')
-    visual_variant: Literal['canonical_illustrated', 'pixel_art_reviewed'] = 'canonical_illustrated'
+    visual_variant: Literal['canonical_illustrated', 'pixel_art_reviewed', 'pixel_art_original'] = 'canonical_illustrated'
 
     @model_validator(mode='after')
     def scene_rules(self):
@@ -144,8 +144,10 @@ def task_prompt(spec, scene, action):
 
 def compile_spec(spec: ProductionSpec, music=None):
     scene=resolve(spec);legacy=spec.scenario in LEGACY
-    # A reviewed pixel variant is a separate clip library: never mixed with canonical clips.
-    style_lock='illustration_style' if spec.visual_variant=='canonical_illustrated' else 'reviewed_pixel_art_variant_of_canonical'
+    # Pixel and canonical clip libraries never mix; the original pixel style still uses the
+    # approved canonical episode for identity and composition guidance.
+    style_lock={'canonical_illustrated':'illustration_style','pixel_art_reviewed':'reviewed_pixel_art_variant_of_canonical',
+                'pixel_art_original':'original_8bit_pixel_art'}[spec.visual_variant]
     identity = {'character_reference': spec.character_reference, 'cat_reference': spec.cat_reference,
                 'preserve': ['face', 'hair', 'adult_character', 'cat_markings', style_lock],
                 'shirt_color': spec.shirt_color, 'cushion_color': spec.shirt_color,
@@ -180,7 +182,8 @@ def compile_spec(spec: ProductionSpec, music=None):
     fingerprint_identity=identity if legacy else {k:v for k,v in identity.items() if k!='shirt_color'}
     for action in unique:
         prompt = task_prompt(spec,scene,action)
-        if spec.visual_variant!='canonical_illustrated':prompt+=' Render as the reviewed pixel-art variant of the same canonical girl and cat; identical identity, framing and props.'
+        if spec.visual_variant=='pixel_art_reviewed':prompt+=' Render as the reviewed pixel-art variant of the same canonical girl and cat; identical identity, framing and props.'
+        elif spec.visual_variant=='pixel_art_original':prompt+=' Render as original 8-bit game pixel art, limited deliberate palette and crisp pixel clusters; preserve the canonical girl, cat, composition and scene props.'
         task={'action':action, 'method':'reuse_then_local_then_quoted_ai', 'ai_method_if_needed':'reference_conditioned_ai_clip', 'status':'missing',
               'prompt':prompt, 'required_capabilities':['reference_identity','articulated_character_motion','contact_and_occlusion','pose_anchors'], 'cache_fingerprint':hashlib.sha256(json.dumps([fingerprint_identity,spec.scenario,action,prompt],sort_keys=True).encode()).hexdigest(),
               'reuse_scope':'same_workspace_same_identity_scene_color_and_action', 'paid_retry':False}

@@ -58,6 +58,12 @@ def test_new_batch_analyzes_original_without_master_or_editorial_approval(client
             c.execute("UPDATE creator_plans SET data=%s WHERE program_id=%s",(json.dumps(plan),bid))
             c.execute("UPDATE production_batches SET state='generated',target_seconds=10 WHERE id=%s",(bid,));c.commit()
         output=tmp_path/'package';output.mkdir()
+        with pytest.raises(ValueError,match='Vídeo de referência'):
+            creator_service.package(bid,output)
+        assert len(stored)==1  # the guard runs before exporting any objects
+        plan.pop('visual_reference')
+        with core.db() as c:c.execute("UPDATE creator_plans SET data=%s WHERE program_id=%s",(json.dumps(plan),bid));c.commit()
+        subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=c=black:s=320x180:r=24:d=20','-an','-c:v','libx264','-pix_fmt','yuv420p',str(output/'scene-loop.mp4')],check=True)
         creator_service.package(bid,output)
         with core.db() as c:ready=c.execute('SELECT * FROM production_batches WHERE id=%s',(bid,)).fetchone()
         manifest=json.loads(next(x['Body'] for x in stored if x['Key'].endswith('/manifest.json')))

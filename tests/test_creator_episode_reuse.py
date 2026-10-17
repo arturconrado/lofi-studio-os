@@ -1,11 +1,10 @@
-import os,json,uuid,hashlib,io
-from decimal import Decimal
+import os,json,uuid,hashlib
 import pytest
 from test_authentication import client,signup
 pytestmark=pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
 
 
-def test_creator_requires_owned_one_hour_episode_and_keeps_visual_exact(client,monkeypatch,tmp_path):
+def test_creator_never_copies_reference_episode_as_output(client,monkeypatch,tmp_path):
     from studio import creator,creator_service,youtube_publish
     from studio.core import db
     from studio.tenancy import WORKSPACE
@@ -27,24 +26,12 @@ def test_creator_requires_owned_one_hour_episode_and_keeps_visual_exact(client,m
     assert client.post('/api/creator/produce',json=body,headers=headers).status_code==404
     body['visual_source_pilot_id']=str(episode)
     response=client.post('/api/creator/produce',json=body,headers=headers)
-    assert response.status_code==200,response.text
-    bid=response.json()['id']
-    class Store:
-        def head_object(self,**kw):assert kw['Key']=='episode/silent.mp4';return {'ContentLength':21}
-        def get_object(self,**kw):
-            class Body(io.BytesIO):
-                def iter_chunks(self,size):yield self.read()
-            return {'ContentLength':21,'Body':Body(b'approved silent video')}
-    monkeypatch.setattr(creator_service,'storage',Store);monkeypatch.setenv('S3_BUCKET','disposable')
-    monkeypatch.setattr(creator_service.scene_animation,'render',lambda *a:pytest.fail('Must not generate local micro-motion'))
+    assert response.status_code==409 and 'não copia' in response.text.lower()
     marker=WORKSPACE.set(owner['workspace_id'])
     try:
-        with db() as c:data=c.execute('SELECT data FROM creator_plans WHERE id=%s',(pid,)).fetchone()['data']
-        assert data['visual_reference']['pilot_id']==str(episode)
-        assert creator_service.visual(bid,data,tmp_path)['external_video_cost']==0
         with db() as c:
-            row=c.execute('SELECT video_key,visual_cycle_key,budget FROM production_batches WHERE id=%s',(bid,)).fetchone()
-            assert row['video_key']==row['visual_cycle_key']=='episode/silent.mp4'
-            assert row['budget']==Decimal('2.48')
-            assert not c.execute('SELECT 1 FROM factory_tasks').fetchone()
+            assert not c.execute('SELECT 1 FROM production_batches').fetchone()
+            assert not c.execute("SELECT 1 FROM creator_plans WHERE id=%s AND data->'visual_reference' IS NOT NULL",(pid,)).fetchone()
+        with pytest.raises(ValueError,match='apenas guia visual'):
+            creator_service.visual('LOFI-NOT-QUEUED',{'visual_reference':{'pilot_id':str(episode)}},tmp_path)
     finally:WORKSPACE.reset(marker)

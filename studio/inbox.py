@@ -81,7 +81,7 @@ def loose_tracks(c,channel_id):
 def recipe_items(c):
     if not table(c,'recipe_revisions'):return []
     rows=c.execute('''SELECT r.id,r.name,v.revision,v.sha256,v.data,v.created_at FROM recipe_revisions v JOIN recipes r ON r.id=v.recipe_id
-      WHERE v.visual_review IS NULL AND v.data->'visual'->>'variant'<>'canonical_illustrated' AND r.state<>'archived' ORDER BY v.created_at''').fetchall()
+      WHERE v.visual_review IS NULL AND v.data->'visual'->>'variant'='pixel_art_reviewed' AND r.state<>'archived' ORDER BY v.created_at''').fetchall()
     return [{'id':f"recipe_reference:{r['sha256']}",'kind':'recipe_reference','priority':20,'title':f"Referência visual · {r['name']}",
              'subtitle':'Compare com o episódio aprovado: mesma garota, mesmo gato, mesmo enquadramento','created_at':r['created_at'],
              'recipe_id':r['id'],'references':{'pilot_ids':r['data']['visual']['reference_pilot_ids'],'asset_sha256':r['data']['visual']['reference_asset_sha256']},

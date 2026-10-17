@@ -188,24 +188,59 @@ def status(pid:uuid.UUID):
         online=bool(c.execute("SELECT 1 FROM factory_tasks WHERE id=%s AND kind=%s AND updated_at>now()-interval '45 seconds'",(HEARTBEAT,WORKER)).fetchone())
         jobs=c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'plan_id'=%s ORDER BY created_at DESC LIMIT 10",(KIND,str(pid))).fetchall()
         scenes=c.execute('SELECT s.batch_id,s.id,s.title,s.image_key FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.image_key IS NOT NULL ORDER BY s.batch_id,s.position',(row['channel_id'],)).fetchall()
-        programs=c.execute("SELECT b.id,COALESCE(m.title,b.id) title,b.seconds FROM production_batches b LEFT JOIN program_metadata m ON m.program_id=b.id WHERE b.channel_id=%s AND b.audio_key IS NOT NULL AND b.manifest_key IS NOT NULL ORDER BY b.updated_at DESC",(row['channel_id'],)).fetchall()
+        programs=c.execute("""SELECT b.id,COALESCE(m.title,b.id) title,b.seconds,
+          COALESCE(p.data->'recipe'->'music'->>'style_id',p.data->>'music_style') music_style
+          FROM production_batches b LEFT JOIN program_metadata m ON m.program_id=b.id
+          LEFT JOIN creator_plans p ON p.program_id=b.id
+          WHERE b.channel_id=%s AND b.audio_key IS NOT NULL AND b.manifest_key IS NOT NULL ORDER BY b.updated_at DESC""",(row['channel_id'],)).fetchall()
         from .episode_state import derive
         state=derive(row,result,jobs,inputs_hash(row,result),published(c,row))
     from .visual_identity import REGISTRY
-    scenes=[{k:v for k,v in scene.items() if k!='image_key'} for scene in scenes if scene['image_key'] not in REGISTRY['rejected_keys']]
+    scenes=[{k:v for k,v in scene.items() if k!='image_key'}|{'image_url':f"/api/miniobs/programs/{scene['batch_id']}/scenes/{scene['id']}/image"}
+            for scene in scenes if scene['image_key'] not in REGISTRY['rejected_keys']]
+    from .scene_profiles import SCENES
+    from .visual_identity import baseline
+    pilot_id=SCENES.get(row['data']['production_spec']['scenario'],{}).get('approved_pilot_id')
+    if pilot_id and not any(s.get('pilot_id')==pilot_id for s in scenes):
+        with db() as c:owned=bool(c.execute('SELECT 1 FROM ambient_pilots WHERE id=%s AND channel_id=%s',(uuid.UUID(pilot_id),row['channel_id'])).fetchone())
+        entry=baseline(pilot_id)
+        if owned and entry:scenes.append({'pilot_id':pilot_id,'id':'approved-reference','title':entry['title']+' · still de referência',
+                                         'image_url':f'/api/creator/assembly/plans/{pid}/identity-sources/{pilot_id}/still'})
     from .pose_library import library
     actions=[]
     for task in compiled['asset_tasks']:
-        entries=[{'id':k,'seconds':a.get('seconds'),'reviewed':a.get('status')=='APPROVED_ACTION' and a.get('human_review_sha256')==a.get('sha256'),
+        pixel= row['data']['production_spec'].get('visual_variant') in ('pixel_art_original','pixel_art_reviewed')
+        entries=[{'id':k,'seconds':a.get('seconds'),'reviewed':a.get('status')=='APPROVED_ACTION' and a.get('human_review_sha256')==a.get('sha256') and (not pixel or (a.get('visual_style_reviewed') is True and a.get('visual_style_review_sha256')==a.get('sha256'))),
                   'sha256':a.get('sha256'),'preview_url':f'/api/creator/assembly/plans/{pid}/clips/{k}/video'}
                  for k,a in row['data'].get('production_assets',{}).items() if a.get('role')=='action_clip' and a.get('cache_fingerprint')==task['cache_fingerprint']]
         contract=library()['actions'].get(task['action'],{})
         actions.append({'action':task['action'],'minimum_seconds':minimum_seconds(compiled,task['action']),'pose':contract,
                         'ready':task['action'] not in result['assembly']['missing_actions'],'clips':entries,'direction':task['prompt']})
+    audio_binding=row['data'].get('assembly_audio') or {}
+    audio_summary={k:v for k,v in audio_binding.items() if k not in ('audio_key','audio_sources')}
+    if audio_binding.get('audio_sources'):audio_summary['source_programs']=[s['program_id'] for s in audio_binding['audio_sources']]
+    from .scene_profiles import scene as scene_profile
+    requirements=scene_profile(row['data']['production_spec']['scenario'])
     return {'plan_id':pid,'input_sha256':inputs_hash(row,result),'preflight':result,'actions':actions,'audio_programs':programs,'scene_sources':scenes,
-            'audio':{k:v for k,v in (row['data'].get('assembly_audio') or {}).items() if k not in ('audio_key',)},
+            'scene_requires_lights_region':requirements['requires_lights_region'],'required_seconds':compiled['duration_seconds'],
+            'required_music_style':row['data']['production_spec']['music_style'],
+            'required_visual_variant':row['data']['production_spec'].get('visual_variant','canonical_illustrated'),
+            'audio':audio_summary,
             'environment':row['data'].get('assembly_environment'),'worker_online':online,
             'jobs':[public_job(j)|{'inputs_current':j['payload'].get('input_sha256')==inputs_hash(row,result)} for j in jobs],'reusable_clips':len(available),'identity_sources':identities,'identity_bound':bool(row['data']['production_spec'].get('character_reference') and row['data']['production_spec'].get('cat_reference')),'episode_state':state,'paid_calls':0}
+
+
+@router.get('/plans/{pid}/identity-sources/{pilot_id}/still')
+def identity_still(pid:uuid.UUID,pilot_id:uuid.UUID,request:Request):
+    from .visual_identity import baseline,verify_baseline
+    entry=baseline(pilot_id)
+    if not entry:raise HTTPException(404,'Referência canônica não encontrada')
+    with db() as c:
+        row=get_plan(c,pid)
+        if not c.execute('SELECT 1 FROM ambient_pilots WHERE id=%s AND channel_id=%s',(pilot_id,row['channel_id'])).fetchone():raise HTTPException(404,'Referência não encontrada neste canal')
+    source=entry['files']['source'];verify_baseline(pilot_id,source['key'],source['sha256'])
+    from .miniobs import media
+    return media(request,source['key'],'image/png')
 
 
 @router.get('/plans/{pid}/clip-briefs')
@@ -290,6 +325,7 @@ class ClipReview(BaseModel):
     confirm_motion:bool=False
     confirm_pose_anchors:bool=False
     confirm_loop_seam:bool=False
+    confirm_visual_style:bool=False
 
 
 @router.post('/plans/{pid}/clips/{cid}/review')
@@ -299,37 +335,56 @@ def review_clip(pid:uuid.UUID,cid:uuid.UUID,body:ClipReview):
         row=get_plan(c,pid,True);asset=row['data'].get('production_assets',{}).get(str(cid))
         if not asset or asset.get('role')!='action_clip' or asset.get('sha256')!=body.sha256 or asset.get('spec_sha256')!=production_spec_hash(row['data']['production_spec']):raise HTTPException(409,'Clipe ou roteiro mudou; revise a versão atual')
         if asset['action']=='typing_idle' and not body.confirm_loop_seam:raise HTTPException(422,'Confira também a continuidade do loop de digitação')
-        asset.update(status='APPROVED_ACTION',human_review_sha256=body.sha256,pose_anchors_reviewed=True,loop_seam_reviewed=body.confirm_loop_seam)
+        pixel=row['data']['production_spec'].get('visual_variant') in ('pixel_art_original','pixel_art_reviewed')
+        if pixel and not body.confirm_visual_style:raise HTTPException(422,'Confira também o estilo pixel-art 8-bit do clipe')
+        asset.update(status='APPROVED_ACTION',human_review_sha256=body.sha256,pose_anchors_reviewed=True,loop_seam_reviewed=body.confirm_loop_seam,
+                     visual_style_reviewed=bool(body.confirm_visual_style),visual_style_review_sha256=body.sha256 if body.confirm_visual_style else None)
         c.execute("UPDATE creator_plans SET data=jsonb_set(data,ARRAY['production_assets',%s],%s::jsonb) WHERE id=%s",(str(cid),json.dumps(asset),pid));audit(c,'ACTION_CLIP_REVIEWED',str(pid),str(cid));c.commit()
     return {'reviewed':True,'program_approved':False}
 
 
 class Soundtrack(BaseModel):
-    program_id:str=Field(min_length=1,max_length=40)
+    program_ids:list[str]=Field(min_length=1,max_length=8)
     confirm_style_and_listening:bool=False
 
 
 @router.post('/plans/{pid}/soundtrack')
 def bind_soundtrack(pid:uuid.UUID,body:Soundtrack):
     if not body.confirm_style_and_listening:raise HTTPException(422,'Ouça e confirme o estilo da trilha selecionada')
+    if len(body.program_ids)!=len(set(body.program_ids)):raise HTTPException(422,'Escolha cada bloco de áudio uma única vez')
     with db() as c:
-        row=get_plan(c,pid)
-        source=c.execute('SELECT * FROM production_batches WHERE id=%s AND channel_id=%s AND audio_key IS NOT NULL AND manifest_key IS NOT NULL',(body.program_id,row['channel_id'])).fetchone()
-        if not source:raise HTTPException(404,'Trilha não encontrada neste canal')
-        obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=source['manifest_key'])
-        try:raw=obj['Body'].read(8*1024**2+1)
-        finally:obj['Body'].close()
-        if len(raw)>8*1024**2:raise HTTPException(422,'Manifesto excede limite')
-        manifest=json.loads(raw);hashes=list({t['sha256'] for t in manifest.get('tracks',[]) if t.get('sha256')})
-        tracks=c.execute('SELECT sha256,max(duration_seconds) seconds FROM assets WHERE sha256=ANY(%s) GROUP BY sha256',(hashes,)).fetchall() if hashes else []
-        unique=sum(float(t['seconds']) for t in tracks)
-        sha=manifest.get('audio',{}).get('sha256','')
-        if len(sha)!=64 or min(unique,float(manifest.get('duration_seconds',0)))<float(row['minutes'])*60:raise HTTPException(409,'Trilha sem duração original medida suficiente; repetições não completam a meta')
-        value={'program_id':body.program_id,'audio_key':source['audio_key'],'sha256':sha,'human_review_sha256':sha,
-               'seconds':float(manifest['duration_seconds']),'unique_measured_seconds':unique,'style_reviewed':True,'source_preserved':True,
+        row=get_plan(c,pid,True)
+        sources=c.execute('''SELECT b.*,COALESCE(p.data->'recipe'->'music'->>'style_id',p.data->>'music_style') music_style
+          FROM production_batches b LEFT JOIN creator_plans p ON p.program_id=b.id
+          WHERE b.id=ANY(%s) AND b.channel_id=%s AND b.audio_key IS NOT NULL AND b.manifest_key IS NOT NULL''',
+          (body.program_ids,row['channel_id'])).fetchall()
+        by_id={str(source['id']):source for source in sources}
+        if set(body.program_ids)!=set(by_id):raise HTTPException(404,'Uma ou mais trilhas não existem neste canal')
+        expected_style=row['data']['production_spec']['music_style']
+        wrong_style=[program_id for program_id in body.program_ids if by_id[program_id].get('music_style')!=expected_style]
+        if wrong_style:raise HTTPException(409,'O estilo das trilhas precisa corresponder ao roteiro ('+expected_style+'); selecione outros blocos')
+        audio_sources=[];unique_tracks={};seconds=0
+        for program_id in body.program_ids:
+            source=by_id[program_id];obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=source['manifest_key'])
+            try:raw=obj['Body'].read(8*1024**2+1)
+            finally:obj['Body'].close()
+            if len(raw)>8*1024**2:raise HTTPException(422,'Manifesto excede limite')
+            manifest=json.loads(raw);manifest_audio=manifest.get('audio') or {};sha=manifest_audio.get('sha256','')
+            duration=float(manifest.get('duration_seconds',0))
+            if len(sha)!=64 or duration<=0:raise HTTPException(409,'Trilha sem hash ou duração verificados')
+            audio_sources.append({'program_id':program_id,'audio_key':source['audio_key'],'sha256':sha,'seconds':duration})
+            seconds+=duration
+            hashes=list({t['sha256'] for t in manifest.get('tracks',[]) if t.get('sha256')})
+            tracks=c.execute('SELECT sha256,max(duration_seconds) seconds FROM assets WHERE sha256=ANY(%s) GROUP BY sha256',(hashes,)).fetchall() if hashes else []
+            for track in tracks:unique_tracks[track['sha256']]=max(float(track['seconds']),unique_tracks.get(track['sha256'],0))
+        unique=sum(unique_tracks.values())
+        if min(seconds,unique)<float(row['minutes'])*60:raise HTTPException(409,'As trilhas selecionadas não têm duração original medida suficiente; repetições não completam a meta')
+        sha=hashlib.sha256(json.dumps(audio_sources,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        value={'audio_sources':audio_sources,'sha256':sha,'human_review_sha256':sha,
+               'seconds':seconds,'unique_measured_seconds':unique,'style_reviewed':True,'source_preserved':True,
                'spec_sha256':production_spec_hash(row['data']['production_spec'])}
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{assembly_audio}',%s::jsonb) WHERE id=%s",(json.dumps(value),pid));audit(c,'TIMELINE_SOUNDTRACK_SELECTED',str(pid),body.program_id);c.commit()
-    return {'selected':True,'paid_calls':0}
+        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{assembly_audio}',%s::jsonb) WHERE id=%s",(json.dumps(value),pid));audit(c,'TIMELINE_SOUNDTRACK_SELECTED',str(pid),','.join(body.program_ids));c.commit()
+    return {'selected':True,'source_programs':body.program_ids,'seconds':seconds,'unique_measured_seconds':unique,'paid_calls':0}
 
 
 Polygon=list[tuple[float,float]]

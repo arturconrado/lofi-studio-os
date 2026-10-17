@@ -23,3 +23,11 @@ def test_export_duration_allowlist():
     with pytest.raises(HTTPException) as e:
         exports.create(exports.ExportRequest(request_id=uuid.uuid4(),program_id='reviewed',seconds=30))
     assert e.value.status_code==422
+
+
+@pytest.mark.parametrize('seconds',[14400,28800])
+def test_legacy_export_refuses_multi_hour_single_video_without_timeline(seconds):
+    with pytest.raises(HTTPException) as e:
+        exports.create(exports.ExportRequest(request_id=uuid.uuid4(),program_id='reviewed',seconds=seconds))
+    assert e.value.status_code==409
+    assert 'timeline audiovisual completa' in e.value.detail

@@ -40,11 +40,17 @@ def preflight(compiled,assets,audio,environment):
     failures=validate(compiled['events'],compiled.get('objects_initial'))
     if not plan['assets_ready']:failures.append('action_clips_missing')
     digest=compiled.get('spec_sha256') or production_spec_hash(compiled['spec'])
-    if not audio or not (audio.get('human_review_sha256')==audio.get('sha256') and audio.get('sha256') and audio.get('style_reviewed') and audio.get('source_preserved') and audio.get('spec_sha256')==digest):
+    has_source=bool(audio and (audio.get('audio_key') or audio.get('audio_sources')))
+    if not audio or not (has_source and audio.get('human_review_sha256')==audio.get('sha256') and audio.get('sha256') and audio.get('style_reviewed') and audio.get('source_preserved') and audio.get('spec_sha256')==digest):
         failures.append('soundtrack_review_missing')
     elif min(float(audio.get('seconds',0)),float(audio.get('unique_measured_seconds',0)))<compiled['duration_seconds']:
         failures.append('original_audio_short')
     current_shas=sorted({s['asset_sha256'] for s in plan['segments'] if s.get('asset_sha256')})
+    if compiled['spec'].get('visual_variant') in ('pixel_art_original','pixel_art_reviewed'):
+        reviewed={a.get('sha256') for a in assets if a.get('role')=='action_clip' and a.get('status')=='APPROVED_ACTION'
+                  and a.get('human_review_sha256')==a.get('sha256') and a.get('visual_style_reviewed') is True
+                  and a.get('visual_style_review_sha256')==a.get('sha256')}
+        if not set(current_shas)<=reviewed:failures.append('visual_style_review_missing')
     if not environment or environment.get('spec_sha256')!=digest or environment.get('reviewed') is not True or environment.get('region_asset_shas')!=current_shas:
         failures.append('scene_regions_review_missing')
     if environment and environment.get('recolor'):
