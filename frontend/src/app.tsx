@@ -3,6 +3,7 @@ import { Shell } from './features/shell';
 import { StudioHome } from './features/studio';
 import { Produce } from './features/produce';
 import { Project } from './features/project';
+import { Workshop } from './features/workshop';
 import { Inbox } from './features/inbox';
 import { Library } from './features/library';
 import { Live } from './features/live';
@@ -28,6 +29,8 @@ class Boundary extends Component<{ children: ComponentChildren; route: string },
 const ROUTES: [string, (p: Record<string, string>) => any][] = [
   ['/', () => <StudioHome />],
   ['/produzir', () => <Produce />],
+  ['/criar-video', () => <Workshop />],
+  ['/criar-video/:id', p => <Workshop key={p.id} id={p.id} />],
   ['/projetos/:id', p => <Project id={p.id} />],
   ['/revisao', () => <Inbox />],
   ['/biblioteca', () => <Library />],

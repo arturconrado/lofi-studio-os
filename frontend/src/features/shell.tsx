@@ -16,6 +16,7 @@ const MAIN = [
   { to: '/ao-vivo', label: 'Ao vivo', icon: IconLive },
 ];
 const SECONDARY = [
+  { to: '/criar-video', label: 'Criar vídeo', icon: IconSpark },
   { to: '/receitas', label: 'Receitas', icon: IconRecipe },
   { to: '/canais', label: 'Canais', icon: IconChannel },
   { to: '/ajustes', label: 'Ajustes', icon: IconSettings },
