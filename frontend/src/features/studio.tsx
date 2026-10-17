@@ -14,11 +14,11 @@ export type Production = {
   visual?: VisualPlan; recipe_version?: { revision: number | null; sha256: string };
 };
 export type VisualPlan = { mode: string; planned: { minute: number; sequence: string; actions: string[] }[]; required_actions: string[]; available_actions: string[];
-  missing_actions: string[]; applied: boolean; executed: unknown[]; label: string };
+  missing_actions: string[]; applied: boolean; executed: unknown[]; label: string; renderer_ready?: boolean; renderer_blocker?: string };
 export const SEQUENCE_LABEL: Record<string, string> = { breath_pet: 'respira e faz carinho no gato', phone_check: 'olha o celular', stretch_break: 'alonga os braços',
   window_glance: 'olha pela janela', cat_stretch: 'gato se espreguiça' };
 export type Block = { hour_index: number; program_id: string; stage: string; label: string; batch_state: string; batch_detail: string; tracks: number; pending_tracks: number;
-  reviewed: string | null; export: { id: string; state: string } | null; publication: { id: string; state: string } | null; live: boolean };
+  reviewed: string | null; export: { id: string; state: string; seconds?: number; report?: { stage?: string; error?: string } } | null; publication: { id: string; state: string } | null; live: boolean };
 
 export function ProjectCard({ p }: { p: Production }) {
   const progress = p.progress.target_seconds ? p.progress.seconds / p.progress.target_seconds : 0;

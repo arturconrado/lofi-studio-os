@@ -19,7 +19,7 @@ export function RecipeCard({ r, pressed, onClick, isDefault }: { r: Recipe; pres
   const m = r.data.music, v = r.data.visual;
   return (
     <button type="button" class="recipe" aria-pressed={pressed} onClick={onClick} style={{ '--swatch': SWATCH[m.style_id] || 'var(--violet)' } as any}>
-      <div class="row tight">{isDefault && <Pill tone="accent">Padrão do canal</Pill>}{v.variant !== 'canonical_illustrated' && <Pill tone="violet">Pixel art</Pill>}{!r.usable && <Pill tone="warn">Aguarda revisão</Pill>}</div>
+      <div class="row tight">{isDefault && <Pill tone="accent">Padrão do canal</Pill>}{(v.variant !== 'canonical_illustrated' || m.style_id === '8bit_lofi') && <Pill tone="violet">Pixel art</Pill>}{!r.usable && <Pill tone="warn">Aguarda revisão</Pill>}</div>
       <h4>{r.name}</h4>
       <span class="meta">{m.bpm_range ? `${m.bpm_range[0]}–${m.bpm_range[1]} BPM` : 'BPM livre'}{m.instruments?.length ? ' · ' + m.instruments.slice(0, 2).join(', ') : ''}</span>
     </button>
@@ -27,7 +27,8 @@ export function RecipeCard({ r, pressed, onClick, isDefault }: { r: Recipe; pres
 }
 
 type Quote = { recipe: { name: string; sha256: string }; scenario: string; scene_label: string; reference: { title: string }; estimate_usd: number; estimate_per_block_usd: number;
-  suggested_ceiling_usd: number; remaining_usd: number; paid_enabled: boolean; audio_prompt: string; copy: { title: string; description: string }; visual: VisualPlan };
+  suggested_ceiling_usd: number; remaining_usd: number; paid_enabled: boolean; audio_prompt: string; copy: { title: string; description: string }; visual: VisualPlan;
+  spec: Record<string, unknown>; whole_episode_export_available: boolean; episode_export_blocker: string | null };
 
 export function Produce() {
   const cid = channel.value?.id;
@@ -42,8 +43,8 @@ export function Produce() {
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [ceiling, setCeiling] = useState<number | null>(null);
   const [confirmed, setConfirmed] = useState(false);
-  const [noMotion, setNoMotion] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const requestId = useRef(uuid());
 
   const allowed = bound.data?.recipes || [];
@@ -60,7 +61,7 @@ export function Produce() {
 
   useEffect(() => {
     if (!cid || !recipe || !scenario) return;
-    setConfirmed(false); setNoMotion(false);
+    setConfirmed(false);
     const t = setTimeout(async () => {
       try {
         const q = await post<Quote>('/api/creator/productions/quote', { channel_id: cid, recipe_id: recipe.id, hours, idea, scenario });
@@ -73,9 +74,19 @@ export function Produce() {
   const submit = async () => {
     if (!quote || !ceiling) return;
     setBusy(true);
-    const p = await attempt(() => post('/api/creator/productions', { request_id: requestId.current, channel_id: cid, recipe_id: recipe!.id, hours, idea, scenario, ceiling_usd: ceiling, confirm_ceiling: true, accept_without_motion: noMotion }), 'Produção autorizada. Acompanhe por aqui.');
+    const p = await attempt(() => post('/api/creator/productions', { request_id: requestId.current, channel_id: cid, recipe_id: recipe!.id, hours, idea, scenario, ceiling_usd: ceiling, confirm_ceiling: true }), 'Produção autorizada. Acompanhe por aqui.');
     setBusy(false);
     if (p) { requestId.current = uuid(); navigate('/projetos/' + p.id); }
+  };
+
+  const prepareTimeline = async () => {
+    if (!quote || !cid) return;
+    setPreparing(true);
+    const saved = await attempt(() => post<{ id: string }>('/api/creator/storyboard/save', {
+      channel_id: cid, spec: { ...quote.spec, hours },
+    }), 'Roteiro salvo sem iniciar geração ou cobrança');
+    setPreparing(false);
+    if (saved) navigate('/montagem/' + saved.id);
   };
 
   if (recipes.loading) return <Skeleton lines={6} />;
@@ -95,12 +106,11 @@ export function Produce() {
       <section class="grid cols-2">
         <div class="card stack">
           <h3>2. Duração e ideia</h3>
-          <Field label="Horas novas de música">
-            <Segmented label="Horas" value={hours} onChange={setHours} options={[
-              { value: 1, label: '1h' }, { value: 2, label: '2h' }, { value: 4, label: '4h' },
-              { value: 8, label: '8h', disabled: true, title: 'Monte 8h em Ao vivo juntando blocos de 1h já aprovados' }]} />
+          <Field label="Duração do episódio">
+          <Segmented label="Horas" value={hours} onChange={setHours} options={[
+              { value: 1, label: '1h' }, { value: 4, label: '4h' }, { value: 8, label: '8h' }]} />
           </Field>
-          <p class="faint" style={{ fontSize: '13px' }}>Para lives de 8h, junte blocos aprovados em <a href={href('/ao-vivo')}>Ao vivo</a> — sem custo e sem repetir faixas.</p>
+          <p class="faint" style={{ fontSize: '13px' }}>A preparação da timeline aceita 1h, 4h ou 8h sem cobrança. A produção paga segue bloqueada enquanto faltarem o compositor integrado ou os assets aprovados.</p>
           <Field label="Ideia (opcional)" hint="Vira o tema do título, da descrição e a direção musical da hora.">
             <textarea class="textarea" maxLength={1500} placeholder="ex.: madrugada de neve, pixels quentes, foco profundo" value={idea} onInput={e => setIdea((e.target as HTMLTextAreaElement).value)} />
           </Field>
@@ -110,7 +120,7 @@ export function Produce() {
           <div class="grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: '8px' }}>
             {scenes.map(s => <button type="button" class="scene" aria-pressed={s.id === scenario} title={s.reference?.setting} onClick={() => setScenario(s.id)}><b>{s.label.split(' · ')[0]}</b><span class="faint" style={{ fontSize: '12px' }}>{s.label.split(' · ')[1] || ''}</span></button>)}
           </div>
-          {recipe && recipe.data.visual.variant !== 'canonical_illustrated' && <div class="notice">Receita em pixel art: usa o episódio de referência aprovado para esta variante.</div>}
+          {recipe && (recipe.data.visual.variant !== 'canonical_illustrated' || recipe.data.music.style_id === '8bit_lofi') && <div class="notice">Direção pixel art aplicada à cena e às ações, com o episódio aprovado servindo de guia de identidade e composição.</div>}
         </div>
       </section>
 
@@ -122,15 +132,21 @@ export function Produce() {
           <div class="grid cols-3">
             <div class="stat"><b>{usd(quote.estimate_usd)}</b><span>Estimativa ({usd(quote.estimate_per_block_usd)}/hora)</span></div>
             <div class="stat"><b>{usd(quote.remaining_usd)}</b><span>Disponível no limite</span></div>
-            <div class="stat"><b style={{ fontSize: '16px' }}>{quote.reference.title.split('|')[0]}</b><span>Visual reutilizado (sem custo)</span></div>
+            <div class="stat"><b style={{ fontSize: '16px' }}>{quote.reference.title.split('|')[0]}</b><span>Referência visual (não será copiada como saída)</span></div>
           </div>
           {quote.visual.planned.length > 0 && (
             <div class={`notice ${quote.visual.applied ? 'ok' : 'warn'}`}>
               <b>Movimentos da receita:</b> {quote.visual.planned.map(e => `min ${e.minute} · ${SEQUENCE_LABEL[e.sequence] || e.sequence}`).join(' · ')}
               <div style={{ marginTop: '6px' }}>{quote.visual.applied ? 'Serão aplicados no vídeo.' :
-                <>Este vídeo <b>não</b> vai executar esses movimentos: ele reutiliza o episódio aprovado exatamente como está. Clipes de ação aprovados neste canal: {quote.visual.available_actions.length} de {quote.visual.required_actions.length}.</>}</div>
+                <>A produção fica bloqueada sem os movimentos. Clipes de ação aprovados neste canal: {quote.visual.available_actions.length} de {quote.visual.required_actions.length}. Faltam: {quote.visual.missing_actions.join(', ') || 'integração do compositor de timeline'}.</>}</div>
+              {!quote.visual.renderer_ready && <div style={{ marginTop: '6px' }}>{quote.visual.renderer_blocker || 'Montagem temporal indisponível.'} Nenhum custo será reservado enquanto isso.</div>}
             </div>
           )}
+          {!quote.whole_episode_export_available && <div class="notice warn">{quote.episode_export_blocker} Nenhum custo será reservado.</div>}
+          <div class="row">
+            <button class="btn" disabled={preparing || busy} onClick={prepareTimeline}>{preparing ? 'Salvando roteiro…' : 'Preparar roteiro e montagem — sem cobrança'}</button>
+            <span class="faint" style={{ fontSize: '13px' }}>Você poderá vincular clipes e blocos de música já existentes e revisar o MP4 completo.</span>
+          </div>
           <div class="copy-preview"><b>{quote.copy.title}</b>{'\n\n'}{quote.copy.description}</div>
           <details><summary class="faint" style={{ cursor: 'pointer', fontSize: '13px' }}>Direção musical enviada ao gerador</summary><pre class="copy-preview mono" style={{ marginTop: '8px' }}>{quote.audio_prompt}</pre></details>
           <div class="row">
@@ -141,11 +157,11 @@ export function Produce() {
           {!quote.paid_enabled && <div class="notice warn">A geração paga está desativada. <a href={href('/ajustes')}>Ative em Ajustes</a> para produzir.</div>}
           {overBudget && <div class="notice bad">O teto passa do limite disponível. Ajuste o limite acumulado em Ajustes.</div>}
           {underEstimate && <div class="notice bad">O teto precisa cobrir a estimativa.</div>}
-          {quote.visual.planned.length > 0 && !quote.visual.applied && <Check checked={noMotion} onChange={setNoMotion}>Entendo que o vídeo sai sem os movimentos programados (música nova sobre o episódio aprovado)</Check>}
-          <Check checked={confirmed} onChange={setConfirmed}>Autorizo até {usd(ceiling)} para {hours}h de música original com a receita “{quote.recipe.name}”. Sem novas tentativas pagas automáticas.</Check>
+          {quote.visual.renderer_ready && quote.whole_episode_export_available && <Check checked={confirmed} onChange={setConfirmed}>Autorizo até {usd(ceiling)} para {hours}h de música original com a receita “{quote.recipe.name}”. Sem novas tentativas pagas automáticas.</Check>}
+          {!quote.visual.renderer_ready && <div class="notice warn">A geração paga está bloqueada até a montagem audiovisual desta jornada estar conectada. Preparar o roteiro acima não reserva custo.</div>}
           <div class="row">
-            <button class="btn primary lg" disabled={!confirmed || (quote.visual.planned.length > 0 && !quote.visual.applied && !noMotion) || busy || !quote.paid_enabled || overBudget || underEstimate || !settings.value} onClick={submit}><IconSpark /> {busy ? 'Autorizando…' : 'Produzir'}</button>
-            <span class="faint" style={{ fontSize: '13px' }}>Você só volta a ser chamado na revisão.</span>
+            <button class="btn primary lg" disabled={!confirmed || !quote.whole_episode_export_available || !quote.visual.renderer_ready || !quote.visual.applied || busy || !quote.paid_enabled || overBudget || underEstimate || !settings.value} onClick={submit}><IconSpark /> {busy ? 'Autorizando…' : 'Produzir'}</button>
+            <span class="faint" style={{ fontSize: '13px' }}>A revisão só será liberada depois de o MP4 completo ficar pronto.</span>
           </div>
         </>}
       </section>

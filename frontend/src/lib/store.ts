@@ -41,4 +41,5 @@ export const STATUS_TONE: Record<string, string> = {
   RASCUNHO: '', PRODUZINDO_MUSICA: 'info', AGUARDANDO_REVISAO: 'accent', MONTANDO: 'info', RENDERIZANDO: 'violet',
   PRONTO_PARA_PUBLICAR: 'ok', PUBLICANDO: 'violet', PUBLICADO: 'ok', AO_VIVO: 'live', PAUSADO: 'bad', CANCELADO: '', ARQUIVADO: '',
 };
-export const STAGE_LABEL: Record<string, string> = { recipe: 'Receita', music: 'Música', review: 'Revisão', export: 'Exportação', deliver: 'Entrega' };
+export const STAGE_LABEL: Record<string, string> = { recipe: 'Receita', music: 'Música', review: 'Revisão', export: 'Exportação', deliver: 'Entrega',
+  DRAFT: 'Roteiro', PROPOSED: 'Eventos', VALIDATED: 'Validação', PREVIEWED: 'Prévia', RENDERING: 'Montagem', QC: 'Revisão', APPROVED: 'Aprovado', PUBLISHED: 'Publicado' };

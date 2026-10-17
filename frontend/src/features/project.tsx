@@ -30,15 +30,31 @@ function MetadataEditor({ programId, onClose }: { programId: string; onClose: ()
 }
 
 function BlockRow({ b, onEdit }: { b: Block; onEdit: () => void }) {
+  const exportLabel = b.export?.state === 'completed' ? 'MP4 pronto para revisão' : b.export?.state === 'failed' ? 'Falha na exportação'
+    : b.export?.state === 'queued' ? 'Na fila de exportação' : ({ downloading_sources: 'Preparando mídias', validating_sources: 'Validando fontes', rendering_mp4: 'Montando MP4',
+      validating_final: 'Validando MP4 completo', uploading_mp4: 'Salvando MP4', finalizing_file: 'Finalizando arquivo' } as Record<string, string>)[b.export?.report?.stage || ''] || 'Exportando MP4';
+  const reviewExport = async () => {
+    if (!b.export) return;
+    if (!confirm('Você assistiu ao episódio exportado por inteiro e confirmou o áudio, o vídeo e os direitos de uso?')) return;
+    const result = await attempt(() => post(`/api/exports/${b.export!.id}/review`, { confirm_full_episode: true, confirm_rights: true }), 'Revisão do episódio registrada');
+    if (result) location.reload();
+  };
+  const retryExport = async () => {
+    if (!b.export) return;
+    const result = await attempt(() => post(`/api/exports/${b.export!.id}/retry`), 'Nova tentativa de exportação iniciada');
+    if (result) location.reload();
+  };
   return (
     <tr>
       <td><b>Hora {b.hour_index + 1}</b><div class="faint mono" style={{ fontSize: '11px' }}>{b.program_id}</div></td>
       <td><StatusPill status={b.stage} label={b.label} />{b.batch_detail && b.stage === 'PRODUZINDO_MUSICA' && <div class="faint" style={{ fontSize: '12px', marginTop: '4px' }}>{b.batch_detail}</div>}</td>
       <td>{b.tracks ?? 0} faixas{b.pending_tracks ? <span class="faint"> · {b.pending_tracks} sem decisão</span> : null}</td>
-      <td>{b.export ? <Pill tone={b.export.state === 'completed' ? 'ok' : 'violet'}>{b.export.state === 'completed' ? 'MP4 pronto' : 'Exportando'}</Pill> : <span class="faint">—</span>}</td>
+      <td>{b.export ? <Pill tone={b.export.state === 'completed' ? 'ok' : b.export.state === 'failed' ? 'bad' : 'violet'}>{exportLabel}</Pill> : <span class="faint">—</span>}</td>
       <td style={{ textAlign: 'right' }}>
         <div class="row tight" style={{ justifyContent: 'flex-end' }}>
-          {b.stage === 'AGUARDANDO_REVISAO' && <a class="btn primary sm" href={href('/revisao?item=' + encodeURIComponent('block_review:' + b.program_id))}>Revisar</a>}
+          {b.export?.state === 'completed' && <a class="btn sm" target="_blank" rel="noreferrer" href={`/api/exports/${b.export.id}/preview`}>Assistir episódio</a>}
+          {b.stage === 'AGUARDANDO_REVISAO' && b.export?.state === 'completed' && <button class="btn primary sm" onClick={reviewExport}>Revisar episódio inteiro</button>}
+          {b.stage === 'EXPORTACAO_FALHOU' && <button class="btn primary sm" onClick={retryExport}>Tentar exportar novamente</button>}
           {b.export?.state === 'completed' && <a class="btn sm" href={`/api/exports/${b.export.id}/download`}>Baixar</a>}
           <button class="btn ghost sm" onClick={onEdit}>Textos</button>
         </div>
@@ -69,9 +85,16 @@ export function Project({ id }: { id: string }) {
           {next.kind === 'review' && <a class="btn primary" href={href('/revisao?item=' + encodeURIComponent('block_review:' + next.program_id))}>{next.label} <IconArrow /></a>}
           {next.kind === 'publish' && <a class="btn primary" href={href('/revisao?item=' + encodeURIComponent('publish_confirm:' + next.export_id))}>Publicar no YouTube</a>}
           {next.kind === 'publish' && <a class="btn" href={href('/ao-vivo')}>Levar ao vivo</a>}
+          {next.kind === 'retry_export' && next.export_id && <button class="btn primary" onClick={async () => { const r = await attempt(() => post(`/api/exports/${next.export_id}/retry`), 'Nova tentativa de exportação iniciada'); if (r) p.reload(); }}>{next.label}</button>}
           {d.state === 'paused' && <button class="btn primary" onClick={() => act('resume', 'Produção retomada')}>Retomar com o mesmo teto</button>}
           {['active', 'paused'].includes(d.state) && <button class="btn ghost" onClick={() => confirm('Cancelar as horas ainda não iniciadas?') && act('cancel', 'Produção cancelada')}>Cancelar</button>}
           {['cancelled', 'done'].includes(d.state) && <button class="btn ghost" onClick={() => act('archive', 'Arquivada')}>Arquivar</button>}
+          {['cancelled', 'done', 'archived'].includes(d.state) && <button class="btn danger" onClick={async () => {
+            const phrase = `EXCLUIR DEFINITIVAMENTE ${id}`;
+            if (prompt(`A exclusão apaga definitivamente os arquivos e o conteúdo desta produção. Os custos ficam no histórico. Para confirmar, digite exatamente:\n${phrase}`) !== phrase) return;
+            const r = await attempt(() => post(`/api/creator/productions/${id}/permanent-delete`, { confirm_text: phrase }), 'Produção excluída definitivamente');
+            if (r) location.assign(href('/biblioteca'));
+          }}>Excluir definitivamente</button>}
         </div>
       </div>
 
@@ -109,7 +132,7 @@ export function Project({ id }: { id: string }) {
               <tbody>{d.visual.planned.map(e => <tr><td class="mono">{e.minute}</td><td>{SEQUENCE_LABEL[e.sequence] || e.sequence}</td>
                 <td>{d.visual!.applied ? <Pill tone="ok">Executado</Pill> : <Pill tone="warn">Não aplicado</Pill>}</td></tr>)}</tbody></table>)}
           {d.visual.planned.length > 0 && !d.visual.applied && <p class="faint" style={{ fontSize: '13px' }}>
-            “MP4 pronto” confirma o arquivo exportado, não o roteiro. Para aplicar movimentos é preciso ter clipes de ação aprovados ({d.visual.available_actions.length} de {d.visual.required_actions.length} hoje) e a montagem por timeline.</p>}
+            {d.visual.renderer_blocker || 'A produção não pode avançar sem clipes de ação revisados e montagem por timeline.'} Clipes aprovados: {d.visual.available_actions.length} de {d.visual.required_actions.length}. Faltam: {d.visual.missing_actions.join(', ') || 'integração do compositor'}.</p>}
           <p class="faint mono" style={{ fontSize: '11px' }}>Receita {d.recipe_version?.revision ? 'v' + d.recipe_version.revision + ' · ' : ''}{d.recipe_version?.sha256.slice(0, 16)}</p>
         </section>
       )}

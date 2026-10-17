@@ -1,6 +1,7 @@
 """Style choices reach every prompt; without a recipe the legacy prompts are unchanged."""
 from studio.production_harness import audio_prompt
-from studio.recipes import builtin,dump,autopilot_prompt
+from studio.recipes import builtin,dump,autopilot_prompt,spec_from
+from studio.production_harness import compile_spec
 from studio.creator import recipe_prompt
 from studio.live_presentation import suggestions
 
@@ -25,6 +26,15 @@ def test_plan_prompt_replaces_jazzhop_and_painterly():
     recipe['visual']['variant']='pixel_art_reviewed'
     out=recipe_prompt(base,recipe)
     assert 'jazzhop' not in out and 'painterly' not in out and 'pixel-art' in out and '8-Bit Lo-Fi' in out
+
+
+def test_8bit_recipe_changes_visual_and_action_clip_direction():
+    recipe=builtin('8bit_lofi')
+    assert recipe.visual.variant=='pixel_art_original'
+    assert '8-bit pixel-art' in recipe.visual.image_prompt_suffix
+    spec=spec_from(recipe,1,'snowy pixels',sha='a'*64)
+    prompts=[task['prompt'] for task in compile_spec(spec)['asset_tasks']]
+    assert prompts and all('original 8-bit game pixel art' in prompt for prompt in prompts)
 
 
 def test_live_titles_use_recipe():

@@ -2,8 +2,8 @@
 
 Revisions are immutable and bound by sha256, like channel harness profiles. A recipe never
 authorizes spending; the production that uses it carries its own cost ceiling. A visual
-variant other than the canonical illustration stays unusable until a person approves its
-reference as the same girl and cat (docs/audit-2026-10-15/08-DECISOES_E_LIMITES.md).
+reviewed pixel-art variant stays unusable until a person approves its reference. The original
+pixel-art recipe uses a built-in canonical episode only as identity/composition guidance.
 """
 import hashlib,json,string,uuid
 from typing import Literal
@@ -23,6 +23,7 @@ TEMPLATE_FIELDS={'scene_title','hours','hours_label','style_title','idea','mood'
 SCENE_TITLES={'city_sunset':'City Sunset Window','mountain_stars':'Mountain Stars Window','balcony_dawn':'Balcony Dawn',
               'snowy_night_studio':'Snowy Night Studio','greenhouse_rain_study':'Greenhouse Rain Study','autumn_bookshop':'Autumn Bookshop'}
 PAINTERLY='Original painterly lo-fi illustration, 16:9, fictional adult person, no text or watermark.'
+PIXEL_ART='Original 8-bit pixel-art scene inspired by classic handheld and 16-bit-era games; crisp limited palette, deliberate pixel clusters, tiled snowy-night studio, readable pixel animation, 16:9, no text or watermark.'
 
 
 class Marker(BaseModel):
@@ -59,7 +60,7 @@ class MusicBible(BaseModel):
 
 class VisualBible(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    variant:Literal['canonical_illustrated','pixel_art_reviewed']='canonical_illustrated'
+    variant:Literal['canonical_illustrated','pixel_art_reviewed','pixel_art_original']='canonical_illustrated'
     reference_pilot_ids:list[uuid.UUID]=Field(default_factory=list,max_length=6)
     reference_asset_sha256:list[str]=Field(default_factory=list,max_length=6)
     allowed_scenarios:list[Scenario]=Field(default_factory=list,max_length=6)
@@ -79,7 +80,7 @@ class VisualBible(BaseModel):
     @model_validator(mode='after')
     def coherent(self):
         if self.allowed_scenarios and self.default_scenario not in self.allowed_scenarios:raise ValueError('O cenário padrão precisa estar entre os permitidos')
-        if self.variant!='canonical_illustrated' and not (self.reference_pilot_ids or self.reference_asset_sha256):
+        if self.variant in ('pixel_art_reviewed','pixel_art_original') and not (self.reference_pilot_ids or self.reference_asset_sha256):
             raise ValueError('Uma variante visual precisa de referência revisável da mesma garota e gato')
         return self
 
@@ -174,8 +175,11 @@ SEED={'lofi_hiphop':('autumn_bookshop','Lo-Fi Hip Hop'),'chillhop':('greenhouse_
 
 def builtin(style):
     scene,title=SEED[style];meta=next(s for s in STYLES if s['id']==style)
+    pixel=style=='8bit_lofi'
+    refs=[uuid.UUID(SCENES[scene]['approved_pilot_id'])] if pixel and SCENES[scene].get('approved_pilot_id') else []
     return RecipeData(music=MusicBible(style_id=style,bpm_range=tuple(meta['bpm']) if meta['bpm'] else None),
-                      visual=VisualBible(default_scenario=scene),copy=Copy(style_title=title))
+                      visual=VisualBible(variant='pixel_art_original' if pixel else 'canonical_illustrated',reference_pilot_ids=refs,
+                                         default_scenario=scene,image_prompt_suffix=PIXEL_ART if pixel else PAINTERLY),copy=Copy(style_title=title))
 
 
 def ensure(c):
@@ -194,6 +198,7 @@ def ensure(c):
     for style,(_,title) in SEED.items():
         if not c.execute('SELECT 1 FROM recipes WHERE slug=%s',(style.replace('_','-'),)).fetchone():
             insert(c,style.replace('_','-'),title,'builtin',builtin(style))
+    migrate_builtin_8bit(c)
     import_profiles(c)
     refresh_builtin_copy(c)
 
@@ -212,6 +217,20 @@ def refresh_builtin_copy(c):
         revision=c.execute('SELECT max(revision)+1 n FROM recipe_revisions WHERE recipe_id=%s',(row['id'],)).fetchone()['n']
         c.execute('INSERT INTO recipe_revisions(recipe_id,revision,sha256,data) VALUES(%s,%s,%s,%s)',(row['id'],revision,sha,json.dumps(dump(model))))
         c.execute('UPDATE recipes SET current_revision=%s,updated_at=now() WHERE id=%s',(revision,row['id']))
+
+
+def migrate_builtin_8bit(c):
+    """Version the shipped 8-bit recipe; edited recipes and channel-pinned revisions stay fixed."""
+    row=c.execute("SELECT * FROM recipes WHERE slug='8bit-lofi' AND origin='builtin' FOR UPDATE").fetchone()
+    if not row:return
+    current=c.execute('SELECT data,sha256 FROM recipe_revisions WHERE recipe_id=%s AND revision=%s',(row['id'],row['current_revision'])).fetchone()
+    target=dump(builtin('8bit_lofi'));sha=digest(builtin('8bit_lofi'))
+    if current and current['sha256']==sha:return
+    revision=int(row['current_revision'])+1
+    c.execute('INSERT INTO recipe_revisions(recipe_id,revision,sha256,data,visual_review) VALUES(%s,%s,%s,%s,NULL)',
+              (row['id'],revision,sha,json.dumps(target)))
+    c.execute('UPDATE recipes SET current_revision=%s,updated_at=now() WHERE id=%s',(revision,row['id']))
+    audit(c,'BUILTIN_8BIT_RECIPE_MIGRATED',str(row['id']),f'revision {revision}; pixel art visual direction')
 
 
 def insert(c,slug,name,origin,data,review=None):
@@ -275,7 +294,7 @@ def current(c,rid):
 
 
 def usable(row):
-    return row['data']['visual']['variant']=='canonical_illustrated' or bool(row['visual_review'])
+    return row['data']['visual']['variant'] in ('canonical_illustrated','pixel_art_original') or bool(row['visual_review'])
 
 
 def public(row):

@@ -10,6 +10,7 @@ import { Recipes, RecipeEditor } from './features/recipes';
 import { Channels } from './features/channels';
 import { Settings } from './features/settings';
 import { Diagnostics } from './features/diagnostics';
+import { Assembly } from './features/assembly';
 import { Component } from 'preact';
 import type { ComponentChildren } from 'preact';
 import { Empty } from './ds/ui';
@@ -29,6 +30,7 @@ const ROUTES: [string, (p: Record<string, string>) => any][] = [
   ['/', () => <StudioHome />],
   ['/produzir', () => <Produce />],
   ['/projetos/:id', p => <Project id={p.id} />],
+  ['/montagem/:id', p => <Assembly id={p.id} />],
   ['/revisao', () => <Inbox />],
   ['/biblioteca', () => <Library />],
   ['/ao-vivo', () => <Live />],

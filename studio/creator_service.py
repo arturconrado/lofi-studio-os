@@ -12,17 +12,7 @@ IMAGE_MODEL='bytedance-seed/seedream-4.5'
 def visual(bid,plan,folder):
  reference=plan.get('visual_reference')
  if reference:
-  report=reference['report'];key=reference['silent_key']
-  from .visual_identity import verify_baseline,verify_object
-  expected=report.get('artifact_sha256',{}).get('silent')
-  verify_baseline(reference['pilot_id'],key,expected)
-  verify_object(storage(),os.environ['S3_BUCKET'],key,expected)
-  from fractions import Fraction
-  with db() as c:
-   c.execute('UPDATE production_batches SET video_key=%s,visual_cycle_key=%s WHERE id=%s',(key,key,bid))
-   c.execute("INSERT INTO program_scenes(batch_id,id,title,video_key,image_key,duration_seconds,width,height,fps,technique,position) VALUES(%s,'episode-reference',%s,%s,%s,3600,%s,%s,%s,'published_episode_motion',0) ON CONFLICT(batch_id,id) DO NOTHING",(bid,reference['title'],key,report['delivery_assets']['thumbnail1'],report['width'],report['height'],int(Fraction(report.get('fps','24/1')))))
-   audit(c,'CREATOR_EPISODE_VISUAL_REUSED',bid,reference['pilot_id']);c.commit()
-  return {'reused':True,'external_video_cost':0}
+  raise ValueError('O vídeo de referência é apenas guia visual; reutilizá-lo como saída está bloqueado')
  if plan.get('production_spec'):
   from .production_harness import asset_inventory
   inventory=asset_inventory(plan)
@@ -74,6 +64,7 @@ def package(bid,folder):
  if b['state']!='generated':raise ValueError('A meta não foi concluída; nenhuma nova tentativa automática')
  with db() as c:plan=c.execute('SELECT data FROM creator_plans WHERE program_id=%s',(bid,)).fetchone()['data']
  reference=plan.get('visual_reference')
+ if reference:raise ValueError('Vídeo de referência não pode entrar no manifesto de saída')
  s=storage();bucket=os.environ['S3_BUCKET'];files=[];timeline=[];offset=0
  for row in rows:
   with db() as c:key=c.execute('SELECT object_key FROM assets WHERE id=%s',(row['asset_id'],)).fetchone()['object_key']
@@ -96,12 +87,8 @@ def package(bid,folder):
  akey=f'programs/{bid}/audio.mp3';mkey=f'programs/{bid}/manifest.json';s.upload_file(str(audio),bucket,akey,ExtraArgs={'ContentType':'audio/mpeg'})
  manifest={'batch':bid,'duration_seconds':seconds,'tracks':timeline,'audio':{'sha256':hashlib.sha256(audio.read_bytes()).hexdigest(),'bytes':audio.stat().st_size},'video':{'seconds':60,'cycle_seconds':60,'selected_scene':None,'provenance':'Original AI illustration animated locally; 20-second core repeated in a silent 60-second video'},'broadcast_started':False}
  from .video_guardrails import assess,inspect
- if reference:
-  r=reference['report'];manifest['video']={'seconds':3600,'cycle_seconds':3600,'selected_scene':'episode-reference','source_pilot_id':reference['pilot_id'],'source_silent_sha256':r.get('artifact_sha256',{}).get('silent'),'provenance':'Exact existing one-hour visual; no character redraw, motion change or new video generation'}
-  evidence={'duration_seconds':3600,'source_preserved':True,'reference_reused':True,'artistic_review_required':True}
- else:
-  evidence=inspect(folder/'scene-loop.mp4')
-  evidence.update(demo_only=False,timeline_coverage_seconds=20,source_preserved=True)
+ evidence=inspect(folder/'scene-loop.mp4')
+ evidence.update(demo_only=False,timeline_coverage_seconds=20,source_preserved=True)
  if mix_report:manifest['audio']['mix']=mix_report
  if ambient:manifest['audio']['ambience']=ambient
  manifest['video_guardrails']=assess(evidence,float(b['target_seconds']))
