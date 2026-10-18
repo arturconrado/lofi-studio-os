@@ -268,6 +268,8 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], bo
             return public_task(old)
         draft = Draft.model_validate(row['data']); clip = get_clip(draft, cid)
         if not clip: raise HTTPException(404, 'Trecho não encontrado')
+        if kind == 'image' and clip.id != draft.base.id:
+            raise HTTPException(409, 'A imagem de cenário e personagens é aprovada uma vez na base. Gere diretamente o vídeo da inserção.')
     q = provider_quote(kind, clip.seconds)
     if q['usd'] > body.max_usd: raise HTTPException(409, 'Cotação aumentou; confira novamente')
     with db() as c:

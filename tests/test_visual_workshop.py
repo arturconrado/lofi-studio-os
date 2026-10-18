@@ -364,6 +364,9 @@ def test_insertion_video_prepares_base_frame_without_paid_image(client, monkeypa
     monkeypatch.setattr(provider, 'submit', lambda task_id: None)
     monkeypatch.setattr(financial, 'check_available', lambda c, cap: None)
     url = f'/api/creator/workshop/projects/{pid}'
+    rejected = cl.post(url + f'/clips/{draft.clips[0].id}/generate/image', json={
+        'request_id': str(uuid.uuid4()), 'revision': 1, 'max_usd': 1, 'confirm_cost': True})
+    assert rejected.status_code == 409
     response = cl.post(url + f'/clips/{draft.clips[0].id}/generate/video', json={
         'request_id': str(uuid.uuid4()), 'revision': 1, 'max_usd': 1, 'confirm_cost': True})
     assert response.status_code == 200, response.text
