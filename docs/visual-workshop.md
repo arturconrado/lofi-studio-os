@@ -64,7 +64,7 @@ O deploy consome toda a listagem de pg_restore antes de conferir TABLE DATA. Iss
 ### Pendências para encerrar o plano consolidado
 
 - Homologar as quatro emendas com a menina, gato, cenário e trilha do projeto `546e25bd-bcc2-4d9c-98a4-272afad79acb`, e renderizar o completo de 62 minutos e outro de duração diferente. Os testes de cores e durações não provam continuidade artística.
-- O adaptador atual envia somente primeiro quadro ao provedor. O prompt inclui a atividade anterior, mas isso não transmite uma trajetória de movimento; é necessário confirmar suporte real a contexto temporal/retorno antes de prometer essa garantia.
+- O catálogo atual de Veo 3.1 Lite aceita primeiro e último quadro: quando disponível na cotação, o retorno usa o primeiro quadro extraído da base aprovada; a base usa sua imagem inicial nas duas extremidades. Partes intermediárias não são forçadas a voltar antes de concluir a ação. Isso reforça as poses de entrada/saída, mas não transmite uma trajetória de movimento; contexto temporal real permanece pendente. Contratos: https://openrouter.ai/docs/api/api-reference/video-generation/create-videos e https://openrouter.ai/docs/api/api-reference/video-generation/list-videos-models.
 - A geração ainda bloqueia reuso entre fases diferentes em vez de preparar variantes automaticamente. Divisão semântica de ação longa e geração em lote com orçamento consolidado também continuam pendentes.
 - Conferir backup/restauração no VPS, instalar a revisão aprovada e validar a tela. Nenhuma implantação, geração paga ou publicação foi iniciada nesta alteração.
 

@@ -305,6 +305,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], bo
         pending = c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'clip_id'=%s AND payload->>'operation'=%s AND status IN ('SUBMITTING','RUNNING','UNCERTAIN')", (KIND, str(pid), str(cid), kind)).fetchone()
         if pending: raise HTTPException(409, 'Este trecho já tem um pedido pendente. Consulte o andamento; envios incertos precisam de reconciliação antes de outra geração.')
         refs = [*draft.scene_references, *(r for ch in draft.characters for r in ch.references), *clip.references]
+        return_frame = None
         image = media.get(str(clip.image_id)); selected = [media[str(r)] for r in refs]
         if clip.id != draft.base.id:
             base = status(draft, draft.base, media)
@@ -339,6 +340,20 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], bo
                 audit(c, 'VISUAL_BASE_CUT_PREPARED', str(aid))
             if not status(draft, clip, media)['image_approved']: raise HTTPException(409, 'Aprove a imagem antes de animar')
             selected = [image]
+            # Current catalog supports first+last frame. The last pose is taken
+            # from the approved base itself, never redrawn from an action prompt.
+            intermediate = any(cl.continues_from == clip.id for cl in draft.clips)
+            if q.get('last_frame_supported') and not intermediate:
+                if clip.id == draft.base.id:
+                    return_frame = image
+                else:
+                    return_frame = next((a for a in media.values() if a.get('source') == 'base_video_return'
+                                         and a.get('base_video_sha256') == base['video']['sha256']), None)
+                    if not return_frame:
+                        raw = base_cut_image(base['video'], 0)
+                        _, return_frame = store_media(c, pid, raw, 'image', 'image/png', {
+                            'source': 'base_video_return', 'base_video_sha256': base['video']['sha256']})
+                selected.append(return_frame)
         if len(selected) > 14: raise HTTPException(422, 'Use até 14 referências por imagem')
         check_available(c, q['usd'])
         payload = {'project_id': str(pid), 'clip_id': str(cid), 'operation': kind,
@@ -346,6 +361,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], bo
                    'prompt': prompt(draft, clip, kind), 'seconds': clip.seconds,
                    'visual_signature': signature(draft, clip, 'image'),
                    'source_image_id': str(clip.image_id) if clip.image_id else None,
+                   'last_frame': bool(return_frame),
                    'references': [{'key': a['key'], 'sha256': a['sha256'], 'mime': a['mime']} for a in selected]}
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'SUBMITTING','Envio único; sem repetição automática')",
                   (body.request_id, KIND, q['model'], json.dumps(payload), q['usd']))

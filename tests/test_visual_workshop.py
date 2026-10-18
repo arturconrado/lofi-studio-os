@@ -459,3 +459,16 @@ def test_a_distant_generation_does_not_revoke_an_already_reviewed_seam():
     d.clips.append(later);d.insertions.append(Insertion(clip_id=later.id,minute=.9))
     later.video_id=uuid.uuid4();a[str(later.video_id)]={'sha256':'f'*64}
     assert seam_binding(d,cl,a)==binding
+
+
+
+def test_provider_binds_first_and_return_frames_without_looping_action_parts():
+    from studio.workshop_provider import video_body
+    payload={'prompt':'Action and return','seconds':6,'last_frame':True}
+    request=video_body(payload,['data:first','data:return'])
+    assert [f['frame_type'] for f in request['frame_images']]==['first_frame','last_frame']
+    assert request['frame_images'][1]['image_url']['url']=='data:return'
+    assert request['duration']==6 and request['generate_audio'] is False
+    with pytest.raises(ValueError,match='Return frame'):video_body(payload,['data:first'])
+    payload['last_frame']=False
+    assert len(video_body(payload,['data:first'])['frame_images'])==1

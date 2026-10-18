@@ -20,6 +20,7 @@ BASE = 'https://openrouter.ai/api/v1'
 
 
 def quote(kind, seconds):
+    last_frame = False
     try:
         with httpx.Client(timeout=25) as client:
             if kind == 'image':
@@ -38,6 +39,7 @@ def quote(kind, seconds):
                     raise HTTPException(422, f'Este modelo aceita {accepted} segundos por clipe. Ajuste a duração; sua imagem será mantida. Nenhum envio pago foi feito.')
                 if '720p' not in entry.get('supported_resolutions', []) or 'first_frame' not in entry.get('supported_frame_images', []):
                     raise ValueError('Unsupported duration or first frame')
+                last_frame = 'last_frame' in entry.get('supported_frame_images', [])
                 skus = entry['pricing_skus']
                 if not skus or any(not k.startswith('duration_seconds_') for k in skus): raise ValueError('Unknown units')
                 cap = max(Decimal(str(v)) for v in skus.values()) * seconds; model = VIDEO_MODEL
@@ -46,7 +48,7 @@ def quote(kind, seconds):
         raise
     except Exception:
         raise HTTPException(409, 'Cotação ou configuração indisponível. Consulte as durações disponíveis; nenhum envio pago foi feito.') from None
-    return {'model': model, 'usd': float(cap), 'seconds': seconds}
+    return {'model': model, 'usd': float(cap), 'seconds': seconds, 'last_frame_supported': last_frame}
 
 
 def reference_data(a):
@@ -80,6 +82,16 @@ def complete(c, task, raw, mime, seconds=None):
               (json.dumps(p), 'Pronto para aprovação' if attached else 'Arquivo preservado; o roteiro mudou durante a geração', task['id']))
 
 
+def video_body(payload, references):
+    frames = [{'type': 'image_url', 'image_url': {'url': references[0]}, 'frame_type': 'first_frame'}]
+    if payload.get('last_frame'):
+        if len(references) < 2: raise ValueError('Return frame missing')
+        frames.append({'type': 'image_url', 'image_url': {'url': references[1]}, 'frame_type': 'last_frame'})
+    return {'model': VIDEO_MODEL, 'prompt': payload['prompt'], 'duration': payload['seconds'],
+            'resolution': '720p', 'aspect_ratio': '16:9', 'generate_audio': False,
+            'frame_images': frames, 'provider': {'allow_fallbacks': False}}
+
+
 def submit(tid):
     try:
         with db() as c: t = c.execute('SELECT * FROM factory_tasks WHERE id=%s AND kind=%s', (tid, KIND)).fetchone()
@@ -99,10 +111,7 @@ def submit(tid):
                 raw = image_bytes(base64.b64decode(encoded, validate=True))
                 with db() as c: complete(c, t, raw, 'image/png'); c.commit()
             else:
-                body = {'model': VIDEO_MODEL, 'prompt': p['prompt'], 'duration': p['seconds'],
-                        'resolution': '720p', 'aspect_ratio': '16:9', 'generate_audio': False,
-                        'frame_images': [{'type': 'image_url', 'image_url': {'url': refs[0]}, 'frame_type': 'first_frame'}],
-                        'provider': {'allow_fallbacks': False}}
+                body = video_body(p, refs)
                 r = client.post(BASE + '/videos', headers=headers, json=body); r.raise_for_status()
                 job = r.json()['id']
                 if not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', job): raise ValueError('Invalid provider job')
