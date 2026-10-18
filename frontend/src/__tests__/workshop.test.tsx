@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/preact';
-import { Workshop, initialDraft } from '../features/workshop';
+import { Workshop, initialDraft, formatTime } from '../features/workshop';
 import { channels, channelId } from '../lib/store';
 
 beforeEach(() => {
@@ -17,12 +17,12 @@ describe('visual workshop', () => {
     fireEvent.input(view.getByLabelText('Duração total (minutos)'), { target: { value: '37' } });
     fireEvent.click(view.getByText('Adicionar trecho'));
     fireEvent.click(view.getByText('Adicionar horário'));
-    fireEvent.input(view.getByLabelText('Minuto da inserção 1'), { target: { value: '12' } });
+    fireEvent.blur(view.getByLabelText('Horário da inserção 1 (mm:ss)'), { target: { value: '12:08' } });
     fireEvent.click(view.getByText('Criar projeto'));
     await waitFor(() => expect(fetcher.mock.calls.some(c => c[1]?.method === 'POST')).toBe(true));
     const body = JSON.parse(String(fetcher.mock.calls.find(c => c[1]?.method === 'POST')![1].body));
     expect(body.data.minutes).toBe(37);
-    expect(body.data.insertions[0].minute).toBe(12);
+    expect(body.data.insertions[0].minute).toBeCloseTo(12+8/60);
     expect(body.data.insertions[0].clip_id).toBe(body.data.clips[0].id);
     expect(fetcher.mock.calls.some(c => c[0].includes('/generate/'))).toBe(false);
   });
@@ -91,4 +91,14 @@ it('offers insertion video directly from the approved base without a separate im
   expect(view.getAllByText('Gerar imagem')).toHaveLength(1);
   expect((view.getAllByText('Gerar vídeo')[1] as HTMLButtonElement).disabled).toBe(false);
   expect(view.queryByText('Continua uma parte anterior')).toBeNull();
+});
+
+
+it('keeps the tranquil preset in the single base and formats fractional minutes', async () => {
+  vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({projects:[],durations:[8]}),{status:200})));
+  const view=render(<Workshop />);
+  fireEvent.click(view.getByText('Base tranquila'));
+  expect(view.getAllByLabelText('Nome do trecho')).toHaveLength(1);
+  expect(formatTime(15+8/60)).toBe('15:08');
+  expect(view.getByText('Adicionar horário').hasAttribute('disabled')).toBe(true);
 });

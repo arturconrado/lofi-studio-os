@@ -11,7 +11,7 @@ from pydantic import Field
 from PIL import Image
 from .core import db, storage, audit, ensure_once
 from .channels import profile
-from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame
+from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame, seam_binding
 
 router = APIRouter(prefix='/workshop')
 KIND = 'visual_workshop_v1'
@@ -67,6 +67,8 @@ def public_task(t):
             'created_at': t.get('created_at'), 'asset_id': p.get('asset_id'),
             'asset_url': f'/api/creator/workshop/projects/{p["project_id"]}/media/{p["asset_id"]}' if p.get('asset_id') else None,
             'operation': p['operation'], 'clip_id': p.get('clip_id'), 'reserved_usd': t['reserved_cost'],
+            'current': p.get('current', True),
+            'preview_range': p.get('preview_range'),
             'report': p.get('report'), 'approved': p.get('approved', False),
             'url': f'/api/creator/workshop/projects/{p["project_id"]}/renders/{t["id"]}' if p.get('video_key') else None}
 
@@ -122,6 +124,9 @@ def detail(pid: uuid.UUID):
         row = project(c, pid); media = assets(c, pid); draft = Draft.model_validate(row['data'])
         jobs = c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s ORDER BY created_at DESC LIMIT 100", (KIND, str(pid))).fetchall()
         for job in jobs:
+            if job['payload']['operation'] == 'preview':
+                target = get_clip(draft, job['payload'].get('clip_id'))
+                job['payload']['current'] = bool(target and job['payload'].get('seam_binding') == seam_binding(draft, target, media))
             if job['payload']['operation'] == 'render':
                 try:
                     current_segments = assemble(draft, media)
@@ -229,6 +234,21 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
                 raise HTTPException(422, 'Confira a identidade e, no vídeo, o movimento e a volta à base')
             if kind == 'video' and not status(draft, clip, media)['image_approved']:
                 raise HTTPException(409, 'Aprove primeiro a imagem')
+            if kind == 'video':
+                previews = c.execute("SELECT payload FROM factory_tasks WHERE kind=%s AND status='COMPLETED' AND payload->>'project_id'=%s AND payload->>'clip_id'=%s AND payload->>'operation'='preview'",
+                                     (KIND, str(pid), str(cid))).fetchall()
+                binding = seam_binding(draft, clip, media)
+                reviewed_audio = soundtrack(c, row, draft)
+                current = [p['payload'] for p in previews if p['payload'].get('seam_binding') == binding
+                           and p['payload'].get('audio') == reviewed_audio
+                           and p['payload'].get('video_key') and p['payload'].get('report', {}).get('full_decode_pass')]
+                required = 1 if cid == draft.base.id else sum(i.clip_id == cid for i in draft.insertions)
+                ranges = {tuple(p.get('preview_range', [])) for p in current}
+                if not required or len(ranges) < required:
+                    raise HTTPException(409, 'Prepare e assista às prévias das emendas nos horários atuais antes de aprovar o vídeo.')
+                asset['reviewed_seam_binding'] = binding
+                asset['reviewed_audio'] = reviewed_audio
+                asset['reviewed_preview_sha256s'] = [p['report']['sha256'] for p in current]
         if kind == 'image': asset['visual_signature'] = signature(draft, clip, 'image')
         asset.update(approved=body.approve, review_sha256=body.sha256, review_note=body.note)
         c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s', (json.dumps(asset), aid, pid))
@@ -409,6 +429,47 @@ class Render(Strict):
     revision: int
 
 
+@router.post('/projects/{pid}/clips/{cid}/preview')
+def preview_clip(pid: uuid.UUID, cid: uuid.UUID, body: Render):
+    """Review the real entry, complete action and return, with approved music."""
+    with db() as c:
+        row = project(c, pid, True)
+        old = c.execute('SELECT * FROM factory_tasks WHERE id=%s', (body.request_id,)).fetchone()
+        if old:
+            old = task(c, body.request_id, pid)
+            if old['payload']['operation'] != 'preview' or old['payload'].get('clip_id') != str(cid):
+                raise HTTPException(409, 'Pedido já utilizado')
+            return public_task(old)
+        if row['revision'] != body.revision: raise HTTPException(409, 'Salve antes de preparar a prévia')
+        draft = Draft.model_validate(row['data'])
+        clip = get_clip(draft, cid)
+        if not clip: raise HTTPException(404, 'Trecho não encontrado')
+        total = round(draft.minutes * 60 * 24) / 24
+        occurrences = [(round(i.minute*60*24)/24, round(i.minute*60*24)/24 + clip.seconds)
+                       for i in sorted(draft.insertions, key=lambda i: i.minute) if i.clip_id == cid]
+        if cid == draft.base.id: occurrences = [(0, min(total, draft.base.seconds*2))]
+        if not occurrences: raise HTTPException(409, 'Agende esta inserção antes de revisar')
+        if not worker_online(c): raise HTTPException(503, 'O montador está offline')
+        audio = soundtrack(c, row, draft)
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'clip_id'=%s AND payload->>'operation'='preview' AND status IN ('QUEUED','RUNNING')", (KIND, str(pid), str(cid))).fetchone():
+            raise HTTPException(409, 'A prévia deste trecho já está em preparação')
+        jobs = []
+        for index, (entry, exit) in enumerate(occurrences):
+            start = max(0, entry - 2); end = min(total, exit + 2)
+            try: segments = assemble(draft, assets(c, pid), preview=True, preview_range=(start, end-start))
+            except ValueError as exc: raise HTTPException(409, str(exc)) from None
+            tid = body.request_id if index == 0 else uuid.uuid5(body.request_id, str(index))
+            payload = {'project_id': str(pid), 'clip_id': str(cid), 'operation': 'preview',
+                       'seam_binding': seam_binding(draft, clip, assets(c, pid)),
+                       'draft_sha256': digest(row['data']), 'segments': segments, 'audio': audio,
+                       'seconds': total, 'preview_range': [start, end - start]}
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_timeline_preview',%s,0,'QUEUED','Preparando entrada, ação e retorno com música')",
+                      (tid, KIND, json.dumps(payload)))
+            jobs.append(str(tid))
+        c.commit()
+    return {'id': jobs[0], 'ids': jobs, 'status': 'QUEUED'}
+
+
 def worker_online(c):
     row = c.execute("SELECT COALESCE(heartbeat>now()-interval '30 seconds',false) ok FROM export_control WHERE id=1").fetchone()
     return bool(row and row['ok'])
@@ -445,11 +506,19 @@ def render(pid: uuid.UUID, body: Render):
             if old['payload']['operation'] != 'render': raise HTTPException(409, 'Pedido já utilizado')
             return public_task(old)
         if row['revision'] != body.revision: raise HTTPException(409, 'Salve a versão atual antes de montar')
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'operation'='render' AND status IN ('QUEUED','RUNNING')", (KIND, str(pid))).fetchone():
+            raise HTTPException(409, 'Já existe uma montagem em andamento neste projeto')
         draft = Draft.model_validate(row['data'])
         try: segments = assemble(draft, assets(c, pid))
         except ValueError as e: raise HTTPException(409, str(e)) from None
         if not worker_online(c): raise HTTPException(503, 'O montador está offline. Ative o worker de exportação antes de montar.')
         audio = soundtrack(c, row, draft)
+        media = assets(c, pid)
+        for cl in clips(draft):
+            if cl.id != draft.base.id and not any(i.clip_id == cl.id for i in draft.insertions): continue
+            video = media.get(str(cl.video_id)) or {}
+            if video.get('continuity_review_version') and video.get('reviewed_audio') != audio:
+                raise HTTPException(409, 'A trilha aprovada mudou. Revise as prévias com a música atual antes de montar.')
         payload = {'project_id': str(pid), 'operation': 'render', 'draft_sha256': digest(row['data']),
                    'seconds': segments[-1]['end'], 'segments': segments, 'audio': audio}
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_ffmpeg_v1',%s,0,'QUEUED','Montagem com música e retorno à base')",
@@ -471,7 +540,7 @@ def render_video(pid: uuid.UUID, tid: uuid.UUID, request: Request):
 def review_render(pid: uuid.UUID, tid: uuid.UUID, body: Review):
     with db() as c:
         row = project(c, pid, True); t = task(c, tid, pid); p = t['payload']
-        if t['status'] != 'COMPLETED' or p.get('draft_sha256') != digest(row['data']):
+        if p.get('operation') != 'render' or t['status'] != 'COMPLETED' or p.get('draft_sha256') != digest(row['data']):
             raise HTTPException(409, 'Monte a versão atual antes de aprovar')
         if p.get('report', {}).get('sha256') != body.sha256: raise HTTPException(409, 'Arquivo mudou')
         if body.approve:

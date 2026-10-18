@@ -137,7 +137,7 @@ def tick():
     from .radio import CACHE
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837472)')
-        if c.execute("SELECT 1 FROM export_jobs WHERE state='running'").fetchone() or c.execute("SELECT 1 FROM factory_tasks WHERE status='RUNNING' AND (kind='timeline_render_v1' OR (kind='visual_workshop_v1' AND payload->>'operation'='render'))").fetchone():return False
+        if c.execute("SELECT 1 FROM export_jobs WHERE state='running'").fetchone() or c.execute("SELECT 1 FROM factory_tasks WHERE status='RUNNING' AND (kind='timeline_render_v1' OR (kind='visual_workshop_v1' AND payload->>'operation' IN ('render','preview')))").fetchone():return False
         row=c.execute("UPDATE export_jobs SET state='running',report=jsonb_build_object('stage','preparing'),updated_at=now() WHERE id=(SELECT id FROM export_jobs WHERE state='queued' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *").fetchone()
         c.commit()
     if not row:return False
@@ -183,7 +183,7 @@ def main():
         c.execute("UPDATE export_jobs SET state='interrupted',updated_at=now() WHERE state='running'")
         from . import timeline_worker
         timeline_worker.interrupted(c);c.commit()
-        c.execute("UPDATE factory_tasks SET status='INTERRUPTED',detail='Montagem interrompida; solicite novamente após conferir',updated_at=now() WHERE kind='visual_workshop_v1' AND payload->>'operation'='render' AND status='RUNNING'");c.commit()
+        c.execute("UPDATE factory_tasks SET status='INTERRUPTED',detail='Montagem interrompida; solicite novamente após conferir',updated_at=now() WHERE kind='visual_workshop_v1' AND payload->>'operation' IN ('render','preview') AND status='RUNNING'");c.commit()
     def heartbeat():
         while True:
             with db() as c:

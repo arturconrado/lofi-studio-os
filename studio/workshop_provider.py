@@ -42,8 +42,10 @@ def quote(kind, seconds):
                 if not skus or any(not k.startswith('duration_seconds_') for k in skus): raise ValueError('Unknown units')
                 cap = max(Decimal(str(v)) for v in skus.values()) * seconds; model = VIDEO_MODEL
         if not cap.is_finite() or not 0 < cap <= 12: raise ValueError('Invalid quote')
+    except HTTPException:
+        raise
     except Exception:
-        raise HTTPException(409, 'Cotação ou configuração indisponível. Para vídeo, tente 8 segundos; nenhum envio pago foi feito.') from None
+        raise HTTPException(409, 'Cotação ou configuração indisponível. Consulte as durações disponíveis; nenhum envio pago foi feito.') from None
     return {'model': model, 'usd': float(cap), 'seconds': seconds}
 
 
@@ -62,7 +64,8 @@ def complete(c, task, raw, mime, seconds=None):
     aid, _ = store_media(c, pid, raw, p['operation'], mime,
                          {'signature': p['signature'], 'seconds': seconds, 'task_id': str(task['id']), 'clip_id': p['clip_id'],
                           'prompt': p['prompt'], 'model': task['model'],
-                          'visual_signature': p.get('visual_signature'), 'source_image_id': p.get('source_image_id')})
+                          'visual_signature': p.get('visual_signature'), 'source_image_id': p.get('source_image_id'),
+                          'continuity_review_version': 1 if p['operation'] == 'video' else None})
     # A slow generation must not replace a newer edit or carry an approval forward.
     attached = False
     if clip:

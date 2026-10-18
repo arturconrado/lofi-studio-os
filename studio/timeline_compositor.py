@@ -224,8 +224,8 @@ def scratch_bytes(folder):
 
 def resource_report(started,cpu_before,peak,output,target):
     """Measured local resources; money only when the operator configured real rates."""
-    import os,resource
-    usage=resource.getrusage(resource.RUSAGE_CHILDREN);cpu=usage.ru_utime+usage.ru_stime-cpu_before
+    import os
+    cpu=child_cpu_seconds()-cpu_before
     elapsed=time.monotonic()-started;size=Path(output).stat().st_size;per_hour=3600/max(target,1)
     cpu_rate=os.getenv('LOFI_CPU_HOUR_USD');storage_rate=os.getenv('LOFI_STORAGE_GB_MONTH_USD')
     cost=None
@@ -238,9 +238,19 @@ def resource_report(started,cpu_before,peak,output,target):
             'estimate_basis':'linear extrapolation from this render; confirm with a real long render before promising 4/8h'}
 
 
+def child_cpu_seconds():
+    try:
+        import resource
+        usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+        return usage.ru_utime + usage.ru_stime
+    except ImportError:
+        import os
+        usage = os.times()
+        return usage.children_user + usage.children_system
+
+
 def render(compiled,plan,sources,audio,environment,output,progress=None,width=1280,height=720,fps=24):
-    import resource
-    started=time.monotonic();usage=resource.getrusage(resource.RUSAGE_CHILDREN);cpu_before=usage.ru_utime+usage.ru_stime;peak=0
+    started=time.monotonic();cpu_before=child_cpu_seconds();peak=0
     output=Path(output);folder=output.parent;folder.mkdir(parents=True,exist_ok=True)
     target=float(compiled['duration_seconds']);segments=plan['segments']
     if not plan['assets_ready'] or not segments:raise ValueError('Reviewed action clips required')
@@ -265,12 +275,21 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
         seconds=float(segment['end']-segment['start']);source=Path(sources[segment['asset_sha256']]);available,_=measure(source,'video')
         idle=segment['action']=='typing_idle'
         if segment['repeat_short_clip'] is not idle or (not idle and available+.001<seconds+segment.get('source_offset_seconds',0)):raise ValueError('Interaction cannot be looped or stretched')
+        cycle = segment.get('cycle_seconds', available)
+        if cycle <= 0 or cycle > available + .05:raise ValueError('Invalid loop duration')
+        if idle and abs(cycle - available) > 1/fps:
+            normalized = folder / f'cycle-{segment["asset_sha256"]}-{cycle}.mp4'
+            if not normalized.exists():
+                subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(source), '-an', '-t', str(cycle),
+                                '-vf', f'fps={fps}', '-c:v', 'libx264', '-threads', '1', str(normalized)],
+                               check=True, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            source = normalized
         args=['ffmpeg','-v','error','-y','-threads','1','-filter_complex_threads','1']
         if idle:args+=['-stream_loop','-1']
         args+=['-i',str(source)]
         for name in masks:args+=['-loop','1','-framerate',str(fps),'-i',str(masks[name])]
         names={name:i+1 for i,name in enumerate(masks)}
-        phase=segment.get('source_offset_seconds',0)%available if idle else segment.get('source_offset_seconds',0)
+        phase=segment.get('source_offset_seconds',0)%cycle if idle else segment.get('source_offset_seconds',0)
         filters=[f'[0:v]trim=start={phase},setpts=PTS-STARTPTS,fps={fps},scale={width}:{height},setsar=1,format=yuv420p[v0]']
         # Condensed previews carry each sample's own absolute program clock.
         clock=segment.get('clock_seconds',segment['start']+compiled.get('clock_offset_seconds',0))

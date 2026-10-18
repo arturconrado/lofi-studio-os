@@ -1,8 +1,6 @@
 """Local FFmpeg assembly of reviewed clips. Never loop insertions or omit music."""
 import json
 import os
-import shutil
-import subprocess
 from pathlib import Path
 from .core import db, storage
 from .timeline_compositor import file_hash, measure
@@ -10,54 +8,41 @@ from .timeline_worker import fetch
 from .workshop_api import KIND, ready
 
 
-def render_segments(segments, sources, audio, destination, seconds):
-    destination = Path(destination); folder = destination.parent
+def render_segments(segments, sources, audio, destination, seconds, preview_range=None):
+    from .production_harness import workshop_plan
+    from .timeline_compositor import render
+    destination = Path(destination)
     if destination.exists(): raise ValueError('Output already exists')
-    if shutil.disk_usage(folder).free < seconds * 1_000_000 + 512 * 1024**2:
-        raise ValueError('Insufficient render space')
-    audio_seconds, _ = measure(audio, 'audio')
-    if audio_seconds + .05 < seconds: raise ValueError('Soundtrack too short')
-    paths = []; cursor = 0; normalized = {}
-    for i, segment in enumerate(segments):
-        if abs(segment['start'] - cursor) > .001 or segment['end'] <= cursor:
-            raise ValueError('Timeline gap or overlap')
-        duration = segment['end'] - segment['start']; cursor = segment['end']
-        source = sources[segment['asset_sha256']]
-        if file_hash(source) != segment['asset_sha256']: raise ValueError('Media hash changed')
-        actual, _ = measure(source, 'video')
-        if actual + .05 < segment['source_seconds'] or (not segment['loop'] and duration > actual + .05):
+    plan = workshop_plan(segments, seconds)
+    # Preserve the cycle configured by the user, even when the provider returned
+    # extra frames. Source files themselves remain immutable and hash-verified.
+    if preview_range:
+        from .timeline_preview import clip
+        start, length = preview_range
+        if start < 0 or length <= 0 or start + length > seconds:
+            raise ValueError('Preview outside program')
+        plan = {**plan, 'segments': clip(plan, start, length), 'duration_seconds': length}
+        plan['assets_ready'] = bool(plan['segments']) and all(s.get('asset_sha256') for s in plan['segments'])
+    for segment in plan['segments']:
+        actual, _ = measure(sources[segment['asset_sha256']], 'video')
+        if actual + .05 < segment['source_seconds']:
             raise ValueError('Clip shorter than requested action')
-        path = folder / f'segment-{i:04d}.mp4'
-        # Normalize a small cycle on disk; never buffer an entire loop of HD frames in RAM.
-        token = (segment['asset_sha256'], segment['source_seconds'])
-        if token not in normalized:
-            cycle = folder / f'cycle-{len(normalized):04d}.mp4'
-            filters = 'fps=24,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS-STARTPTS'
-            subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-threads', '1', '-i', str(source),
-                            '-an', '-vf', filters, '-t', str(segment['source_seconds']), '-c:v', 'libx264',
-                            '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', str(cycle)],
-                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=300)
-            normalized[token] = cycle
-        loop_args = ['-stream_loop', '-1'] if segment['loop'] else []
-        subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-threads', '1', *loop_args, '-i', str(normalized[token]),
-                        '-an', '-t', str(duration), '-c:v', 'libx264', '-preset', 'veryfast',
-                        '-crf', '20', '-pix_fmt', 'yuv420p', str(path)], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=max(300, duration * 5))
-        paths.append(path)
-    if abs(cursor - seconds) > .001: raise ValueError('Timeline duration mismatch')
-    listing = folder / 'segments.txt'
-    listing.write_text(''.join(f"file '{p.name}'\n" for p in paths), encoding='utf-8')
-    subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-f', 'concat', '-safe', '1', '-i', str(listing),
-                    '-i', str(audio), '-map', '0:v:0', '-map', '1:a:0', '-t', str(seconds),
-                    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', str(destination)],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=max(300, seconds))
+        segment['cycle_seconds'] = segment['source_seconds']
+    compiled = {'duration_seconds': seconds, 'lighting': {'keyframes': [
+        {'minute': 0, 'night': 0, 'sky_light': 0, 'city_lights': 0}]}}
+    if preview_range:
+        compiled.update(duration_seconds=length, clock_offset_seconds=start,
+                        audio_offset_seconds=start, preview_only=True)
+    report = render(compiled, plan, sources, audio, {}, destination)
     measured, _ = measure(destination, 'video')
     soundtrack, _ = measure(destination, 'audio')
-    if abs(measured - seconds) > .15 or abs(soundtrack - seconds) > .15: raise ValueError('Final duration mismatch')
-    subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-xerror', '-i', str(destination), '-f', 'null', '-'],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=max(300, seconds))
+    target = compiled['duration_seconds']
+    if abs(measured - target) > .15 or abs(soundtrack - target) > .15:
+        raise ValueError('Final duration mismatch')
     return {'sha256': file_hash(destination), 'seconds': measured, 'audio_seconds': soundtrack,
-            'segments': segments, 'full_decode_pass': True, 'final_review_required': True}
+            'segments': report['segments'], 'full_decode_pass': report['video']['full_decode_pass'],
+            'final_review_required': True, 'continuous_transitions_reviewed': False,
+            'engine': 'production_harness/timeline_compositor', 'preview_range': preview_range}
 
 
 def tick():
@@ -66,18 +51,22 @@ def tick():
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837472)')
         if c.execute("SELECT 1 FROM export_jobs WHERE state='running'").fetchone() or c.execute(
-                "SELECT 1 FROM factory_tasks WHERE kind IN ('timeline_render_v1',%s) AND status='RUNNING' AND (kind='timeline_render_v1' OR payload->>'operation'='render')", (KIND,)).fetchone(): return False
-        t = c.execute("UPDATE factory_tasks SET status='RUNNING',detail='Montando base, inserções e música' WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s AND payload->>'operation'='render' AND status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *", (KIND,)).fetchone(); c.commit()
+                "SELECT 1 FROM factory_tasks WHERE kind IN ('timeline_render_v1',%s) AND status='RUNNING' AND (kind='timeline_render_v1' OR payload->>'operation' IN ('render','preview'))", (KIND,)).fetchone(): return False
+        t = c.execute("UPDATE factory_tasks SET status='RUNNING',detail='Montando base, inserções e música' WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s AND payload->>'operation' IN ('render','preview') AND status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *", (KIND,)).fetchone(); c.commit()
     if not t: return False
     folder = CACHE / 'visual-workshop' / str(t['id']); folder.mkdir(parents=True, exist_ok=True)
     try:
         p = t['payload']; sources = {}
-        for segment in p['segments']:
+        needed = p['segments']
+        if p.get('preview_range'):
+            from .timeline_preview import clip
+            needed = clip({'segments': needed}, *p['preview_range'])
+        for segment in needed:
             sha = segment['asset_sha256']
             if sha in sources: continue
             path = folder / (sha + '.mp4'); fetch(segment['asset_key'], path, sha, 64 * 1024**2); sources[sha] = path
         audio = folder / 'audio.mp3'; fetch(p['audio']['key'], audio, p['audio']['sha256'], 1024**3)
-        final = folder / 'final.mp4'; report = render_segments(p['segments'], sources, audio, final, p['seconds'])
+        final = folder / 'final.mp4'; report = render_segments(p['segments'], sources, audio, final, p['seconds'], p.get('preview_range'))
         key = f'visual-workshop/{p["project_id"]}/renders/{t["id"]}/{report["sha256"]}.mp4'
         storage().upload_file(str(final), os.environ['S3_BUCKET'], key, ExtraArgs={'ContentType': 'video/mp4'})
         with db() as c:
