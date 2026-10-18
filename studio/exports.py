@@ -190,6 +190,16 @@ def main():
                 c.execute('UPDATE export_control SET heartbeat=now() WHERE id=1');timeline_worker.heartbeat(c);c.commit()
             time.sleep(10)
     threading.Thread(target=heartbeat,daemon=True).start()
+    def generation_queue():
+        from . import workshop_provider
+        while True:
+            try:workshop_provider.tick()
+            except Exception:
+                # A claimed send is never automatically retried. The durable
+                # reservation remains SUBMITTING/UNCERTAIN for reconciliation.
+                pass
+            time.sleep(3)
+    threading.Thread(target=generation_queue,daemon=True).start()
     while True:
         from . import workshop_worker
         if not workshop_worker.tick() and not timeline_worker.tick():tick()

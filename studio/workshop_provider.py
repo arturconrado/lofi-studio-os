@@ -11,7 +11,7 @@ import httpx
 from fastapi import HTTPException
 from .core import db, storage
 from . import runtime
-from .visual_workshop import Draft, get_clip, signature
+from .visual_workshop import Draft, get_clip, signature, variant_plan, occurrence_clip
 from .workshop_api import KIND, project, assets, save, store_media, image_bytes
 
 IMAGE_MODEL = 'bytedance-seed/seedream-4.5'
@@ -67,16 +67,26 @@ def complete(c, task, raw, mime, seconds=None):
                          {'signature': p['signature'], 'seconds': seconds, 'task_id': str(task['id']), 'clip_id': p['clip_id'],
                           'prompt': p['prompt'], 'model': task['model'],
                           'visual_signature': p.get('visual_signature'), 'source_image_id': p.get('source_image_id'),
+                          'variant_key':p.get('variant_key'),'occurrence_ids':p.get('occurrence_ids',[]),
                           'continuity_review_version': 1 if p['operation'] == 'video' else None})
     # A slow generation must not replace a newer edit or carry an approval forward.
     attached = False
     if clip:
-        image = assets(c, pid).get(str(clip.image_id))
-        expected = signature(draft, clip, p['operation'], image['sha256'] if p['operation'] == 'video' and image else None)
-        if p['signature'] == expected:
-            setattr(clip, p['operation'] + '_id', aid)
-            if p['operation'] == 'image': clip.video_id = None
-            save(c, row, draft); attached = True
+        group=next((g for g in variant_plan(draft,clip,assets(c,pid)) if g['key']==p.get('variant_key')),None) if p.get('variant_key') else None
+        effective=occurrence_clip(draft,clip,group) if group else clip
+        image=assets(c,pid).get(str(effective.image_id))
+        expected=signature(draft,effective,p['operation'],image['sha256'] if p['operation']=='video' and image else None)
+        if p['signature']==expected and (not p.get('variant_key') or group):
+            if group:
+                for event in draft.insertions:
+                    if str(event.id) in p.get('occurrence_ids',[]) and event.source_binding==p['variant_key'] and str(event.image_id)==p.get('source_image_id'):
+                        event.video_id=aid;attached=True
+                if clip.image_id==effective.image_id:clip.video_id=aid
+            else:
+                setattr(clip,p['operation']+'_id',aid)
+                if p['operation']=='image':clip.video_id=None
+                attached=True
+            if attached:save(c,row,draft)
     p.update(asset_id=str(aid))
     c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=%s,detail=%s,updated_at=now() WHERE id=%s",
               (json.dumps(p), 'Pronto para aprovação' if attached else 'Arquivo preservado; o roteiro mudou durante a geração', task['id']))
@@ -162,3 +172,31 @@ def capabilities():
                     'continuation': 'first_frame' in entry.get('supported_frame_images', [])}
     except Exception:
         raise HTTPException(503, 'Não foi possível consultar as durações do modelo. Seus dados estão salvos; tente atualizar antes de gerar.') from None
+
+
+
+def tick(task_id=None):
+    """Claim an authorized, never-sent reservation once, independently of the page."""
+    with db() as c:
+        c.execute('SELECT pg_advisory_xact_lock(192837467)')
+        if not runtime.settings(c)['enabled']:return False
+        query="SELECT id FROM factory_tasks WHERE kind=%s AND payload->>'operation'='video' AND status='QUEUED'"
+        params=[KIND]
+        if task_id:query+=' AND id=%s';params.append(task_id)
+        query+=' ORDER BY created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED'
+        task=c.execute("UPDATE factory_tasks SET status='SUBMITTING',detail='Enviando pedido reservado',updated_at=now() WHERE id=("+query+") RETURNING *",params).fetchone()
+        if not task:return False
+        payload=task['payload'];row=project(c,payload['project_id']);draft=Draft.model_validate(row['data'])
+        clip=get_clip(draft,payload['clip_id']);media=assets(c,row['id'])
+        group=next((g for g in variant_plan(draft,clip,media) if g['key']==payload.get('variant_key')),None) if clip else None
+        effective=occurrence_clip(draft,clip,group) if group else clip
+        image=media.get(str(effective.image_id)) if effective else None
+        from .visual_workshop import _status
+        valid=bool(group and image and str(effective.image_id)==payload.get('source_image_id') and
+                   payload['signature']==signature(draft,effective,'video',image['sha256']) and
+                   _status(draft,effective,media,group)['image_approved'])
+        if not valid:
+            c.execute("UPDATE factory_tasks SET status='FAILED',reserved_cost=0,detail='Roteiro ou origem mudou antes do envio. Nenhuma chamada paga realizada.',updated_at=now() WHERE id=%s",(task['id'],))
+        c.commit()
+    if valid:submit(task['id'])
+    return True

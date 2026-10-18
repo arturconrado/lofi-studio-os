@@ -238,6 +238,20 @@ def resource_report(started,cpu_before,peak,output,target):
             'estimate_basis':'linear extrapolation from this render; confirm with a real long render before promising 4/8h'}
 
 
+def normalize_source(source,folder,sha,seconds,width,height,fps):
+    """Shared sampling for rendering and the generated first/last frame sources."""
+    path=Path(folder)/f'normalized-{sha}-{seconds}-{width}-{height}-{fps}.mp4'
+    if not path.exists():
+        filters=f'fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,trim=duration={seconds},setpts=PTS-STARTPTS'
+        temporary=path.with_suffix('.partial.mp4')
+        subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-threads','1','-i',str(source),'-an',
+                        '-vf',filters,'-c:v','libx264','-threads','1','-preset','veryfast','-crf','20',
+                        '-pix_fmt','yuv420p',str(temporary)],check=True,timeout=300,
+                       stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        temporary.replace(path)
+    return path
+
+
 def child_cpu_seconds():
     try:
         import resource
@@ -277,13 +291,8 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
         if segment['repeat_short_clip'] is not idle or (not idle and available+.001<seconds+segment.get('source_offset_seconds',0)):raise ValueError('Interaction cannot be looped or stretched')
         cycle = segment.get('cycle_seconds', available)
         if cycle <= 0 or cycle > available + .05:raise ValueError('Invalid loop duration')
-        if idle and abs(cycle - available) > 1/fps:
-            normalized = folder / f'cycle-{segment["asset_sha256"]}-{cycle}.mp4'
-            if not normalized.exists():
-                subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(source), '-an', '-t', str(cycle),
-                                '-vf', f'fps={fps}', '-c:v', 'libx264', '-threads', '1', str(normalized)],
-                               check=True, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            source = normalized
+        if segment.get('cycle_seconds') is not None:
+            source=normalize_source(source,folder,segment['asset_sha256'],cycle,width,height,fps)
         args=['ffmpeg','-v','error','-y','-threads','1','-filter_complex_threads','1']
         if idle:args+=['-stream_loop','-1']
         args+=['-i',str(source)]

@@ -339,6 +339,14 @@ def test_base_cut_image_uses_the_last_visible_frame(tmp_path, monkeypatch):
     raw = api.base_cut_image({'key': 'local', 'sha256': 'a'*64}, 47)
     red, green, blue = Image.open(io.BytesIO(raw)).getpixel((100, 100))
     assert blue > 180 and red < 60 and green < 60
+    fetches=[]
+    def fetch_once(key,path,sha,limit):
+        fetches.append(key);shutil.copyfile(source,path)
+    monkeypatch.setattr(timeline_worker,'fetch',fetch_once)
+    frames=api.base_cut_images({'key':'local','sha256':'a'*64},[47,0,47])
+    assert len(fetches)==1 and set(frames)=={0,47}
+    assert Image.open(io.BytesIO(frames[0])).getpixel((100,100))[0]>180
+    assert Image.open(io.BytesIO(frames[47])).getpixel((100,100))[2]>180
 
 
 @DB
@@ -371,7 +379,7 @@ def test_insertion_video_prepares_base_frame_without_paid_image(client, monkeypa
     png = io.BytesIO(); Image.new('RGB', (16, 9), 'blue').save(png, 'PNG')
     monkeypatch.setenv('S3_BUCKET', 'test')
     monkeypatch.setattr(api, 'storage', lambda: Store())
-    monkeypatch.setattr(api, 'base_cut_image', lambda source, frame: png.getvalue())
+    monkeypatch.setattr(api,'base_cut_images',lambda source,frames:{frame:png.getvalue() for frame in frames})
     monkeypatch.setattr(provider, 'quote', lambda kind, seconds: {'model': 'test', 'usd': .1, 'seconds': seconds})
     monkeypatch.setattr(provider, 'submit', lambda task_id: None)
     monkeypatch.setattr(financial, 'check_available', lambda c, cap: None)

@@ -24,6 +24,7 @@ class Clip(Strict):
     name: str = Field(min_length=1, max_length=100)
     motion: str = Field(min_length=1, max_length=3000)
     seconds: int = Field(default=8, ge=2, le=60)
+    action_goal: str | None = Field(default=None,max_length=3000)
     references: list[uuid.UUID] = Field(default_factory=list, max_length=4)
     continues_from: uuid.UUID | None = None
     image_id: uuid.UUID | None = None
@@ -34,6 +35,9 @@ class Insertion(Strict):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     clip_id: uuid.UUID
     minute: float = Field(ge=0, le=480)
+    image_id: uuid.UUID | None = None
+    video_id: uuid.UUID | None = None
+    source_binding: str | None = Field(default=None, pattern='^[a-f0-9]{64}$')
 
 
 class Draft(Strict):
@@ -66,6 +70,7 @@ class Draft(Strict):
                 seen.add(previous.continues_from)
                 previous = clips[str(previous.continues_from)]
         end = 0
+        preceding = None
         for event in sorted(self.insertions, key=lambda e: e.minute):
             clip = clips.get(str(event.clip_id))
             if not clip:
@@ -73,7 +78,10 @@ class Draft(Strict):
             start = round(event.minute * 60 * 24) / 24
             if start < end:
                 raise ValueError('Os horários das inserções se sobrepõem')
+            if clip.continues_from and (not preceding or preceding.clip_id != clip.continues_from or abs(start-end) > 1/48):
+                raise ValueError('As partes de uma ação precisam ser consecutivas, na ordem correta')
             end = start + clip.seconds
+            preceding = event
             if end > round(self.minutes * 60 * 24) / 24:
                 raise ValueError('A inserção termina depois da duração total')
         return self
@@ -107,7 +115,8 @@ def visual_context(draft):
 def signature(draft, clip, kind, image_sha=None):
     if kind == 'video':
         original = legacy_signature(draft, clip, kind, image_sha)
-        following = sorted(str(c.id) for c in draft.clips if c.continues_from == clip.id)
+        if clip.action_goal: original=digest({'video':original,'action_goal':clip.action_goal})
+        following = sorted(str(c.id) for c in draft.clips if c.continues_from == clip.id and (not any(i.clip_id == clip.id for i in draft.insertions) or any(i.clip_id == c.id for i in draft.insertions)))
         if clip.continues_from or following:
             return digest({'video': original, 'previous': clip.continues_from, 'following': following})
         return original
@@ -156,87 +165,141 @@ def approved(asset, expected):
                 and asset.get('review_sha256') == asset['sha256'] and asset.get('approved'))
 
 
-def seam_binding(draft, clip, assets):
-    """Only changes that affect this clip's real preview invalidate its review."""
+def variant_plan(draft, clip, assets, _cache=None):
+    """Group occurrences by their actual source and choreography; never by name."""
+    _cache={} if _cache is None else _cache
+    cache_key=('plan',str(clip.id))
+    if cache_key in _cache:return _cache[cache_key]
+    groups = {}; cursor = 0; previous = None
+    base_video = assets.get(str(draft.base.video_id)) or {}
+    for event in sorted(draft.insertions, key=lambda i: i.minute):
+        start = round(event.minute*60*24)
+        item = get_clip(draft, event.clip_id)
+        if item.id == clip.id:
+            frame = (start-cursor-1) % (draft.base.seconds*24) if start > cursor else 0
+            source = base_video; ready = bool(base_video)
+            if clip.continues_from:
+                if not previous or previous.clip_id != clip.continues_from or start != cursor:
+                    raise ValueError('As partes de uma ação precisam ser consecutivas')
+                parent = get_clip(draft, previous.clip_id)
+                source = assets.get(str(previous.video_id or parent.video_id)) or {}
+                state = status(draft,parent,assets,occurrence_id=previous.id,_cache=_cache)
+                ready = bool(state.get('video_ready'))
+                frame = parent.seconds*24-1
+            binding = digest({'source_sha256': source.get('sha256'), 'frame': frame,
+                              'cycle_seconds': draft.base.seconds if not clip.continues_from else None,
+                              'choreography': signature(draft, clip, 'video'),
+                              'return_base_sha256': base_video.get('sha256')})
+            group = groups.setdefault(binding, {'key': binding, 'frame': frame, 'source': {**source,'sampling_seconds':get_clip(draft,clip.continues_from).seconds if clip.continues_from else draft.base.seconds},
+                'source_ready': ready, 'event_ids': [], 'minutes': []})
+            group['event_ids'].append(str(event.id)); group['minutes'].append(event.minute)
+        cursor = start+item.seconds*24; previous = event
+    result=list(groups.values());_cache[cache_key]=result
+    return result
+
+
+def occurrence_clip(draft, clip, group):
+    candidates=[i for i in draft.insertions if str(i.id) in group['event_ids']]
+    inventory=candidates+[i for i in draft.insertions if i.clip_id==clip.id and i not in candidates]
+    event=next((i for i in inventory if i.source_binding==group['key'] and i.image_id),candidates[0])
+    return clip.model_copy(update={'image_id': event.image_id or clip.image_id,
+                                   'video_id': event.video_id or clip.video_id})
+
+
+def seam_binding(draft, clip, assets, event_ids=None):
     events = sorted(draft.insertions, key=lambda i: i.minute)
-    intervals = [(round(i.minute*60*24)/24, get_clip(draft, i.clip_id), i) for i in events]
-    windows = [(max(0, start-2), min(draft.minutes*60, start+item.seconds+2))
-               for start, item, event in intervals if item.id == clip.id]
-    if clip.id == draft.base.id: windows = [(0, min(draft.minutes*60, draft.base.seconds*2+2))]
+    intervals = [(round(i.minute*60*24)/24, get_clip(draft,i.clip_id), i) for i in events]
+    windows = [(max(0,start-2), min(round(draft.minutes*60*24)/24,start+item.seconds+2))
+               for start,item,event in intervals if item.id == clip.id and (event_ids is None or str(event.id) in event_ids)]
+    if clip.id == draft.base.id: windows = []
     nearby = []
-    for left, right in windows:
-        previous = max((start+item.seconds for start,item,_ in intervals if start+item.seconds <= left), default=0)
-        nearby.append({'window': [left, right], 'base_interval_start': previous,
-                       'events': [(start, item.seconds, str(item.id),
-                                   (assets.get(str(item.video_id)) or {}).get('sha256'))
-                                  for start,item,_ in intervals if start < right and start+item.seconds > left]})
+    for left,right in windows:
+        previous = max((start+item.seconds for start,item,_ in intervals if start+item.seconds<=left),default=0)
+        nearby.append({'window':[left,right], 'base_interval_start':previous,
+            'events':[(start,item.seconds,str(item.id),
+                       (assets.get(str(event.video_id or item.video_id)) or {}).get('sha256'))
+                      for start,item,event in intervals if start<right and start+item.seconds>left]})
     return digest({'base_video': (assets.get(str(draft.base.video_id)) or {}).get('sha256'),
-                   'base_seconds': draft.base.seconds, 'clip_video_id': str(clip.video_id),
-                   'visual': context(draft), 'music': draft.music_program_id,
-                   'total_seconds': round(draft.minutes*60*24)/24, 'windows': nearby})
+                   'base_seconds':draft.base.seconds, 'visual':context(draft),
+                   'music':draft.music_program_id, 'total_seconds':round(draft.minutes*60*24)/24,
+                   'windows':nearby})
 
 
-def status(draft, clip, assets):
-    image = assets.get(str(clip.image_id))
-    video = assets.get(str(clip.video_id))
-    image_ok = bool(image and compatible_image(draft, clip, image) and image.get('approved')
+def _status(draft, clip, assets, group=None):
+    image = assets.get(str(clip.image_id)); video = assets.get(str(clip.video_id))
+    image_ok = bool(image and compatible_image(draft,clip,image) and image.get('approved')
                     and image.get('sha256') == image.get('review_sha256'))
     if image and image.get('source') == 'base_video_cut':
-        base_state = status(draft, draft.base, assets)
-        try: frame = base_cut_frame(draft, clip)
+        base = _status(draft,draft.base,assets)
+        try: frame = group['frame'] if group else base_cut_frame(draft,clip)
         except ValueError: frame = None
-        image_ok = bool(image_ok and base_state['video_approved'] and frame is not None
-                        and image.get('base_video_sha256') == base_state['video']['sha256']
-                        and image.get('base_cut_frame') == frame)
+        image_ok = bool(image_ok and base['video_approved'] and frame is not None
+            and image.get('base_video_sha256') == base['video']['sha256']
+            and image.get('base_cut_frame') == frame)
+    if group and image and image.get('source_binding'):
+        image_ok = bool(image_ok and image['source_binding'] == group['key'] and group['source_ready'])
     if clip.continues_from:
-        previous = get_clip(draft, clip.continues_from)
-        previous_state = status(draft, previous, assets) if previous else {}
-        previous_video = previous_state.get('video')
-        image_ok = bool(image_ok and previous_state.get('video_approved') and previous_video
-                        and image.get('continuation_sha256') == previous_video['sha256'])
-    video_ok = image_ok and approved(video, signature(draft, clip, 'video', image['sha256']))
-    seams_ok = bool(video_ok and (not video.get('continuity_review_version') or
-                    video.get('reviewed_seam_binding') == seam_binding(draft, clip, assets)))
-    return {'image_approved': image_ok, 'video_approved': bool(video_ok), 'seams_approved': seams_ok,
-            'image': image, 'video': video}
+        if group:
+            source = group['source']; source_ready = group['source_ready']
+        else:
+            previous = get_clip(draft,clip.continues_from)
+            prior = status(draft,previous,assets) if previous else {}
+            source = prior.get('video') or {}; source_ready = prior.get('video_approved')
+        image_ok = bool(image_ok and source_ready and image.get('continuation_sha256') == source.get('sha256'))
+    video_ready = bool(image_ok and video and video.get('signature') == signature(draft,clip,'video',image['sha256'])
+                       and video.get('sha256') and float(video.get('seconds',0))+.05 >= clip.seconds)
+    video_ok = bool(video_ready and approved(video,signature(draft,clip,'video',image['sha256'])))
+    binding = seam_binding(draft,clip,assets,group['event_ids'] if group else None)
+    seams_ok = bool(video_ok and (not video.get('continuity_review_version') or video.get('reviewed_seam_binding') == binding))
+    return {'image_approved':image_ok, 'video_ready':video_ready, 'video_approved':video_ok,
+            'seams_approved':seams_ok, 'image':image, 'video':video}
+
+
+def status(draft, clip, assets, occurrence_id=None, _cache=None):
+    _cache={} if _cache is None else _cache
+    key=('state',str(clip.id),str(occurrence_id))
+    if key in _cache:return _cache[key]
+    if clip.id == draft.base.id:
+        result=_status(draft,clip,assets);_cache[key]=result;return result
+    groups = variant_plan(draft,clip,assets,_cache)
+    if occurrence_id:
+        groups = [g for g in groups if str(occurrence_id) in g['event_ids']]
+    if not groups: return _status(draft,clip,assets)
+    variants = []
+    for group in groups:
+        effective = occurrence_clip(draft,clip,group)
+        variants.append({**group, **_status(draft,effective,assets,group),
+                         'image_id':str(effective.image_id) if effective.image_id else None,
+                         'video_id':str(effective.video_id) if effective.video_id else None})
+    result = {**variants[0], 'variants':variants}
+    for key in ('image_approved','video_ready','video_approved','seams_approved'):
+        result[key] = all(v[key] for v in variants)
+    _cache[key]=result
+    return result
 
 
 def assemble(draft, assets, preview=False, preview_range=None):
-    used = {str(i.clip_id) for i in draft.insertions} | {str(draft.base.id)}
-    states = {str(c.id): status(draft, c, assets) for c in clips(draft) if str(c.id) in used}
-    for cid, state in states.items():
-        if preview_range and cid != str(draft.base.id):
-            left, length = preview_range
-            if not any(str(i.clip_id) == cid and round(i.minute*60*24)/24 < left+length
-                       and round(i.minute*60*24)/24 + get_clip(draft, cid).seconds > left for i in draft.insertions):
-                continue
-        clip = get_clip(draft, cid)
-        image = state.get('image'); video = state.get('video')
-        compatible = bool(state['image_approved'] and video and image and
-                          video.get('signature') == signature(draft, clip, 'video', image['sha256']))
-        if not state['video_approved'] and not (preview and compatible):
-            raise ValueError('Aprove a imagem e o vídeo de todos os trechos usados')
-        if not preview and not state['seams_approved']:
-            raise ValueError('Revise as emendas nos horários e com a música atuais; os vídeos estão preservados.')
-        if float(state['video'].get('seconds', 0)) + .05 < get_clip(draft, cid).seconds:
-            raise ValueError('Vídeo mais curto que o trecho: ajuste a duração ou gere outro')
-    segments = []
-    def append(clip, start, end, loop):
-        if end <= start:
-            return
-        asset = states[str(clip.id)]['video'] or {}
-        segments.append({'clip_id': str(clip.id), 'name': clip.name, 'start': start, 'end': end,
-                         'loop': loop, 'asset_key': asset.get('key'), 'asset_sha256': asset.get('sha256'),
-                         'source_seconds': clip.seconds})
     from .production_harness import timed_schedule
-    events = []
+    schedule = []
     for event in draft.insertions:
-        start = round(event.minute * 60 * 24) / 24
-        clip = get_clip(draft, event.clip_id)
-        events.append({'start': start, 'end': start + clip.seconds, 'action': str(clip.id)})
-    for event in timed_schedule(events, round(draft.minutes * 60 * 24) / 24):
+        start = round(event.minute*60*24)/24; item = get_clip(draft,event.clip_id)
+        schedule.append({'start':start,'end':start+item.seconds,'action':str(item.id),'occurrence_id':str(event.id)})
+    segments = [];cache={}
+    for event in timed_schedule(schedule,round(draft.minutes*60*24)/24):
         idle = event['action'] == 'typing_idle'
-        append(draft.base if idle else get_clip(draft, event['action']), event['start'], event['end'], idle)
+        item = draft.base if idle else get_clip(draft,event['action'])
+        state = status(draft,item,assets,occurrence_id=event.get('occurrence_id'),_cache=cache)
+        visible = not preview_range or (event['start']<sum(preview_range) and event['end']>preview_range[0])
+        if visible:
+            if state.get('video') and float(state['video'].get('seconds',0))+.05<item.seconds:
+                raise ValueError('Vídeo mais curto que o trecho: ajuste a duração ou gere outro')
+            if not state['video_approved'] and not (preview and state['video_ready']):
+                raise ValueError('Aprove os vídeos usados; para prévia, aguarde os vídeos das partes vizinhas')
+            if not preview and not state['seams_approved']:
+                raise ValueError('Revise as emendas nos horários e com a música atuais; os vídeos estão preservados.')
+        asset = state['video'] or {}
+        segments.append({**event,'clip_id':str(item.id),'name':item.name,'loop':idle,
+                         'asset_key':asset.get('key'),'asset_sha256':asset.get('sha256'),'source_seconds':item.seconds})
     return segments
 
 
@@ -246,12 +309,62 @@ def prompt(draft, clip, kind):
             f'Environment motion: {draft.scene_motion}. Characters: {cast}. '
             'Preserve the exact identities, proportions, clothing, setting and illustration style from references. '
             f'Action: {clip.motion}. '
+            + (f'Complete action goal, shared across continuous parts: {clip.action_goal}. ' if clip.action_goal and kind=='video' else '')
             + ('Create one starting still image for human approval, no text or watermark.' if kind == 'image' else
                f'Animate for {clip.seconds} seconds. No sound, speech, camera cut, or extra characters. '
                + ('Seamless loop: end in the exact starting pose.' if clip.id == draft.base.id else
-                  ('This is an intermediate part: end at the final action pose, the next part continues from that frame.' if any(c.continues_from == clip.id for c in draft.clips) else
+                  ('This is an intermediate part: end at the final action pose, the next part continues from that frame.' if any(c.continues_from == clip.id and any(i.clip_id == c.id for i in draft.insertions) for c in draft.clips) else
                    'Continue naturally from the supplied final frame of the previous part. End in the base pose.' if clip.continues_from else
                    f'The preceding motion is: {draft.base.motion}. '
                    'Start exactly from the supplied frame and continue that ongoing motion before beginning the requested action. '
                    'Show the entire action from its beginning; never start with the hand already on the cat or the cup already lifted. '
                    'Finish in the first pose of the base loop so it resumes naturally.'))))
+
+
+def split_durations(seconds, accepted, limit=200):
+    """Exact supported durations with the fewest clips; never pad the action."""
+    allowed=sorted({n for n in accepted if isinstance(n,int) and 2<=n<=60},reverse=True)
+    best={0:[]}
+    for total in range(1,seconds+1):
+        choices=[best[total-n]+[n] for n in allowed if total-n in best and len(best[total-n])<limit]
+        if choices:best[total]=min(choices,key=lambda p:len(p))
+    if seconds not in best:raise ValueError('Essa duração não pode ser dividida exatamente nas opções do provedor')
+    return sorted(best[seconds],reverse=True)
+
+
+def split_proposal(clip, seconds, accepted):
+    durations=split_durations(seconds,accepted)
+    parts=[]
+    for index,duration in enumerate(durations):
+        stage=('Inicie a ação a partir da atividade atual; execute somente sua preparação, sem repetir a ação completa.' if index==0 else
+               'Continue do último movimento da parte anterior, avance a ação sem reiniciá-la.')
+        if index==len(durations)-1:stage+=' Conclua a ação e retorne à pose e à atividade da base.'
+        else:stage+=' Termine em movimento compatível com a próxima parte; ainda não retorne à base.'
+        parts.append({'seconds':duration,'motion':f'Parte {index+1} de {len(durations)}. {stage}'})
+    return parts
+
+
+def apply_split(draft, clip_id, parts, accepted):
+    draft=draft.model_copy(deep=True);clip=get_clip(draft,clip_id)
+    if not clip or clip.id==draft.base.id or clip.continues_from or any(c.continues_from==clip.id for c in draft.clips):
+        raise ValueError('Escolha uma inserção ainda não dividida em partes')
+    if any(p['seconds'] not in accepted for p in parts):raise ValueError('A duração de uma parte não é aceita pelo provedor')
+    if len(draft.clips)+len(parts)-1>200:raise ValueError('O projeto ultrapassaria 200 trechos')
+    chain=[clip]
+    original_name=clip.name
+    goal=clip.action_goal or clip.motion
+    for n,part in enumerate(parts):
+        if n:
+            item=Clip(name=f'{original_name[:80]} — parte {n+1}',motion=part['motion'],seconds=part['seconds'],continues_from=chain[-1].id,action_goal=goal)
+            draft.clips.append(item);chain.append(item)
+        else:
+            clip.motion=part['motion'];clip.seconds=part['seconds'];clip.action_goal=goal
+    events=[]
+    for event in draft.insertions:
+        events.append(event)
+        if event.clip_id==clip.id:
+            cursor=round(event.minute*60*24)/24+clip.seconds
+            for item in chain[1:]:
+                events.append(Insertion(clip_id=item.id,minute=cursor/60));cursor+=item.seconds
+    draft.insertions=events
+    return Draft.model_validate(draft.model_dump())

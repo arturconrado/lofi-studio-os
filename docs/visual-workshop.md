@@ -69,3 +69,37 @@ O deploy consome toda a listagem de pg_restore antes de conferir TABLE DATA. Iss
 - Conferir backup/restauração no VPS, instalar a revisão aprovada e validar a tela. Nenhuma implantação, geração paga ou publicação foi iniciada nesta alteração.
 
 Esta alteração é uma etapa revisável do plano, não aceite integral. A autonomia administrativa permanece fora do pacote.
+
+
+## Continuação da execução — variantes, partes e fila persistente
+
+As ocorrências agora têm seleções próprias, agrupadas internamente pela fonte e
+pela coreografia. Uma ação em horários com fases diferentes recebe versões
+internas; a pessoa consulta o custo total e não duplica trechos manualmente.
+Materiais compatíveis existentes são recuperados sem nova chamada paga. Cada
+versão aparece pelos horários atendidos e tem prévias e aprovação próprias.
+
+Lotes são reservados integralmente antes do envio e persistidos como QUEUED.
+O worker do workspace reivindica cada pedido uma vez, registrando SUBMITTING
+antes da chamada externa. Fechar a página não abandona a fila. Roteiro/origem
+alterados antes do envio cancelam o pedido ainda não enviado e liberam sua
+reserva. Envios incertos não são repetidos automaticamente.
+
+A proposta para ações longas usa durações aceitas com soma exata, mantém o
+objetivo original e apresenta preparação, execução e retorno editáveis por
+parte. Aplicar apenas salva roteiro e horários consecutivos. A interpretação
+semântica das ações livres não é garantida: a proposta exige revisão antes de
+gerar. Continuação usa o vídeo disponível da parte anterior, sem depender de
+uma aprovação cuja própria prévia exigiria a continuação pronta. A montagem
+final continua exigindo todas as aprovações.
+
+A prévia da base revisa seus ciclos independentemente de inserções ainda não
+geradas. A extração de fontes e a montagem compartilham FPS/enquadramento. Cada
+fonte é baixada e normalizada uma vez por lote de quadros. Duplicação copia
+seleções por ocorrência e aprovações de pixels compatíveis, sem modificar o
+original; as emendas da cópia exigem revisão própria.
+
+O registro atualizado de contratos, testes e pendências de homologação está em
+[workshop-corrections-acceptance.md](workshop-corrections-acceptance.md).
+As limitações antigas sobre duplicação manual por fase e divisão exclusivamente
+manual foram substituídas pelo comportamento descrito nesta seção.
