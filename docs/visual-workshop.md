@@ -37,3 +37,14 @@ Antes do deploy: executar CI Linux com PostgreSQL e FFmpeg. Depois, validar um p
 ## Validação
 
 `tests/test_visual_workshop.py` cobre agenda, retorno à base, duração total, repetição de um asset em vários horários, revisão inválida, troca de contexto, isolamento e concorrência otimista na API. Um teste FFmpeg real monta azul → vermelho → azul, mede a duração e o áudio e examina quadros em tempos absolutos. `frontend/src/__tests__/workshop.test.tsx` cobre envio dos horários e bloqueios antes de salvar/aprovar. A suíte de banco exige `LOFI_TEST_DATABASE_URL` descartável.
+
+## Correções da rodada de 18/10/2026
+
+- Causa da mídia invisível: reuse limpava as referências do clipe antes de verificar sua assinatura e substituía a base mesmo quando incompatível. Agora mantém as referências, retém os arquivos e rejeita substituição incompatível sem alterar o projeto. Metadados copiados recebem o identificador do novo trecho.
+- Imagens usam assinatura visual independente de movimento/duração. Imagens antigas são reconhecidas apenas quando o digest original pode ser reproduzido com seu prompt e uma duração válida; não há aprovação indiscriminada. Vídeos continuam dependendo da coreografia e duração.
+- Visual aprovado protegido no cliente e servidor; editar visual exige opção explícita. Materiais antigos permanecem disponíveis.
+- Galeria de todos os arquivos, acesso no histórico, download e recuperação validada. Download entrega o arquivo armazenado (imagens normalizadas na importação), não um original do provedor que nunca foi armazenado.
+- Durações consultadas no catálogo; erros localizados, andamento a cada 10 segundos com página aberta e bloqueio de pedidos ativos/incertos. Fechar a página não cancela o provedor; reabrir retoma consulta. Um envio incerto sem ID do provedor ainda exige reconciliação operacional, sem retry pago automático.
+- Botão salvar fixo, duplicação sem novas compras, novo projeto/limpar formulário não salvo, cinco preajustes.
+- Parte 2 vinculada: o usuário divide as ações e revisa cada trecho. Extração local do último quadro da parte anterior aprovada, imagem revisada antes da próxima chamada, montagem nos horários consecutivos. Não há divisão semântica automática nem garantia de identidade ou continuidade perfeita pelo modelo.
+- Para recuperar o projeto de teste após implantação: selecionar novamente Movimento-base em Reaproveitar trecho salvo. O arquivo da biblioteca conserva as referências e aprovações originais. Não gerar novamente.

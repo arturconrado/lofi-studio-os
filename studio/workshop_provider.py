@@ -33,7 +33,10 @@ def quote(kind, seconds):
             else:
                 r = client.get(BASE + '/videos/models'); r.raise_for_status()
                 entry = next(e for e in r.json()['data'] if e['id'] == VIDEO_MODEL)
-                if seconds not in entry.get('supported_durations', []) or '720p' not in entry.get('supported_resolutions', []) or 'first_frame' not in entry.get('supported_frame_images', []):
+                if seconds not in entry.get('supported_durations', []):
+                    accepted = ', '.join(str(n) for n in entry.get('supported_durations', []))
+                    raise HTTPException(422, f'Este modelo aceita {accepted} segundos por clipe. Ajuste a duração; sua imagem será mantida. Nenhum envio pago foi feito.')
+                if '720p' not in entry.get('supported_resolutions', []) or 'first_frame' not in entry.get('supported_frame_images', []):
                     raise ValueError('Unsupported duration or first frame')
                 skus = entry['pricing_skus']
                 if not skus or any(not k.startswith('duration_seconds_') for k in skus): raise ValueError('Unknown units')
@@ -58,7 +61,8 @@ def complete(c, task, raw, mime, seconds=None):
     row = project(c, pid, True); draft = Draft.model_validate(row['data']); clip = get_clip(draft, p['clip_id'])
     aid, _ = store_media(c, pid, raw, p['operation'], mime,
                          {'signature': p['signature'], 'seconds': seconds, 'task_id': str(task['id']), 'clip_id': p['clip_id'],
-                          'prompt': p['prompt'], 'model': task['model']})
+                          'prompt': p['prompt'], 'model': task['model'],
+                          'visual_signature': p.get('visual_signature'), 'source_image_id': p.get('source_image_id')})
     # A slow generation must not replace a newer edit or carry an approval forward.
     attached = False
     if clip:
@@ -132,3 +136,17 @@ def refresh(tid):
                 seconds, info = measure(path, 'video')
                 if seconds + .05 < p['seconds'] or seconds > 61: raise ValueError('Unexpected video duration')
                 complete(c, t, path.read_bytes(), 'video/mp4', seconds); c.commit()
+
+
+def capabilities():
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.get(BASE + '/videos/models')
+            response.raise_for_status()
+            entry = next(e for e in response.json()['data'] if e['id'] == VIDEO_MODEL)
+            durations = sorted(int(n) for n in entry.get('supported_durations', []) if 2 <= int(n) <= 60)
+            if not durations: raise ValueError('No durations')
+            return {'model': VIDEO_MODEL, 'durations': durations,
+                    'continuation': 'first_frame' in entry.get('supported_frame_images', [])}
+    except Exception:
+        raise HTTPException(503, 'Não foi possível consultar as durações do modelo. Seus dados estão salvos; tente atualizar antes de gerar.') from None
