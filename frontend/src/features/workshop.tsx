@@ -102,6 +102,8 @@ export function Workshop({ id }: { id?: string }) {
   }, 'Revisão salva.');
   const card = (clip: Clip, base = false) => {
     const state = d?.states[clip.id];
+    const sourceApproved = clip.continues_from ? d?.states[clip.continues_from]?.video_approved : d?.states[draft.base.id]?.video_approved;
+    const scheduled = draft.insertions.some(i => i.clip_id === clip.id);
     return <section class="card stack" key={clip.id}>
       <div class="row"><h3 class="grow">{base ? '2. Vídeo-base que se repete' : clip.name}</h3><Pill tone={!dirty && state?.video_approved ? 'ok' : 'warn'}>{!dirty && state?.video_approved ? 'Aprovado' : 'Em preparação'}</Pill></div>
       <Field label="Nome do trecho"><input class="input" value={clip.name} onInput={e => editClip({ ...clip, name: e.currentTarget.value })} /></Field>
@@ -110,24 +112,23 @@ export function Workshop({ id }: { id?: string }) {
         {!capabilities.data?.durations?.includes(clip.seconds) && <option value={clip.seconds}>{clip.seconds}s — configuração anterior, consulte opções</option>}
         {capabilities.data?.durations?.map(n => <option value={n}>{n} segundos</option>)}</select><small>Durações consultadas no modelo. Alterar a duração preserva sua imagem; o vídeo precisa de nova revisão.</small>
         {capabilities.error && <button class="btn sm" onClick={capabilities.reload}>Consultar durações novamente</button>}</Field>
-      {references(clip.references, next => editClip({ ...clip, references: next }), 'Referências adicionais (opcional)')}
-      {!base && <Field label="Continua uma parte anterior"><select class="select" value={clip.continues_from || ''} onChange={e=>editClip({...clip,continues_from:e.currentTarget.value || null,image_id:null,video_id:null})}><option value="">Trecho independente</option>{draft.clips.filter(c=>c.id!==clip.id && !c.continues_from).map(c=><option value={c.id}>{c.name}</option>)}</select></Field>}
-      {clip.continues_from && <div class="notice">Gere e aprove a parte anterior. Depois extraia seu último quadro para manter a continuidade; revise o enquadramento antes de animar.
-        <button class="btn" disabled={busy || dirty || !d?.states[clip.continues_from]?.video_approved} onClick={()=>run(()=>post(`${prefix}/projects/${id}/clips/${clip.id}/continuation-image`,{request_id:uuid(),revision:d!.revision}),'Último quadro extraído sem geração paga. Confira e aprove a imagem.')}>Usar último quadro da parte anterior</button>
-      </div>}
-      <p class="faint">{base ? 'A imagem reúne cenário e personagens. Aprove antes de animar.' : 'A imagem usa o cenário e os personagens da base aprovada. Você pode somente descrever o movimento.'}</p>
-      <div class="grid cols-2">{(['image', 'video'] as const).map(kind => {
+      {base && references(clip.references, next => editClip({ ...clip, references: next }), 'Referências adicionais (opcional)')}
+      {clip.continues_from && <Field label="Parte 2 da mesma inserção"><select class="select" value={clip.continues_from} onChange={e=>editClip({...clip,continues_from:e.currentTarget.value || null,image_id:null,video_id:null})}><option value="">Iniciar a partir do vídeo-base</option>{draft.clips.filter(c=>c.id!==clip.id && !c.continues_from).map(c=><option value={c.id}>{c.name}</option>)}</select></Field>}
+      <p class="faint">{base ? 'A imagem reúne cenário e personagens. Aprove antes de animar.' : 'Esta inserção começa no quadro em que o vídeo-base parar no horário marcado. O quadro inicial é preparado automaticamente, sem gerar outra imagem.'}</p>
+      <div class="grid cols-2">{(['image', 'video'] as const).filter(kind => base || kind === 'video').map(kind => {
         const aid = kind === 'image' ? clip.image_id : clip.video_id; const asset = aid ? d?.media[aid] : undefined;
         const ok = !dirty && (kind === 'image' ? state?.image_approved : state?.video_approved); const key = clip.id + kind + asset?.sha256;
         return <div class="stack" key={kind}><h4>{kind === 'image' ? 'Imagem de partida' : 'Animação'}</h4>
           <Field label={kind === 'image' ? 'Versão da imagem' : 'Versão do vídeo'}><select class="select" value={aid || ''} onChange={e => editClip({ ...clip, [kind + '_id']: e.currentTarget.value || null, ...(kind === 'image' ? { video_id: null } : {}) })}>
             <option value="">Nenhuma selecionada</option>{Object.values(d?.media || {}).filter(a => a.kind === kind && (a.clip_id === clip.id || a.id === aid)).map((a, index) => <option value={a.id}>Versão {index + 1}{a.approved ? ' · revisada' : ''}</option>)}</select></Field>
           {asset && (kind === 'image' ? <img src={asset.url} alt={`Imagem de ${clip.name}`} style={{ width: '100%', borderRadius: '8px' }} /> : <video src={asset.url} controls preload="metadata" style={{ width: '100%' }} />)}
-          <button class="btn" disabled={!id || busy || dirty || !!pending(clip.id, kind) || (kind === 'image' && !!clip.continues_from) || (kind === 'video' && (!state?.image_approved || !capabilities.data?.durations?.includes(clip.seconds)))} onClick={() => generate(clip, kind)}>{pending(clip.id, kind) ? jobLabel(pending(clip.id, kind)!.status) : asset ? 'Gerar outra versão' : kind === 'image' ? 'Gerar imagem' : 'Gerar vídeo'}</button>
+          <button class="btn" disabled={!id || busy || dirty || !!pending(clip.id, kind) || (kind === 'video' && (!(base ? state?.image_approved : sourceApproved && scheduled) || !capabilities.data?.durations?.includes(clip.seconds)))} onClick={() => generate(clip, kind)}>{pending(clip.id, kind) ? jobLabel(pending(clip.id, kind)!.status) : asset ? 'Gerar outra versão' : kind === 'image' ? 'Gerar imagem' : 'Gerar vídeo'}</button>
           {actionKey === clip.id + kind && message && <p role="alert" class="notice warn">{message}</p>}
           {pending(clip.id, kind) && <p role="status">{pending(clip.id, kind)!.detail} · Pedido {pending(clip.id, kind)!.id.slice(0,8)} · Atualização automática a cada 10 segundos.</p>}
           {dirty && <small>Salve antes de continuar. <button class="btn sm" onClick={save}>Salvar alterações</button></small>}
-          {kind === 'video' && !state?.image_approved && <small>Aprove a imagem deste trecho para liberar a animação.</small>}
+          {kind === 'video' && base && !state?.image_approved && <small>Aprove a imagem inicial para liberar a animação da base.</small>}
+          {kind === 'video' && !base && !sourceApproved && <small>Aprove {clip.continues_from ? 'o vídeo da parte anterior' : 'o vídeo-base'} para continuar.</small>}
+          {kind === 'video' && !base && !scheduled && <small>Marque ao menos um horário para esta inserção antes de gerar.</small>}
           {kind === 'video' && !capabilities.data?.durations?.includes(clip.seconds) && <small role="alert">{capabilities.error || 'Selecione uma duração disponível no modelo. Sua imagem será mantida.'}</small>}
           {asset && <a class="btn ghost" href={asset.url + '?download=true'} download>Baixar {kind === 'image' ? 'imagem' : 'vídeo'} desta versão</a>}
           {asset && <><Pill tone={ok ? 'ok' : 'warn'}>{ok ? 'Aprovado nesta versão' : 'Revisão necessária'}</Pill>
