@@ -75,3 +75,20 @@ it('keeps edits during status refresh and saves the explicit visual edit flag', 
   const request=fetcher.mock.calls.find(c=>c[1]?.method==='PUT');
   expect(JSON.parse(String(request![1]!.body)).data.name).toBe('Saved editing');
 });
+
+it('offers insertion video directly from the approved base without a separate image request', async () => {
+  const draft=initialDraft();
+  const insertion={...draft.base,id:'insertion',name:'Carinho no gato',image_id:null,video_id:null};
+  draft.clips=[insertion]; draft.insertions=[{id:'event',clip_id:'insertion',minute:15}];
+  const detail={id:'p',revision:1,data:draft,media:{},states:{
+    [draft.base.id]:{image_approved:true,video_approved:true},
+    insertion:{image_approved:false,video_approved:false}
+  },jobs:[],library:[],music:[]};
+  vi.stubGlobal('fetch',vi.fn(async (url:string)=>new Response(JSON.stringify(url.endsWith('/capabilities')?{durations:[8]}:detail),{status:200})));
+  const view=render(<Workshop id="p" />);
+  await waitFor(()=>expect(view.queryByText('Carinho no gato')).not.toBeNull());
+  await waitFor(()=>expect(view.getAllByText('Gerar vídeo')).toHaveLength(2));
+  expect(view.getAllByText('Gerar imagem')).toHaveLength(1);
+  expect((view.getAllByText('Gerar vídeo')[1] as HTMLButtonElement).disabled).toBe(false);
+  expect(view.queryByText('Continua uma parte anterior')).toBeNull();
+});

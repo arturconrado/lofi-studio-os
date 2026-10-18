@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 import pytest
 from test_authentication import client, signup
-from studio.visual_workshop import Draft, Clip, Character, Insertion, assemble, signature, status, digest
+from studio.visual_workshop import Draft, Clip, Character, Insertion, assemble, signature, status, digest, base_cut_frame
 
 
 def fixture():
@@ -286,3 +286,93 @@ def test_continuation_cycles_are_rejected():
     d,_=fixture()
     d.clips[0].continues_from=d.clips[0].id
     with pytest.raises(ValueError): Draft.model_validate(d.model_dump())
+
+
+def test_insertion_starts_from_the_actual_base_cut_frame():
+    d, media = fixture()
+    # Each base gap starts a new loop. The frame immediately before both cuts is frame 47.
+    assert base_cut_frame(d, d.clips[0]) == 47
+    cut = media[str(d.clips[0].image_id)]
+    cut.update(source='base_video_cut', base_cut_frame=47,
+               base_video_sha256=media[str(d.base.video_id)]['sha256'])
+    assert status(d, d.clips[0], media)['image_approved']
+    d.insertions[1].minute = 19 / 60
+    with pytest.raises(ValueError, match='quadros diferentes'):
+        base_cut_frame(d, d.clips[0])
+    assert not status(d, d.clips[0], media)['image_approved']
+
+
+def test_four_quarter_hour_insertions_reuse_the_same_base_cut():
+    d, _ = fixture()
+    d.minutes = 62; d.base.seconds = d.clips[0].seconds = 8
+    d.insertions = [Insertion(clip_id=d.clips[0].id, minute=minute) for minute in (15, 30, 45, 60)]
+    assert base_cut_frame(d, d.clips[0]) == 95
+
+
+@pytest.mark.skipif(not shutil.which('ffmpeg'), reason='FFmpeg required')
+def test_base_cut_image_uses_the_last_visible_frame(tmp_path, monkeypatch):
+    import io
+    from PIL import Image
+    from studio import workshop_api as api, timeline_worker
+    source = tmp_path / 'base.mp4'
+    subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-f', 'lavfi',
+                    '-i', 'color=c=red:s=320x180:r=24:d=1', '-f', 'lavfi',
+                    '-i', 'color=c=blue:s=320x180:r=24:d=1', '-filter_complex',
+                    '[0:v][1:v]concat=n=2:v=1:a=0[v]', '-map', '[v]',
+                    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(source)], check=True)
+    monkeypatch.setattr(timeline_worker, 'fetch', lambda key, path, sha, limit: shutil.copyfile(source, path))
+    original_temporary_directory = api.tempfile.TemporaryDirectory
+    monkeypatch.setattr(api.tempfile, 'TemporaryDirectory',
+                        lambda: original_temporary_directory(dir=tmp_path))
+    raw = api.base_cut_image({'key': 'local', 'sha256': 'a'*64}, 47)
+    red, green, blue = Image.open(io.BytesIO(raw)).getpixel((100, 100))
+    assert blue > 180 and red < 60 and green < 60
+
+
+@DB
+def test_insertion_video_prepares_base_frame_without_paid_image(client, monkeypatch):
+    import io
+    import json
+    from PIL import Image
+    from psycopg import sql
+    from studio import workshop_api as api, workshop_provider as provider, financial
+    from studio.core import db
+    from studio.tenancy import schema_name
+
+    cl = client; _, identity = signup(cl)
+    cl.headers.update({'X-CSRF-Token': identity['csrf_token']})
+    channel = cl.get('/api/channels').json()[0]['id']
+    draft, media = fixture()
+    draft.clips[0].image_id = draft.clips[0].video_id = None
+    pid = uuid.uuid4()
+    with db() as c:
+        c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+        api.ensure(c)
+        c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',
+                  (pid, channel, json.dumps(draft.model_dump(mode='json'))))
+        for aid in (draft.base.image_id, draft.base.video_id):
+            c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',
+                      (aid, pid, json.dumps(media[str(aid)])))
+        c.commit()
+    class Store:
+        def put_object(self, **kwargs): pass
+    png = io.BytesIO(); Image.new('RGB', (16, 9), 'blue').save(png, 'PNG')
+    monkeypatch.setenv('S3_BUCKET', 'test')
+    monkeypatch.setattr(api, 'storage', lambda: Store())
+    monkeypatch.setattr(api, 'base_cut_image', lambda source, frame: png.getvalue())
+    monkeypatch.setattr(provider, 'quote', lambda kind, seconds: {'model': 'test', 'usd': .1, 'seconds': seconds})
+    monkeypatch.setattr(provider, 'submit', lambda task_id: None)
+    monkeypatch.setattr(financial, 'check_available', lambda c, cap: None)
+    url = f'/api/creator/workshop/projects/{pid}'
+    rejected = cl.post(url + f'/clips/{draft.clips[0].id}/generate/image', json={
+        'request_id': str(uuid.uuid4()), 'revision': 1, 'max_usd': 1, 'confirm_cost': True})
+    assert rejected.status_code == 409
+    response = cl.post(url + f'/clips/{draft.clips[0].id}/generate/video', json={
+        'request_id': str(uuid.uuid4()), 'revision': 1, 'max_usd': 1, 'confirm_cost': True})
+    assert response.status_code == 200, response.text
+    state = cl.get(url).json()
+    selected = state['media'][state['data']['clips'][0]['image_id']]
+    assert selected['source'] == 'base_video_cut'
+    assert selected['base_cut_frame'] == 47
+    assert state['states'][str(draft.clips[0].id)]['image_approved']
+    assert [job['operation'] for job in state['jobs']] == ['video']
