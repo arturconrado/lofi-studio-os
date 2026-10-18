@@ -144,6 +144,12 @@ def update(pid: uuid.UUID, body: Update):
         if row['revision'] != body.revision:
             raise HTTPException(409, 'O projeto mudou em outra janela; recarregue antes de salvar')
         media = assets(c, pid); old = Draft.model_validate(row['data'])
+        for cl in clips(old):
+            image = media.get(str(cl.image_id))
+            if image and not image.get('visual_signature') and compatible_image(old, cl, image):
+                image['visual_signature'] = signature(old, cl, 'image')
+                c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',
+                          (json.dumps(image), cl.image_id, pid))
         protected = any(status(old, cl, media)['image_approved'] for cl in clips(old))
         visual_changed = visual_context(old) != visual_context(body.data) or any(
             get_clip(body.data, cl.id) and cl.references != get_clip(body.data, cl.id).references for cl in clips(old))
@@ -331,6 +337,8 @@ def reuse(pid: uuid.UUID, lid: uuid.UUID):
     from .visual_workshop import Clip
     with db() as c:
         row = project(c, pid, True); draft = Draft.model_validate(row['data'])
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND status IN ('SUBMITTING','RUNNING','UNCERTAIN')", (KIND,str(pid))).fetchone():
+            raise HTTPException(409, 'Aguarde a geração atual antes de substituir um trecho pela biblioteca.')
         item = c.execute('SELECT * FROM visual_library WHERE id=%s AND channel_id=%s', (lid, row['channel_id'])).fetchone()
         if not item: raise HTTPException(404, 'Trecho indisponível neste canal')
         clip = Clip.model_validate(item['data']['clip']); clip.id = uuid.uuid4(); clip.name = item['name']

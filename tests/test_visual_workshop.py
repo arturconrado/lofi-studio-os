@@ -212,6 +212,9 @@ def test_reuse_library_preserves_references_and_completed_assets(client, monkeyp
     video=media[str(draft.base.video_id)]
     video.update(signature=signature(draft,draft.base,'video',image['sha256']),clip_id=str(draft.base.id))
     with db() as c:
+        from psycopg import sql
+        from studio.tenancy import schema_name
+        c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         api.ensure(c)
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',(pid,channel,json.dumps(draft.model_dump(mode='json'))))
         for aid, asset in [(ref,{'kind':'reference'}),(draft.base.image_id,image),(draft.base.video_id,video)]:
@@ -248,6 +251,9 @@ def test_approved_visual_lock_and_duration_edit(client):
     channel=cl.get('/api/channels').json()[0]['id']
     d,a=fixture();d.clips=[];d.insertions=[];pid=uuid.uuid4()
     with db() as c:
+        from psycopg import sql
+        from studio.tenancy import schema_name
+        c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         api.ensure(c)
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',(pid,channel,json.dumps(d.model_dump(mode='json'))))
         for aid in (d.base.image_id,d.base.video_id):

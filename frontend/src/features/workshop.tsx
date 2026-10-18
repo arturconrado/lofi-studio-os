@@ -34,6 +34,7 @@ export function Workshop({ id }: { id?: string }) {
   const [draft, setDraft] = useState<Draft>(initialDraft);
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
+  const editRevision = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [editVisual, setEditVisual] = useState(false);
   const [actionKey, setActionKey] = useState('');
@@ -61,7 +62,7 @@ export function Workshop({ id }: { id?: string }) {
   }, [id, d, busy, dirty]);
 
   useEffect(() => { if (d && !dirtyRef.current) setDraft(d.data); }, [d]);
-  const change = (value: Draft) => { dirtyRef.current = true; setDraft(value); setDirty(true); setReviewed({}); };
+  const change = (value: Draft) => { if (!dirtyRef.current) editRevision.current = d?.revision ?? null; dirtyRef.current = true; setDraft(value); setDirty(true); setReviewed({}); };
   const field = (key: keyof Draft, value: any) => change({ ...draft, [key]: value });
   const editClip = (clip: Clip) => change(clip.id === draft.base.id ? { ...draft, base: clip } : { ...draft, clips: draft.clips.map(c => c.id === clip.id ? clip : c) });
   const run = async (fn: () => Promise<any>, success = '') => {
@@ -72,7 +73,7 @@ export function Workshop({ id }: { id?: string }) {
     finally { setBusy(false); }
   };
   const save = () => run(async () => {
-    if (id && d) { await put(`${prefix}/projects/${id}`, { revision: d.revision, data: draft, edit_visual: editVisual }); dirtyRef.current = false; setDirty(false); setEditVisual(false); }
+    if (id && d) { await put(`${prefix}/projects/${id}`, { revision: editRevision.current ?? d.revision, data: draft, edit_visual: editVisual }); dirtyRef.current = false; editRevision.current = null; setDirty(false); setEditVisual(false); }
     else { const r = await post(`${prefix}/projects`, { channel_id: channel.value?.id, data: draft }); navigate('/criar-video/' + r.id); }
   }, 'Projeto salvo. Aprovações anteriores só valem para materiais compatíveis.');
   const upload = async (file: File | undefined, apply: (aid: string) => void) => {
