@@ -11,7 +11,7 @@ from pydantic import Field
 from PIL import Image
 from .core import db, storage, audit, ensure_once
 from .channels import profile
-from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble
+from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context
 
 router = APIRouter(prefix='/workshop')
 KIND = 'visual_workshop_v1'
@@ -64,6 +64,8 @@ def task(c, tid, pid):
 def public_task(t):
     p = t['payload']
     return {'id': str(t['id']), 'status': t['status'], 'detail': t.get('detail'),
+            'created_at': t.get('created_at'), 'asset_id': p.get('asset_id'),
+            'asset_url': f'/api/creator/workshop/projects/{p["project_id"]}/media/{p["asset_id"]}' if p.get('asset_id') else None,
             'operation': p['operation'], 'clip_id': p.get('clip_id'), 'reserved_usd': t['reserved_cost'],
             'report': p.get('report'), 'approved': p.get('approved', False),
             'url': f'/api/creator/workshop/projects/{p["project_id"]}/renders/{t["id"]}' if p.get('video_key') else None}
@@ -88,6 +90,7 @@ class Create(Strict):
 
 
 class Update(Strict):
+    edit_visual: bool = False
     revision: int
     data: Draft
 
@@ -140,7 +143,19 @@ def update(pid: uuid.UUID, body: Update):
         row = project(c, pid, True)
         if row['revision'] != body.revision:
             raise HTTPException(409, 'O projeto mudou em outra janela; recarregue antes de salvar')
-        validate_refs(body.data, assets(c, pid)); save(c, row, body.data)
+        media = assets(c, pid); old = Draft.model_validate(row['data'])
+        for cl in clips(old):
+            image = media.get(str(cl.image_id))
+            if image and not image.get('visual_signature') and compatible_image(old, cl, image):
+                image['visual_signature'] = signature(old, cl, 'image')
+                c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',
+                          (json.dumps(image), cl.image_id, pid))
+        protected = any(status(old, cl, media)['image_approved'] for cl in clips(old))
+        visual_changed = visual_context(old) != visual_context(body.data) or any(
+            get_clip(body.data, cl.id) and cl.references != get_clip(body.data, cl.id).references for cl in clips(old))
+        if protected and visual_changed and not body.edit_visual:
+            raise HTTPException(409, 'Visual protegido. Use Editar visual para criar uma nova versão; seus arquivos aprovados serão preservados.')
+        validate_refs(body.data, media); save(c, row, body.data)
         audit(c, 'VISUAL_PROJECT_EDITED', str(pid)); c.commit()
     return {'saved': True}
 
@@ -194,13 +209,14 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
         media = assets(c, pid); aid = getattr(clip, kind + '_id'); asset = media.get(str(aid))
         image = media.get(str(clip.image_id))
         expected = signature(draft, clip, kind, image['sha256'] if kind == 'video' and image else None)
-        if not asset or asset['sha256'] != body.sha256 or asset.get('signature') != expected:
+        if not asset or asset['sha256'] != body.sha256 or not (compatible_image(draft, clip, asset) if kind == 'image' else asset.get('signature') == expected):
             raise HTTPException(409, 'Material mudou; gere ou selecione uma versão compatível')
         if body.approve:
             if not body.confirm_identity or (kind == 'video' and not body.confirm_motion_and_return):
                 raise HTTPException(422, 'Confira a identidade e, no vídeo, o movimento e a volta à base')
             if kind == 'video' and not status(draft, clip, media)['image_approved']:
                 raise HTTPException(409, 'Aprove primeiro a imagem')
+        if kind == 'image': asset['visual_signature'] = signature(draft, clip, 'image')
         asset.update(approved=body.approve, review_sha256=body.sha256, review_note=body.note)
         c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s', (json.dumps(asset), aid, pid))
         audit(c, 'VISUAL_MEDIA_REVIEWED', str(aid), 'approved' if body.approve else 'changes_requested'); c.commit()
@@ -249,6 +265,8 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], bo
         if row['revision'] != body.revision: raise HTTPException(409, 'Salve e confira a versão atual')
         draft = Draft.model_validate(row['data']); clip = get_clip(draft, cid); media = assets(c, pid)
         if not clip: raise HTTPException(404, 'Trecho não encontrado')
+        if kind == 'image' and clip.continues_from:
+            raise HTTPException(409, 'Use o último quadro da parte anterior para preparar esta imagem sem nova geração paga.')
         pending = c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'clip_id'=%s AND payload->>'operation'=%s AND status IN ('SUBMITTING','RUNNING','UNCERTAIN')", (KIND, str(pid), str(cid), kind)).fetchone()
         if pending: raise HTTPException(409, 'Este trecho já tem um pedido pendente. Consulte o andamento; envios incertos precisam de reconciliação antes de outra geração.')
         refs = [*draft.scene_references, *(r for ch in draft.characters for r in ch.references), *clip.references]
@@ -265,6 +283,8 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], bo
         payload = {'project_id': str(pid), 'clip_id': str(cid), 'operation': kind,
                    'signature': signature(draft, clip, kind, image['sha256'] if kind == 'video' else None),
                    'prompt': prompt(draft, clip, kind), 'seconds': clip.seconds,
+                   'visual_signature': signature(draft, clip, 'image'),
+                   'source_image_id': str(clip.image_id) if clip.image_id else None,
                    'references': [{'key': a['key'], 'sha256': a['sha256'], 'mime': a['mime']} for a in selected]}
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'SUBMITTING','Envio único; sem repetição automática')",
                   (body.request_id, KIND, q['model'], json.dumps(payload), q['usd']))
@@ -283,12 +303,16 @@ def refresh(pid: uuid.UUID, tid: uuid.UUID):
 
 
 @router.get('/projects/{pid}/media/{aid}')
-def media(pid: uuid.UUID, aid: uuid.UUID, request: Request):
+def media(pid: uuid.UUID, aid: uuid.UUID, request: Request, download: bool = False):
     from .miniobs import media as stream
     with db() as c:
         project(c, pid); a = assets(c, pid).get(str(aid))
     if not a: raise HTTPException(404, 'Arquivo não encontrado')
-    return stream(request, a['key'], a['mime'])
+    response = stream(request, a['key'], a['mime'])
+    if download:
+        ext = 'png' if a['kind'] in ('image', 'reference') else 'mp4'
+        response.headers['Content-Disposition'] = f'attachment; filename="lofi-{aid}.{ext}"'
+    return response
 
 
 class LibraryName(Strict):
@@ -313,18 +337,27 @@ def reuse(pid: uuid.UUID, lid: uuid.UUID):
     from .visual_workshop import Clip
     with db() as c:
         row = project(c, pid, True); draft = Draft.model_validate(row['data'])
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND status IN ('SUBMITTING','RUNNING','UNCERTAIN')", (KIND,str(pid))).fetchone():
+            raise HTTPException(409, 'Aguarde a geração atual antes de substituir um trecho pela biblioteca.')
         item = c.execute('SELECT * FROM visual_library WHERE id=%s AND channel_id=%s', (lid, row['channel_id'])).fetchone()
         if not item: raise HTTPException(404, 'Trecho indisponível neste canal')
         clip = Clip.model_validate(item['data']['clip']); clip.id = uuid.uuid4(); clip.name = item['name']
-        # A different context reuses the brief, never silently carries approval of different pixels.
-        clip.references = []; clip.image_id = None; clip.video_id = None
+        media = assets(c, pid)
+        references_available = all(str(r) in media and media[str(r)]['kind'] == 'reference' for r in clip.references)
+        clip.image_id = None; clip.video_id = None
         if item['data'].get('is_base'): draft.base = clip
-        compatible = item['data']['image']['signature'] == signature(draft, clip, 'image')
+        compatible = references_available and compatible_image(draft, clip, item['data']['image'])
         if compatible:
             for kind in ('image', 'video'):
                 aid = uuid.uuid4(); a = {k: v for k, v in item['data'][kind].items() if k not in ('id', 'url')}
+                a['clip_id'] = str(clip.id)
+                if kind == 'image': a['visual_signature'] = signature(draft, clip, 'image')
                 c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)', (aid, pid, json.dumps(a)))
                 setattr(clip, kind + '_id', aid)
+        elif item['data'].get('is_base'):
+            raise HTTPException(409, 'O visual da biblioteca é diferente deste projeto. A base atual foi preservada. Duplique o projeto de origem para reaproveitar cenário e referências.')
+        else:
+            clip.references = [r for r in clip.references if str(r) in media]
         if not item['data'].get('is_base'): draft.clips.append(clip)
         draft = Draft.model_validate(draft.model_dump()); save(c, row, draft); c.commit()
     return {'reused_media': compatible, 'requires_generation': not compatible}
@@ -407,3 +440,107 @@ def review_render(pid: uuid.UUID, tid: uuid.UUID, body: Review):
         p.update(approved=body.approve, review_sha256=body.sha256, review_note=body.note)
         c.execute('UPDATE factory_tasks SET payload=%s WHERE id=%s', (json.dumps(p), tid)); c.commit()
     return {'approved': body.approve}
+
+
+@router.get('/capabilities')
+def capabilities():
+    from .workshop_provider import capabilities as available
+    return available()
+
+
+@router.post('/projects/{pid}/duplicate')
+def duplicate(pid: uuid.UUID):
+    ready()
+    with db() as c:
+        row = project(c, pid)
+        new_id = uuid.uuid4()
+        original = Draft.model_validate(row['data'])
+        draft = original.model_copy(deep=True)
+        draft.name = (draft.name[:105] + ' — cópia')
+        c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',
+                  (new_id, row['channel_id'], json.dumps(draft.model_dump(mode='json'))))
+        # Copy immutable metadata; object bytes stay shared, no new provider call.
+        mapping = {}
+        media = assets(c, pid)
+        for aid in media: mapping[aid] = str(uuid.uuid4())
+        for clip in clips(draft):
+            clip.references = [uuid.UUID(mapping[str(r)]) for r in clip.references]
+            for kind in ('image', 'video'):
+                aid = getattr(clip, kind + '_id')
+                if aid: setattr(clip, kind + '_id', uuid.UUID(mapping[str(aid)]))
+        draft.scene_references = [uuid.UUID(mapping[str(r)]) for r in draft.scene_references]
+        for ch in draft.characters: ch.references = [uuid.UUID(mapping[str(r)]) for r in ch.references]
+        for aid, asset in media.items():
+            data = {k: v for k, v in asset.items() if k not in ('id', 'url')}
+            # A copied project retains files, but requires explicit new review.
+            data['approved'] = False
+            old_clip = next((cl for cl in clips(original) if str(cl.image_id) == aid or str(cl.video_id) == aid), None)
+            if old_clip:
+                new_clip = get_clip(draft, old_clip.id)
+                if data['kind'] == 'image' and compatible_image(original, old_clip, asset):
+                    data['signature'] = signature(draft, new_clip, 'image')
+                    data['visual_signature'] = data['signature']
+                elif data['kind'] == 'video':
+                    old_image = media.get(str(old_clip.image_id))
+                    if old_image and asset.get('signature') == signature(original, old_clip, 'video', old_image['sha256']):
+                        data['signature'] = signature(draft, new_clip, 'video', old_image['sha256'])
+            data.pop('review_sha256', None)
+            if data.get('source_image_id') in mapping: data['source_image_id'] = mapping[data['source_image_id']]
+            c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)', (mapping[aid], new_id, json.dumps(data)))
+        c.execute('UPDATE visual_projects SET data=%s WHERE id=%s', (json.dumps(draft.model_dump(mode='json')), new_id))
+        audit(c, 'VISUAL_PROJECT_DUPLICATED', str(new_id)); c.commit()
+    return {'id': str(new_id)}
+
+
+class Recover(Strict):
+    revision: int
+    asset_id: uuid.UUID
+
+
+@router.post('/projects/{pid}/clips/{cid}/recover')
+def recover(pid: uuid.UUID, cid: uuid.UUID, body: Recover):
+    with db() as c:
+        row = project(c, pid, True)
+        if row['revision'] != body.revision: raise HTTPException(409, 'O projeto mudou. Atualize antes de recuperar.')
+        draft = Draft.model_validate(row['data']); clip = get_clip(draft, cid)
+        media = assets(c, pid); asset = media.get(str(body.asset_id))
+        if not clip or not asset or asset['kind'] not in ('image', 'video'):
+            raise HTTPException(404, 'Material não encontrado neste projeto')
+        if asset['kind'] == 'image':
+            if not compatible_image(draft, clip, asset):
+                raise HTTPException(409, 'Esta imagem pertence a outro visual. Baixe o arquivo e use como referência em uma nova versão.')
+            clip.image_id = body.asset_id
+        else:
+            image = media.get(str(clip.image_id))
+            if not image or asset['signature'] != signature(draft, clip, 'video', image['sha256']):
+                raise HTTPException(409, 'Selecione primeiro a imagem de origem e mantenha os movimentos e duração usados neste vídeo.')
+            clip.video_id = body.asset_id
+        save(c, row, draft); audit(c, 'VISUAL_MEDIA_RECOVERED', str(body.asset_id)); c.commit()
+    return {'recovered': True}
+
+
+@router.post('/projects/{pid}/clips/{cid}/continuation-image')
+def continuation_image(pid: uuid.UUID, cid: uuid.UUID, body: Render):
+    import subprocess
+    from .timeline_worker import fetch
+    with db() as c:
+        row = project(c, pid, True)
+        if row['revision'] != body.revision: raise HTTPException(409, 'Salve e atualize antes de preparar a continuidade.')
+        draft = Draft.model_validate(row['data']); clip = get_clip(draft, cid)
+        if not clip or not clip.continues_from: raise HTTPException(409, 'Escolha a parte anterior.')
+        previous = get_clip(draft, clip.continues_from)
+        state = status(draft, previous, assets(c, pid))
+        if not state['video_approved']: raise HTTPException(409, 'Aprove o vídeo da parte anterior antes de continuar.')
+        source = state['video']
+        with tempfile.TemporaryDirectory() as folder:
+            video = Path(folder) / 'previous.mp4'; frame = Path(folder) / 'last.png'
+            fetch(source['key'], video, source['sha256'], 64 * 1024**2)
+            subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-sseof','-0.05','-i',str(video),
+                            '-frames:v','1',str(frame)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=60)
+            raw = image_bytes(frame.read_bytes())
+        aid, _ = store_media(c, pid, raw, 'image', 'image/png', {
+            'signature':signature(draft,clip,'image'),'clip_id':str(clip.id),
+            'continuation_sha256':source['sha256'],'model':'local_final_frame'})
+        clip.image_id=aid;clip.video_id=None
+        save(c,row,draft);audit(c,'VISUAL_CONTINUATION_PREPARED',str(aid));c.commit()
+    return {'prepared':True, 'paid_calls':0}

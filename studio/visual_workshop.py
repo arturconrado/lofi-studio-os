@@ -25,6 +25,7 @@ class Clip(Strict):
     motion: str = Field(min_length=1, max_length=3000)
     seconds: int = Field(default=8, ge=2, le=60)
     references: list[uuid.UUID] = Field(default_factory=list, max_length=4)
+    continues_from: uuid.UUID | None = None
     image_id: uuid.UUID | None = None
     video_id: uuid.UUID | None = None
 
@@ -55,6 +56,15 @@ class Draft(Strict):
             raise ValueError('Cada trecho deve ter um identificador único')
         if len({i.id for i in self.insertions}) != len(self.insertions):
             raise ValueError('Inserção repetida')
+        for clip in self.clips:
+            if clip.continues_from and (str(clip.continues_from) not in clips or clip.continues_from == clip.id):
+                raise ValueError('Escolha uma parte anterior válida')
+            seen = {clip.id}
+            previous = clip
+            while previous.continues_from:
+                if previous.continues_from in seen: raise ValueError('As partes não podem formar um ciclo')
+                seen.add(previous.continues_from)
+                previous = clips[str(previous.continues_from)]
         end = 0
         for event in sorted(self.insertions, key=lambda e: e.minute):
             clip = clips.get(str(event.clip_id))
@@ -83,11 +93,45 @@ def context(draft):
             ('theme', 'scene', 'scene_motion', 'scene_references', 'characters')}
 
 
-def signature(draft, clip, kind, image_sha=None):
+def legacy_signature(draft, clip, kind, image_sha=None):
     return digest({'context': context(draft), 'motion': clip.motion, 'seconds': clip.seconds,
                    'references': [str(r) for r in clip.references], 'base': clip.id == draft.base.id,
                    'base_image_id': str(draft.base.image_id) if clip.id != draft.base.id else None,
                    'kind': kind, 'image_sha': image_sha})
+
+
+def visual_context(draft):
+    return {k: v for k, v in context(draft).items() if k != 'scene_motion'}
+
+
+def signature(draft, clip, kind, image_sha=None):
+    if kind == 'video':
+        original = legacy_signature(draft, clip, kind, image_sha)
+        following = sorted(str(c.id) for c in draft.clips if c.continues_from == clip.id)
+        if clip.continues_from or following:
+            return digest({'video': original, 'previous': clip.continues_from, 'following': following})
+        return original
+    return digest({'version': 2, 'visual': visual_context(draft),
+                   'references': [str(r) for r in clip.references],
+                   'base': clip.id == draft.base.id,
+                   'base_image_id': str(draft.base.image_id) if clip.id != draft.base.id else None})
+
+
+def compatible_image(draft, clip, asset):
+    if asset.get('signature') == signature(draft, clip, 'image'):
+        return True
+    if asset.get('visual_signature'):
+        return asset['visual_signature'] == signature(draft, clip, 'image')
+    # Recover old stills by reproducing their exact original digest, never by label.
+    text = asset.get('prompt', '')
+    marker = ' Action: '
+    suffix = '. Create one starting still image for human approval, no text or watermark.'
+    if marker not in text or not text.endswith(suffix):
+        return False
+    candidate = clip.model_copy(deep=True)
+    candidate.motion = text.rsplit(marker, 1)[1][:-len(suffix)]
+    return any(asset.get('signature') == legacy_signature(draft, candidate.model_copy(update={'seconds': n}), 'image')
+               for n in range(2, 61))
 
 
 def approved(asset, expected):
@@ -98,7 +142,14 @@ def approved(asset, expected):
 def status(draft, clip, assets):
     image = assets.get(str(clip.image_id))
     video = assets.get(str(clip.video_id))
-    image_ok = approved(image, signature(draft, clip, 'image'))
+    image_ok = bool(image and compatible_image(draft, clip, image) and image.get('approved')
+                    and image.get('sha256') == image.get('review_sha256'))
+    if clip.continues_from:
+        previous = get_clip(draft, clip.continues_from)
+        previous_state = status(draft, previous, assets) if previous else {}
+        previous_video = previous_state.get('video')
+        image_ok = bool(image_ok and previous_state.get('video_approved') and previous_video
+                        and image.get('continuation_sha256') == previous_video['sha256'])
     video_ok = image_ok and approved(video, signature(draft, clip, 'video', image['sha256']))
     return {'image_approved': image_ok, 'video_approved': bool(video_ok),
             'image': image, 'video': video}
@@ -140,4 +191,6 @@ def prompt(draft, clip, kind):
             + ('Create one starting still image for human approval, no text or watermark.' if kind == 'image' else
                f'Animate for {clip.seconds} seconds. No sound, speech, camera cut, or extra characters. '
                + ('Seamless loop: end in the exact starting pose.' if clip.id == draft.base.id else
-                  'Start and end in the base pose so the base animation resumes naturally.')))
+                  ('This is an intermediate part: end at the final action pose, the next part continues from that frame.' if any(c.continues_from == clip.id for c in draft.clips) else
+                   'Continue naturally from the supplied final frame of the previous part. End in the base pose.' if clip.continues_from else
+                   'Start and end in the base pose so the base animation resumes naturally.'))))

@@ -164,8 +164,125 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
     response=cl.post(url+'/render',json=request);assert response.status_code==200,response.text
     assert cl.post(url+'/render',json=request).json()['id']==response.json()['id']
     state=cl.get(url).json();state['data']['theme']='Different room'
-    assert cl.put(url,json={'revision':state['revision'],'data':state['data']}).status_code==200
+    assert cl.put(url,json={'revision':state['revision'],'data':state['data'],'edit_visual':True}).status_code==200
     assert cl.post(url+'/render',json={'request_id':str(uuid.uuid4()),'revision':state['revision']+1}).status_code==409
     cl.cookies.clear();cl.headers.pop('X-CSRF-Token',None)
     signup(cl)
     assert cl.get(url).status_code==404
+
+
+def test_duration_and_choreography_preserve_approved_image_only():
+    d, a = fixture()
+    d.base.seconds = 8
+    d.base.motion = 'Different animation'
+    d.scene_motion = 'Faster rain'
+    state = status(d, d.base, a)
+    assert state['image_approved']
+    assert not state['video_approved']
+    d.characters[0].description = 'Different person'
+    assert not status(d, d.base, a)['image_approved']
+
+
+def test_legacy_image_recovery_proves_original_context():
+    from studio.visual_workshop import legacy_signature, prompt
+    d, a = fixture()
+    asset = a[str(d.base.image_id)]
+    asset.update(signature=legacy_signature(d, d.base, 'image'), prompt=prompt(d, d.base, 'image'))
+    d.base.seconds = 8
+    d.base.motion = 'Changed movement and duration'
+    assert status(d, d.base, a)['image_approved']
+    d.scene = 'Another room'
+    assert not status(d, d.base, a)['image_approved']
+
+
+@DB
+def test_reuse_library_preserves_references_and_completed_assets(client, monkeypatch):
+    from studio import workshop_api as api
+    from studio.core import db
+    from studio.visual_workshop import legacy_signature, prompt
+    import json
+    cl=client;_,identity=signup(cl);cl.headers.update({'X-CSRF-Token':identity['csrf_token']})
+    channel=cl.get('/api/channels').json()[0]['id']
+    draft, media=fixture()
+    draft.clips=[];draft.insertions=[]
+    pid=uuid.uuid4();ref=uuid.uuid4()
+    draft.base.references=[ref]
+    image=media[str(draft.base.image_id)]
+    image.update(signature=legacy_signature(draft,draft.base,'image'),prompt=prompt(draft,draft.base,'image'),clip_id=str(draft.base.id))
+    video=media[str(draft.base.video_id)]
+    video.update(signature=signature(draft,draft.base,'video',image['sha256']),clip_id=str(draft.base.id))
+    with db() as c:
+        from psycopg import sql
+        from studio.tenancy import schema_name
+        c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+        api.ensure(c)
+        c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',(pid,channel,json.dumps(draft.model_dump(mode='json'))))
+        for aid, asset in [(ref,{'kind':'reference'}),(draft.base.image_id,image),(draft.base.video_id,video)]:
+            c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,pid,json.dumps(asset)))
+        c.commit()
+    url=f'/api/creator/workshop/projects/{pid}'
+    assert cl.post(url+f'/clips/{draft.base.id}/library',json={'name':'Saved base'}).status_code==200
+    state=cl.get(url).json(); lid=state['library'][0]['id']
+    # Reproduce the old bug: a replacement base with no references or selection.
+    state['data']['base'].update(id=str(uuid.uuid4()),references=[],image_id=None,video_id=None)
+    assert cl.put(url,json={'revision':state['revision'],'data':state['data'],'edit_visual':True}).status_code==200
+    r=cl.post(url+f'/library/{lid}')
+    assert r.status_code==200,r.text
+    assert r.json()['reused_media']
+    result=cl.get(url).json();base=result['data']['base']
+    assert base['references']==[str(ref)]
+    assert result['states'][base['id']]['video_approved']
+    assert result['media'][base['image_id']]['clip_id']==base['id']
+    assert result['media'][base['video_id']]['clip_id']==base['id']
+    # A different visual must not replace the current base with an empty one.
+    result['data']['scene']='Another room'
+    assert cl.put(url,json={'revision':result['revision'],'data':result['data'],'edit_visual':True}).status_code==200
+    before=cl.get(url).json()['data']
+    assert cl.post(url+f'/library/{lid}').status_code==409
+    assert cl.get(url).json()['data']==before
+
+
+@DB
+def test_approved_visual_lock_and_duration_edit(client):
+    from studio import workshop_api as api
+    from studio.core import db
+    import json
+    cl=client;_,identity=signup(cl);cl.headers.update({'X-CSRF-Token':identity['csrf_token']})
+    channel=cl.get('/api/channels').json()[0]['id']
+    d,a=fixture();d.clips=[];d.insertions=[];pid=uuid.uuid4()
+    with db() as c:
+        from psycopg import sql
+        from studio.tenancy import schema_name
+        c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+        api.ensure(c)
+        c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',(pid,channel,json.dumps(d.model_dump(mode='json'))))
+        for aid in (d.base.image_id,d.base.video_id):
+            c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,pid,json.dumps(a[str(aid)])))
+        c.commit()
+    url=f'/api/creator/workshop/projects/{pid}'
+    state=cl.get(url).json();state['data']['base']['seconds']=8
+    assert cl.put(url,json={'revision':state['revision'],'data':state['data']}).status_code==200
+    state=cl.get(url).json()
+    assert state['states'][str(d.base.id)]['image_approved']
+    state['data']['scene']='Other'
+    assert cl.put(url,json={'revision':state['revision'],'data':state['data']}).status_code==409
+
+
+def test_continuation_requires_reviewed_previous_video_and_matching_last_frame():
+    d,a=fixture()
+    second=Clip(name='Part 2',motion='Continue',continues_from=d.clips[0].id)
+    d.clips.append(second)
+    a[str(d.clips[0].video_id)]['signature']=signature(d,d.clips[0],'video',a[str(d.clips[0].image_id)]['sha256'])
+    second.image_id=uuid.uuid4()
+    a[str(second.image_id)]={'kind':'image','signature':signature(d,second,'image'),
+        'sha256':'e'*64,'review_sha256':'e'*64,'approved':True,
+        'continuation_sha256':a[str(d.clips[0].video_id)]['sha256']}
+    assert status(d,second,a)['image_approved']
+    a[str(d.clips[0].video_id)]['approved']=False
+    assert not status(d,second,a)['image_approved']
+
+
+def test_continuation_cycles_are_rejected():
+    d,_=fixture()
+    d.clips[0].continues_from=d.clips[0].id
+    with pytest.raises(ValueError): Draft.model_validate(d.model_dump())

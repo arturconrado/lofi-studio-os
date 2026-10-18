@@ -40,3 +40,38 @@ describe('visual workshop', () => {
     expect((view.getByText('Montar vídeo completo') as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+
+it('shows active generation beside the action, prevents another request and exposes preserved media', async () => {
+  const draft=initialDraft(); draft.base.image_id='image';
+  const detail={id:'p',revision:1,data:draft,media:{
+    image:{id:'image',kind:'image',url:'/image',sha256:'a',approved:true,clip_id:draft.base.id},
+    orphan:{id:'orphan',kind:'video',url:'/old-video',sha256:'b',approved:true,clip_id:'replaced-clip'}
+  },states:{[draft.base.id]:{image_approved:true,video_approved:false}},jobs:[
+    {id:'job-123456',clip_id:draft.base.id,status:'RUNNING',operation:'video',detail:'Animando trecho'}
+  ],library:[],music:[]};
+  const fetcher=vi.fn(async (url:string) => new Response(JSON.stringify(url.endsWith('/capabilities') ? {durations:[4,6,8]} : detail),{status:200}));
+  vi.stubGlobal('fetch',fetcher);
+  const view=render(<Workshop id="p" />);
+  await waitFor(()=>expect(view.queryByText('Gerando')).not.toBeNull());
+  expect((view.getByText('Gerando') as HTMLButtonElement).disabled).toBe(true);
+  expect((view.getByLabelText('Cenário e estilo visual') as HTMLTextAreaElement).disabled).toBe(true);
+  expect((view.getByLabelText(/Duração deste trecho/) as HTMLSelectElement).disabled).toBe(false);
+  expect(view.getByText('Baixar vídeo revisado').getAttribute('href')).toBe('/old-video?download=true');
+  expect(fetcher.mock.calls.some(c=>c[0].includes('/generate/'))).toBe(false);
+});
+
+it('keeps edits during status refresh and saves the explicit visual edit flag', async () => {
+  const draft=initialDraft();
+  const detail={id:'p',revision:1,data:draft,media:{},states:{},jobs:[],library:[],music:[]};
+  const fetcher=vi.fn(async (url:string,_init?:RequestInit) => new Response(JSON.stringify(url.endsWith('/capabilities')?{durations:[8]}:detail),{status:200}));
+  vi.stubGlobal('fetch',fetcher);
+  const view=render(<Workshop id="p" />);
+  await waitFor(()=>expect(view.queryByText('Salvar projeto')).not.toBeNull());
+  fireEvent.input(view.getByLabelText('Nome do projeto'),{target:{value:'Saved editing'}});
+  await waitFor(()=>expect((view.getByLabelText('Nome do projeto') as HTMLInputElement).value).toBe('Saved editing'));
+  fireEvent.click(view.getByText('Salvar projeto'));
+  await waitFor(()=>expect(fetcher.mock.calls.some(c=>c[1]?.method==='PUT')).toBe(true));
+  const request=fetcher.mock.calls.find(c=>c[1]?.method==='PUT');
+  expect(JSON.parse(String(request![1]!.body)).data.name).toBe('Saved editing');
+});
