@@ -49,3 +49,57 @@ Antes do deploy: executar CI Linux com PostgreSQL e FFmpeg. Depois, validar um p
 - Parte 2 vinculada: o usuário divide as ações e revisa cada vídeo. O último quadro da parte anterior aprovada é extraído localmente quando a animação seguinte é solicitada; a montagem usa horários consecutivos. Não há divisão semântica automática nem garantia de identidade ou continuidade perfeita pelo modelo.
 - As inserções novas partem do quadro do vídeo-base no horário programado. O quadro é extraído localmente, sem chamada paga de imagem nem aprovação separada. O vídeo gerado ainda exige aprovação. Se o mesmo trecho for programado em horários que cortam a base em quadros diferentes, a geração pede trechos distintos para preservar a continuidade; nenhuma chamada paga é feita nesse caso.
 - Para recuperar o projeto de teste após implantação: selecionar novamente Movimento-base em Reaproveitar trecho salvo. O arquivo da biblioteca conserva as referências e aprovações originais. Não gerar novamente.
+
+
+## Integração compartilhada e prévias das emendas — 18/10/2026
+
+O Criar vídeo e o editor usam `production_harness.timed_schedule` para preencher os intervalos. `workshop_plan` adapta os assets preservados para o contrato do compositor, sem inventar evidência de qualidade. O worker chama `timeline_compositor.render` tanto para o completo quanto para janelas de `timeline_preview.clip`: mesma transição, ciclo, relógio e áudio. A fase local de cada intervalo da base continua reiniciando após uma inserção, preservando o contrato de retorno à pose inicial e a extração já usada pelo projeto. O preview mantém o deslocamento do clipe ao recortar uma janela.
+
+Cada vídeo novo exige uma prévia concluída em todos os seus horários antes da aprovação. Cada janela contém dois segundos antes, a ação inteira e dois segundos depois, limitada pelas bordas do programa. A base tem uma prévia com dois ciclos para revisar sua emenda. O servidor vincula a revisão às fontes e à música efetivamente usadas. Alterar a agenda ou a trilha mantém os pixels e pede revisão das emendas afetadas. Alterar um clipe distante não revoga a revisão de outro. Aprovações legadas permanecem preservadas; a homologação do projeto real ainda deve revisá-las.
+
+Preajuste Base tranquila edita o movimento da única base; não adiciona inserção. A tela recolhe rascunhos não agendados, preajustes e galeria, conserva o conteúdo, ordena horários e aceita mm:ss. A montagem fica bloqueada quando faltam aprovações ou já existe um pedido ativo.
+
+O deploy consome toda a listagem de pg_restore antes de conferir TABLE DATA. Isso elimina o encerramento precoce de grep -q que, com pipefail, pode produzir backup ilegível por SIGPIPE. Erro real de pg_restore ou ausência de dados continua bloqueando o deploy. A imagem registra a revisão recebida e a checagem dos três serviços confirma esse identificador. A causa no VPS deve ser confrontada com seus logs; uma restauração real e a revisão instalada não foram verificadas nesta alteração.
+
+### Pendências para encerrar o plano consolidado
+
+- Homologar as quatro emendas com a menina, gato, cenário e trilha do projeto `546e25bd-bcc2-4d9c-98a4-272afad79acb`, e renderizar o completo de 62 minutos e outro de duração diferente. Os testes de cores e durações não provam continuidade artística.
+- O catálogo atual de Veo 3.1 Lite aceita primeiro e último quadro: quando disponível na cotação, o retorno usa o primeiro quadro extraído da base aprovada; a base usa sua imagem inicial nas duas extremidades. Partes intermediárias não são forçadas a voltar antes de concluir a ação. Isso reforça as poses de entrada/saída, mas não transmite uma trajetória de movimento; contexto temporal real permanece pendente. Contratos: https://openrouter.ai/docs/api/api-reference/video-generation/create-videos e https://openrouter.ai/docs/api/api-reference/video-generation/list-videos-models.
+- A geração ainda bloqueia reuso entre fases diferentes em vez de preparar variantes automaticamente. Divisão semântica de ação longa e geração em lote com orçamento consolidado também continuam pendentes.
+- Conferir backup/restauração no VPS, instalar a revisão aprovada e validar a tela. Nenhuma implantação, geração paga ou publicação foi iniciada nesta alteração.
+
+Esta alteração é uma etapa revisável do plano, não aceite integral. A autonomia administrativa permanece fora do pacote.
+
+
+## Continuação da execução — variantes, partes e fila persistente
+
+As ocorrências agora têm seleções próprias, agrupadas internamente pela fonte e
+pela coreografia. Uma ação em horários com fases diferentes recebe versões
+internas; a pessoa consulta o custo total e não duplica trechos manualmente.
+Materiais compatíveis existentes são recuperados sem nova chamada paga. Cada
+versão aparece pelos horários atendidos e tem prévias e aprovação próprias.
+
+Lotes são reservados integralmente antes do envio e persistidos como QUEUED.
+O worker do workspace reivindica cada pedido uma vez, registrando SUBMITTING
+antes da chamada externa. Fechar a página não abandona a fila. Roteiro/origem
+alterados antes do envio cancelam o pedido ainda não enviado e liberam sua
+reserva. Envios incertos não são repetidos automaticamente.
+
+A proposta para ações longas usa durações aceitas com soma exata, mantém o
+objetivo original e apresenta preparação, execução e retorno editáveis por
+parte. Aplicar apenas salva roteiro e horários consecutivos. A interpretação
+semântica das ações livres não é garantida: a proposta exige revisão antes de
+gerar. Continuação usa o vídeo disponível da parte anterior, sem depender de
+uma aprovação cuja própria prévia exigiria a continuação pronta. A montagem
+final continua exigindo todas as aprovações.
+
+A prévia da base revisa seus ciclos independentemente de inserções ainda não
+geradas. A extração de fontes e a montagem compartilham FPS/enquadramento. Cada
+fonte é baixada e normalizada uma vez por lote de quadros. Duplicação copia
+seleções por ocorrência e aprovações de pixels compatíveis, sem modificar o
+original; as emendas da cópia exigem revisão própria.
+
+O registro atualizado de contratos, testes e pendências de homologação está em
+[workshop-corrections-acceptance.md](workshop-corrections-acceptance.md).
+As limitações antigas sobre duplicação manual por fase e divisão exclusivamente
+manual foram substituídas pelo comportamento descrito nesta seção.

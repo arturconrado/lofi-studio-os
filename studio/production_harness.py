@@ -284,6 +284,37 @@ def candidate(task, assets, start, idle):
     return found
 
 
+def timed_schedule(events, seconds, idle_action='typing_idle'):
+    """One absolute, frame-aligned schedule shared by the editor and workshop."""
+    schedule = []; cursor = 0
+    for event in sorted(events, key=lambda e: e['start']):
+        if event['start'] < cursor or event['end'] <= event['start'] or event['end'] > seconds:
+            raise ValueError('Timeline overlap or event outside program')
+        if cursor < event['start']:
+            schedule.append({'start': cursor, 'end': event['start'], 'action': idle_action})
+        schedule.append(event); cursor = event['end']
+    if cursor < seconds:
+        schedule.append({'start': cursor, 'end': seconds, 'action': idle_action})
+    return schedule
+
+
+def workshop_plan(segments, seconds):
+    """Adapt approved workshop media without inventing editor quality receipts."""
+    cursor = 0; adapted = []
+    for segment in segments:
+        if abs(segment['start'] - cursor) > .001 or segment['end'] <= cursor:
+            raise ValueError('Timeline gap or overlap')
+        cursor = segment['end']
+        adapted.append({**segment, 'action': 'typing_idle' if segment['loop'] else segment.get('clip_id', 'insertion'),
+                        'repeat_short_clip': segment['loop'], 'source_offset_seconds': 0,
+                        'timing': 'absolute_program_clock', 'playback_rate': 1})
+    if not adapted or abs(cursor - seconds) > .001:
+        raise ValueError('Timeline duration mismatch')
+    return {'segments': adapted, 'duration_seconds': seconds, 'planned_timeline_seconds': cursor,
+            'assets_ready': all(s.get('asset_sha256') for s in adapted),
+            'final_checks_required': ['loop_seam', 'entry', 'continuation', 'return', 'audio', 'final_artifact_review']}
+
+
 def assembly_plan(compiled, assets):
     """Continuous timed segments for the existing compositor; no invented clips.
 
@@ -297,9 +328,8 @@ def assembly_plan(compiled, assets):
         # Optional variations without a reviewed clip are omitted, never faked.
         if e.get('optional') and not [a for a in candidate(tasks[e['action']],assets,e['start'],False) if a['seconds']>=e['end']-e['start']]:
             omitted.append({'start':e['start'],'end':e['end'],'action':e['action']});continue
-        if cursor<e['start']:schedule.append({'start':cursor,'end':e['start'],'action':'typing_idle'})
-        schedule.append(e);cursor=e['end']
-    if cursor<compiled['duration_seconds']:schedule.append({'start':cursor,'end':compiled['duration_seconds'],'action':'typing_idle'})
+        schedule.append(e)
+    schedule=timed_schedule(schedule,compiled['duration_seconds'])
     for event in schedule:
         task=tasks[event['action']];duration=event['end']-event['start'];idle=event['action']=='typing_idle'
         candidates=[a for a in candidate(task,assets,event['start'],idle) if idle or a['seconds']>=duration]

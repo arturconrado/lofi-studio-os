@@ -15,7 +15,8 @@ def clip(assembly, start, seconds):
         left=max(start,original['start']);right=min(start+seconds,original['end'])
         if right<=left:continue
         segment=deepcopy(original)
-        segment.update(start=left-start,end=right-start,source_offset_seconds=left-original['start'])
+        segment.update(start=left-start,end=right-start,
+                       source_offset_seconds=original.get('source_offset_seconds', 0)+left-original['start'])
         segments.append(segment)
     return segments
 

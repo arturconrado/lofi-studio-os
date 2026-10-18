@@ -20,7 +20,8 @@ fail() { say "ERRO: $1"; exit "${2:-1}"; }
 
 request="${SSH_ORIGINAL_COMMAND:-}"
 [[ "$request" =~ ^deploy\ ([0-9a-f]{7,40})$ ]] || fail "uso: deploy <sha>" 2
-SHA=${BASH_REMATCH[1]:0:7}
+FULL_SHA=${BASH_REMATCH[1]}
+SHA=${FULL_SHA:0:7}
 
 exec 9>/var/lock/lofi-auto-deploy.lock
 flock -n 9 || fail "outro deploy em andamento" 75
@@ -64,8 +65,13 @@ umask 077
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 dump=$BACKUPS/lofi-db-$TS-pre-$SHA.dump
 docker exec "$PG" sh -c 'pg_dump -U "$POSTGRES_USER" -Fc lofi_studio' > "$dump"
-docker exec -i "$PG" pg_restore --list < "$dump" | grep -q 'TABLE DATA' || fail "backup ilegível"
-printf 'FROM %s\nUSER root\nCOPY studio /app/studio\nCOPY web /app/web\nUSER 10002\n' "$current" > "$R/Dockerfile.incremental"
+# Consume the complete listing: grep -q can close the pipe early and make
+# pg_restore/docker fail with SIGPIPE under pipefail even for a valid dump.
+listing="$dump.list"
+docker exec -i "$PG" pg_restore --list < "$dump" > "$listing" || fail "backup ilegível: pg_restore falhou"
+grep 'TABLE DATA' "$listing" > /dev/null || fail "backup sem dados de tabelas"
+say "backup listado e verificado: $dump"
+printf 'FROM %s\nLABEL org.opencontainers.image.revision="%s"\nUSER root\nCOPY studio /app/studio\nCOPY web /app/web\nUSER 10002\n' "$current" "$FULL_SHA" > "$R/Dockerfile.incremental"
 nice -n 10 docker build -q -f "$R/Dockerfile.incremental" -t "lofi-studio-os:production-$SHA" "$R" >/dev/null
 docker run --rm "lofi-studio-os:production-$SHA" python -c 'import studio.api,studio.exports,studio.creator_service' \
   || fail "a imagem nova não importa os módulos; nada foi trocado"
@@ -83,6 +89,7 @@ docker compose -p "$PROJECT" -f "$COMPOSE" up -d --no-deps "${SERVICES[@]}" >/de
 healthy() {
   for s in "${SERVICES[@]}"; do
     [ "$(docker inspect lofi-vibe-coding-$s-1 --format '{{.State.Running}}')" = "true" ] || return 1
+    [ "$(docker inspect lofi-vibe-coding-$s-1 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$FULL_SHA" ] || return 1
   done
   docker exec lofi-vibe-coding-studio-1 python -c "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=5).status==200 else 1)" 2>/dev/null
 }
@@ -96,7 +103,7 @@ fi
 
 cat > "$R/DEPLOY-RECORD.txt" <<EOF
 deployed_at=$(date -u +%FT%TZ)
-commit=$SHA (automatic, after CI)
+commit=$FULL_SHA (automatic, after CI)
 image=lofi-studio-os:production-$SHA
 services_updated=${SERVICES[*]}
 previous_image=$current

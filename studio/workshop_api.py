@@ -11,7 +11,7 @@ from pydantic import Field
 from PIL import Image
 from .core import db, storage, audit, ensure_once
 from .channels import profile
-from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame
+from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame, seam_binding, variant_plan, occurrence_clip, _status, validate_continuations
 
 router = APIRouter(prefix='/workshop')
 KIND = 'visual_workshop_v1'
@@ -66,7 +66,10 @@ def public_task(t):
     return {'id': str(t['id']), 'status': t['status'], 'detail': t.get('detail'),
             'created_at': t.get('created_at'), 'asset_id': p.get('asset_id'),
             'asset_url': f'/api/creator/workshop/projects/{p["project_id"]}/media/{p["asset_id"]}' if p.get('asset_id') else None,
+            'variant_key': p.get('variant_key'), 'batch_ids': p.get('batch_ids'),
             'operation': p['operation'], 'clip_id': p.get('clip_id'), 'reserved_usd': t['reserved_cost'],
+            'current': p.get('current', True),
+            'preview_range': p.get('preview_range'),
             'report': p.get('report'), 'approved': p.get('approved', False),
             'url': f'/api/creator/workshop/projects/{p["project_id"]}/renders/{t["id"]}' if p.get('video_key') else None}
 
@@ -77,6 +80,11 @@ def validate_refs(draft, media):
     for rid in refs:
         if str(rid) not in media or media[str(rid)]['kind'] != 'reference':
             raise HTTPException(422, 'Referência indisponível neste projeto')
+    for event in draft.insertions:
+        for kind in ('image','video'):
+            aid = getattr(event,kind+'_id')
+            if aid and (str(aid) not in media or media[str(aid)]['kind'] != kind):
+                raise HTTPException(422,'Material da ocorrência indisponível neste projeto')
     for clip in clips(draft):
         for kind in ('image', 'video'):
             aid = getattr(clip, kind + '_id')
@@ -122,16 +130,25 @@ def detail(pid: uuid.UUID):
         row = project(c, pid); media = assets(c, pid); draft = Draft.model_validate(row['data'])
         jobs = c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s ORDER BY created_at DESC LIMIT 100", (KIND, str(pid))).fetchall()
         for job in jobs:
+            if job['payload']['operation'] == 'preview':
+                target = get_clip(draft, job['payload'].get('clip_id'))
+                try:group=selected_variant(draft,target,media,job['payload'].get('variant_key')) if target else None
+                except HTTPException:group=None;target=None
+                job['payload']['current']=bool(target and job['payload'].get('seam_binding')==seam_binding(draft,target,media,group['event_ids'] if group else None))
             if job['payload']['operation'] == 'render':
                 try:
                     current_segments = assemble(draft, media)
                     current = job['payload'].get('draft_sha256') == digest(row['data']) and current_segments == job['payload'].get('segments')
                 except ValueError: current = False
+                job['payload']['current'] = current
                 if not current: job['payload']['approved'] = False
         music = c.execute("SELECT id,seconds FROM production_batches WHERE channel_id=%s AND state='ready' AND audio_key IS NOT NULL ORDER BY updated_at DESC LIMIT 100", (row['channel_id'],)).fetchall()
         library = c.execute('SELECT id,name,data FROM visual_library WHERE channel_id=%s ORDER BY created_at DESC LIMIT 200', (row['channel_id'],)).fetchall()
-    return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,
-            'states': {str(cl.id): status(draft, cl, media) for cl in clips(draft)},
+    state_cache={};planning_errors=[]
+    try:validate_continuations(draft)
+    except ValueError as exc:planning_errors.append(str(exc))
+    return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,'planning_errors':planning_errors,
+            'states': {str(cl.id): status(draft,cl,media,_cache=state_cache) for cl in clips(draft)},
             'jobs': [public_task(j) for j in jobs], 'music': music,
             'library': [{'id': l['id'], 'name': l['name']} for l in library]}
 
@@ -183,17 +200,32 @@ def image_bytes(raw):
     return output.getvalue()
 
 
-def base_cut_image(source, frame):
-    """Extract the actual frame shown before a scheduled cut; no image provider call."""
+def base_cut_images(source, frames):
+    """Decode each approved source once for all required occurrence frames."""
     import subprocess
     from .timeline_worker import fetch
+    from .timeline_compositor import normalize_source,measure
+    frames=sorted(set(frames))
+    if not frames:return {}
+    if frames[0]<0:raise ValueError('Invalid source frame')
     with tempfile.TemporaryDirectory() as folder:
-        video = Path(folder) / 'base.mp4'; still = Path(folder) / 'cut.png'
-        fetch(source['key'], video, source['sha256'], 64 * 1024**2)
-        subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-ss', f'{frame / 24:.6f}', '-i', str(video),
-                        '-frames:v', '1', str(still)], check=True, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.PIPE, timeout=60)
-        return image_bytes(still.read_bytes())
+        video=Path(folder)/'source.mp4'
+        fetch(source['key'],video,source['sha256'],64*1024**2)
+        actual,_=measure(video,'video')
+        seconds=source.get('sampling_seconds',actual)
+        if actual+.05<seconds:raise ValueError('Source shorter than configured cycle')
+        normalized=normalize_source(video,Path(folder),source['sha256'],seconds,1280,720,24)
+        select='+'.join(f'eq(n\\,{frame})' for frame in frames)
+        subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-i',str(normalized),'-vf','select='+select+',setpts=N/(24*TB)',
+                        '-frames:v',str(len(frames)),'-threads','1','-start_number','0',str(Path(folder)/'cut-%04d.png')],check=True,
+                       stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=120)
+        paths=[Path(folder)/f'cut-{n:04d}.png' for n in range(len(frames))]
+        if not all(path.exists() for path in paths):raise ValueError('Source frame unavailable')
+        return {frame:image_bytes(path.read_bytes()) for frame,path in zip(frames,paths)}
+
+
+def base_cut_image(source, frame):
+    return base_cut_images(source,[frame])[frame]
 
 
 @router.post('/projects/{pid}/references')
@@ -212,6 +244,7 @@ class Review(Strict):
     confirm_identity: bool = False
     confirm_motion_and_return: bool = False
     note: str = Field(default='', max_length=2000)
+    variant_key: str | None = Field(default=None, pattern='^[a-f0-9]{64}$')
 
 
 @router.post('/projects/{pid}/clips/{cid}/review/{kind}')
@@ -219,16 +252,34 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
     with db() as c:
         row = project(c, pid, True); draft = Draft.model_validate(row['data']); clip = get_clip(draft, cid)
         if not clip: raise HTTPException(404, 'Trecho não encontrado')
-        media = assets(c, pid); aid = getattr(clip, kind + '_id'); asset = media.get(str(aid))
-        image = media.get(str(clip.image_id))
-        expected = signature(draft, clip, kind, image['sha256'] if kind == 'video' and image else None)
+        media = assets(c,pid)
+        group = selected_variant(draft,clip,media,body.variant_key) if kind=='video' else None
+        effective = occurrence_clip(draft,clip,group,media) if group else clip
+        aid = getattr(effective,kind+'_id'); asset=media.get(str(aid))
+        image = media.get(str(effective.image_id))
+        expected = signature(draft, effective, kind, image['sha256'] if kind == 'video' and image else None)
         if not asset or asset['sha256'] != body.sha256 or not (compatible_image(draft, clip, asset) if kind == 'image' else asset.get('signature') == expected):
             raise HTTPException(409, 'Material mudou; gere ou selecione uma versão compatível')
         if body.approve:
             if not body.confirm_identity or (kind == 'video' and not body.confirm_motion_and_return):
                 raise HTTPException(422, 'Confira a identidade e, no vídeo, o movimento e a volta à base')
-            if kind == 'video' and not status(draft, clip, media)['image_approved']:
+            if kind == 'video' and not _status(draft,effective,media,group)['image_approved']:
                 raise HTTPException(409, 'Aprove primeiro a imagem')
+            if kind == 'video':
+                previews = c.execute("SELECT payload FROM factory_tasks WHERE kind=%s AND status='COMPLETED' AND payload->>'project_id'=%s AND payload->>'clip_id'=%s AND payload->>'operation'='preview'",
+                                     (KIND, str(pid), str(cid))).fetchall()
+                binding = seam_binding(draft,clip,media,group['event_ids'] if group else None)
+                reviewed_audio = soundtrack(c, row, draft)
+                current = [p['payload'] for p in previews if p['payload'].get('seam_binding') == binding and p['payload'].get('variant_key') == (group['key'] if group else None)
+                           and p['payload'].get('audio') == reviewed_audio
+                           and p['payload'].get('video_key') and p['payload'].get('report', {}).get('full_decode_pass')]
+                required = 1 if cid == draft.base.id else len(group['event_ids'])
+                ranges = {tuple(p.get('preview_range', [])) for p in current}
+                if not required or len(ranges) < required:
+                    raise HTTPException(409, 'Prepare e assista às prévias das emendas nos horários atuais antes de aprovar o vídeo.')
+                asset['reviewed_seam_binding'] = binding
+                asset['reviewed_audio'] = reviewed_audio
+                asset['reviewed_preview_sha256s'] = [p['report']['sha256'] for p in current]
         if kind == 'image': asset['visual_signature'] = signature(draft, clip, 'image')
         asset.update(approved=body.approve, review_sha256=body.sha256, review_note=body.note)
         c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s', (json.dumps(asset), aid, pid))
@@ -239,99 +290,153 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
 class Generate(Strict):
     request_id: uuid.UUID
     revision: int
-    max_usd: float = Field(gt=0, le=12)
+    max_usd: float = Field(gt=0, le=6000)
+    variant_key: str | None = Field(default=None, pattern='^[a-f0-9]{64}$')
     confirm_cost: bool = False
 
 
+def generation_targets(draft, clip, media, variant_key=None):
+    try:validate_continuations(draft)
+    except ValueError as exc:raise HTTPException(409,str(exc)) from None
+    if clip.id == draft.base.id:
+        if variant_key: raise HTTPException(422,'A base não tem variantes por horário')
+        return [None]
+    groups = variant_plan(draft,clip,media)
+    if not groups: raise HTTPException(409,'Marque ao menos um horário antes de gerar esta inserção')
+    if variant_key:
+        groups = [g for g in groups if g['key'] == variant_key]
+        if not groups: raise HTTPException(409,'Os horários ou fontes mudaram; consulte o custo novamente')
+    else:
+        missing=[g for g in groups if not _status(draft,occurrence_clip(draft,clip,g,media),media,g)['video_ready']]
+        ready=[g for g in missing if g['source_ready']]
+        if missing and not ready:raise HTTPException(409,'Aguarde o vídeo anterior para preparar estas ocorrências')
+        groups=ready
+    for group in groups:
+        if not group['source_ready']: raise HTTPException(409,'Aguarde o vídeo da parte anterior antes de continuar')
+    return groups
+
+
 @router.get('/projects/{pid}/clips/{cid}/quote/{kind}')
-def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video']):
+def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], variant_key: str | None = None):
     from .workshop_provider import quote as provider_quote
     with db() as c:
-        row = project(c, pid); draft = Draft.model_validate(row['data']); clip = get_clip(draft, cid)
-        if not clip: raise HTTPException(404, 'Trecho não encontrado')
-    return provider_quote(kind, clip.seconds)
+        row=project(c,pid);draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
+        if not clip: raise HTTPException(404,'Trecho não encontrado')
+        if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'Gere diretamente o vídeo da inserção')
+        groups=generation_targets(draft,clip,media,variant_key) if kind=='video' else [None]
+    q=provider_quote(kind,clip.seconds) if groups else {'usd':0,'seconds':clip.seconds}
+    return {**q,'unit_usd':q['usd'],'usd':round(q['usd']*len(groups),6),'new_clips':len(groups),
+            'reused_occurrences':sum(len(g['event_ids']) for g in variant_plan(draft,clip,media) if _status(draft,occurrence_clip(draft,clip,g,media),media,g)['video_ready']) if clip.id!=draft.base.id else 0,
+            'waiting_variants':sum(not g['source_ready'] for g in variant_plan(draft,clip,media)) if clip.id!=draft.base.id else 0,
+            'variants':[{'key':g['key'],'minutes':g['minutes']} for g in groups if g]}
 
 
 @router.post('/projects/{pid}/clips/{cid}/generate/{kind}')
-def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body: Generate):
+def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], body: Generate):
     from .workshop_provider import quote as provider_quote, submit
     from .visual_workshop import prompt
     from .financial import check_available
-    if not body.confirm_cost: raise HTTPException(422, 'Confirme o custo deste trecho')
+    if not body.confirm_cost: raise HTTPException(422,'Confirme o custo deste pedido')
     with db() as c:
-        row = project(c, pid)
-        old = c.execute('SELECT * FROM factory_tasks WHERE id=%s', (body.request_id,)).fetchone()
+        row=project(c,pid)
+        old=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone()
         if old:
-            old = task(c, body.request_id, pid)
-            if old['payload'].get('clip_id') != str(cid) or old['payload']['operation'] != kind:
-                raise HTTPException(409, 'Pedido já usado para outro trecho')
+            old=task(c,body.request_id,pid)
+            if old['payload'].get('clip_id')!=str(cid) or old['payload']['operation']!=kind or old['payload'].get('requested_variant_key')!=body.variant_key:
+                raise HTTPException(409,'Pedido já usado para outro trecho ou versão')
             return public_task(old)
-        draft = Draft.model_validate(row['data']); clip = get_clip(draft, cid)
-        if not clip: raise HTTPException(404, 'Trecho não encontrado')
-        if kind == 'image' and clip.id != draft.base.id:
-            raise HTTPException(409, 'A imagem de cenário e personagens é aprovada uma vez na base. Gere diretamente o vídeo da inserção.')
-    q = provider_quote(kind, clip.seconds)
-    if q['usd'] > body.max_usd: raise HTTPException(409, 'Cotação aumentou; confira novamente')
+        draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid)
+        if not clip: raise HTTPException(404,'Trecho não encontrado')
+        if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'A imagem inicial é aprovada uma vez na base; gere o vídeo da inserção')
+    q=provider_quote(kind,clip.seconds)
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
-        row = project(c, pid, True)
-        old = c.execute('SELECT * FROM factory_tasks WHERE id=%s', (body.request_id,)).fetchone()
-        if old: return public_task(task(c, body.request_id, pid))
-        if row['revision'] != body.revision: raise HTTPException(409, 'Salve e confira a versão atual')
-        draft = Draft.model_validate(row['data']); clip = get_clip(draft, cid); media = assets(c, pid)
-        if not clip: raise HTTPException(404, 'Trecho não encontrado')
-        if kind == 'image' and clip.continues_from:
-            raise HTTPException(409, 'Use o último quadro da parte anterior para preparar esta imagem sem nova geração paga.')
-        pending = c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'clip_id'=%s AND payload->>'operation'=%s AND status IN ('SUBMITTING','RUNNING','UNCERTAIN')", (KIND, str(pid), str(cid), kind)).fetchone()
-        if pending: raise HTTPException(409, 'Este trecho já tem um pedido pendente. Consulte o andamento; envios incertos precisam de reconciliação antes de outra geração.')
-        refs = [*draft.scene_references, *(r for ch in draft.characters for r in ch.references), *clip.references]
-        image = media.get(str(clip.image_id)); selected = [media[str(r)] for r in refs]
-        if clip.id != draft.base.id:
-            base = status(draft, draft.base, media)
-            if not base['image_approved']: raise HTTPException(409, 'Aprove primeiro a imagem da base geral')
-            selected.insert(0, base['image'])
-        if kind == 'video':
-            if clip.id != draft.base.id:
-                if clip.continues_from:
-                    previous = get_clip(draft, clip.continues_from)
-                    preceding = status(draft, previous, media)
-                    if not preceding['video_approved']:
-                        raise HTTPException(409, 'Aprove o vídeo da parte anterior para continuar esta inserção.')
-                    source = preceding['video']; frame = previous.seconds * 24 - 1
-                    origin = {'source': 'previous_video_end', 'continuation_sha256': source['sha256']}
-                else:
-                    if not base['video_approved']:
-                        raise HTTPException(409, 'Aprove primeiro o vídeo-base; ele fornece automaticamente o quadro inicial da inserção.')
-                    try: frame = base_cut_frame(draft, clip)
-                    except ValueError as exc: raise HTTPException(409, str(exc)) from None
-                    source = base['video']
-                    origin = {'source': 'base_video_cut', 'base_video_sha256': source['sha256'], 'base_cut_frame': frame}
-                raw = base_cut_image(source, frame)
-                aid, derived = store_media(c, pid, raw, 'image', 'image/png', origin | {
-                    'clip_id': str(clip.id), 'signature': signature(draft, clip, 'image'),
-                    'visual_signature': signature(draft, clip, 'image'),
-                    'approved': True, 'review_sha256': __import__('hashlib').sha256(raw).hexdigest()})
-                clip.image_id = aid
-                clip.video_id = None
-                image = derived | {'id': str(aid)}
-                media[str(aid)] = image
-                save(c, row, draft)
-                audit(c, 'VISUAL_BASE_CUT_PREPARED', str(aid))
-            if not status(draft, clip, media)['image_approved']: raise HTTPException(409, 'Aprove a imagem antes de animar')
-            selected = [image]
-        if len(selected) > 14: raise HTTPException(422, 'Use até 14 referências por imagem')
-        check_available(c, q['usd'])
-        payload = {'project_id': str(pid), 'clip_id': str(cid), 'operation': kind,
-                   'signature': signature(draft, clip, kind, image['sha256'] if kind == 'video' else None),
-                   'prompt': prompt(draft, clip, kind), 'seconds': clip.seconds,
-                   'visual_signature': signature(draft, clip, 'image'),
-                   'source_image_id': str(clip.image_id) if clip.image_id else None,
-                   'references': [{'key': a['key'], 'sha256': a['sha256'], 'mime': a['mime']} for a in selected]}
-        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'SUBMITTING','Envio único; sem repetição automática')",
-                  (body.request_id, KIND, q['model'], json.dumps(payload), q['usd']))
-        audit(c, 'VISUAL_GENERATION_RESERVED', str(body.request_id), str(q['usd'])); c.commit()
-    submit(body.request_id)
-    with db() as c: return public_task(task(c, body.request_id, pid))
+        row=project(c,pid,True)
+        old=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone()
+        if old:
+            old=task(c,body.request_id,pid)
+            if old['payload'].get('clip_id')!=str(cid) or old['payload']['operation']!=kind or old['payload'].get('requested_variant_key')!=body.variant_key:
+                raise HTTPException(409,'Pedido já utilizado')
+            return public_task(old)
+        if row['revision']!=body.revision: raise HTTPException(409,'Salve e confira a versão atual')
+        draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
+        if not clip: raise HTTPException(404,'Trecho não encontrado')
+        if q['seconds']!=clip.seconds: raise HTTPException(409,'A duração mudou; consulte o custo novamente')
+        groups=generation_targets(draft,clip,media,body.variant_key) if kind=='video' else [None]
+        if not groups: raise HTTPException(409,'Os vídeos já estão disponíveis para revisão')
+        from decimal import Decimal
+        total=float(Decimal(str(q['usd']))*len(groups))
+        queued=len(groups)>1
+        if queued and not worker_online(c):raise HTTPException(503,'O worker precisa estar online para gerar as versões em lote')
+        if total>body.max_usd: raise HTTPException(409,'O custo ou a quantidade de variantes mudou; consulte novamente')
+        pending=c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'clip_id'=%s AND payload->>'operation'=%s AND status IN ('QUEUED','SUBMITTING','RUNNING','UNCERTAIN')",(KIND,str(pid),str(cid),kind)).fetchone()
+        if pending: raise HTTPException(409,'Este trecho já tem um pedido ativo ou incerto. Consulte o andamento')
+        check_available(c,total)
+        base=status(draft,draft.base,media)
+        if clip.id!=draft.base.id and not base['video_approved']:
+            raise HTTPException(409,'Aprove primeiro o vídeo-base')
+        refs=[*draft.scene_references,*(r for ch in draft.characters for r in ch.references),*clip.references]
+        prepared={}
+        if kind=='video' and clip.id!=draft.base.id:
+            by_source={}
+            for group in groups:
+                key=group['source']['sha256']
+                entry=by_source.setdefault(key,{'source':group['source'],'frames':[]})
+                entry['frames'].append(group['frame'])
+            intermediate=any(cl.continues_from==clip.id and any(i.clip_id==cl.id for i in draft.insertions) for cl in draft.clips)
+            if q.get('last_frame_supported') and not intermediate:
+                key=base['video']['sha256']
+                entry=by_source.setdefault(key,{'source':{**base['video'],'sampling_seconds':draft.base.seconds},'frames':[]})
+                entry['frames'].append(0)
+            prepared={key:base_cut_images(value['source'],value['frames']) for key,value in by_source.items()}
+        tids=[body.request_id if n==0 else uuid.uuid5(body.request_id,g['key']) for n,g in enumerate(groups)]
+        for index,group in enumerate(groups):
+            effective=clip;image=media.get(str(clip.image_id));return_frame=None
+            selected=[media[str(r)] for r in refs]
+            if kind=='video':
+                if group:
+                    source=group['source'];frame=group['frame'];raw=prepared[source['sha256']][frame]
+                    origin={'source':'previous_video_end','continuation_sha256':source['sha256']} if group['source_kind']=='previous_video_end' else {
+                        'source':'base_video_cut','base_video_sha256':source['sha256'],'base_cut_frame':frame}
+                    aid,derived=store_media(c,pid,raw,'image','image/png',origin|{
+                        'clip_id':str(cid),'source_binding':group['key'],'signature':signature(draft,clip,'image'),
+                        'visual_signature':signature(draft,clip,'image'),'approved':True,
+                        'review_sha256':__import__('hashlib').sha256(raw).hexdigest()})
+                    image=derived|{'id':str(aid)};media[str(aid)]=image
+                    for event in draft.insertions:
+                        if str(event.id) in group['event_ids']:
+                            event.image_id=aid;event.video_id=None;event.source_binding=group['key']
+                    if index==0: clip.image_id=aid;clip.video_id=None
+                    effective=clip.model_copy(update={'image_id':aid,'video_id':None})
+                if not _status(draft,effective,media,group)['image_approved']:
+                    raise HTTPException(409,'Aprove a imagem inicial antes de animar a base')
+                selected=[image]
+                intermediate=any(cl.continues_from==clip.id and any(i.clip_id==cl.id for i in draft.insertions) for cl in draft.clips)
+                if q.get('last_frame_supported') and not intermediate:
+                    if clip.id==draft.base.id: return_frame=image
+                    else:
+                        return_frame=next((a for a in media.values() if a.get('source')=='base_video_return' and a.get('base_video_sha256')==base['video']['sha256']),None)
+                        if not return_frame:
+                            raw=prepared[base['video']['sha256']][0]
+                            rid,return_frame=store_media(c,pid,raw,'image','image/png',{'source':'base_video_return','base_video_sha256':base['video']['sha256']})
+                            media[str(rid)]=return_frame
+                    selected.append(return_frame)
+            if len(selected)>14: raise HTTPException(422,'Use até 14 referências por imagem')
+            payload={'project_id':str(pid),'clip_id':str(cid),'operation':kind,
+                'variant_key':group['key'] if group else None,'requested_variant_key':body.variant_key,
+                'occurrence_ids':group['event_ids'] if group else [],'batch_ids':[str(t) for t in tids],
+                'signature':signature(draft,effective,kind,image['sha256'] if kind=='video' else None),
+                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None),'seconds':clip.seconds,
+                'visual_signature':signature(draft,clip,'image'),'source_image_id':str(effective.image_id) if effective.image_id else None,
+                'last_frame':bool(return_frame),'references':[{'key':a['key'],'sha256':a['sha256'],'mime':a['mime']} for a in selected]}
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,%s,'Pedido reservado; envio único sem repetição automática')",(tids[index],KIND,q['model'],json.dumps(payload),q['usd'],'QUEUED' if queued else 'SUBMITTING'))
+        if kind=='video' and clip.id!=draft.base.id: save(c,row,draft)
+        audit(c,'VISUAL_GENERATION_RESERVED',str(body.request_id),str(total));c.commit()
+    # All reservations are durable before any paid call. A disconnect never creates
+    # another request; unresolved sends remain blocked until reconciliation.
+    if not queued:
+        for tid in tids:submit(tid)
+    with db() as c: return public_task(task(c,body.request_id,pid))
 
 
 @router.post('/projects/{pid}/jobs/{tid}/refresh')
@@ -339,7 +444,11 @@ def refresh(pid: uuid.UUID, tid: uuid.UUID):
     from .workshop_provider import refresh as refresh_provider
     with db() as c:
         project(c, pid); t = task(c, tid, pid)
-    if t['payload']['operation'] == 'video': refresh_provider(tid)
+    if t['payload']['operation']=='video':
+        if t['status']=='QUEUED':
+            from .workshop_provider import tick as submit_queued
+            submit_queued(tid)
+        else:refresh_provider(tid)
     with db() as c: return public_task(task(c, tid, pid))
 
 
@@ -367,7 +476,8 @@ def save_library(pid: uuid.UUID, cid: uuid.UUID, body: LibraryName):
         if not clip: raise HTTPException(404, 'Trecho não encontrado')
         state = status(draft, clip, assets(c, pid))
         if not state['video_approved']: raise HTTPException(409, 'Aprove o trecho antes de salvar na biblioteca')
-        data = {'clip': clip.model_dump(mode='json'), 'image': state['image'], 'video': state['video'], 'is_base': clip.id == draft.base.id}
+        data = {'clip':clip.model_dump(mode='json'),'image':state['image'],'video':state['video'],'is_base':clip.id==draft.base.id,
+                'variant_assets':[{'image':v['image'],'video':v['video']} for v in state.get('variants',[])]}
         c.execute('INSERT INTO visual_library(id,channel_id,name,data) VALUES(%s,%s,%s,%s)',
                   (uuid.uuid4(), row['channel_id'], body.name, json.dumps(data))); c.commit()
     return {'saved': True}
@@ -378,7 +488,7 @@ def reuse(pid: uuid.UUID, lid: uuid.UUID):
     from .visual_workshop import Clip
     with db() as c:
         row = project(c, pid, True); draft = Draft.model_validate(row['data'])
-        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND status IN ('SUBMITTING','RUNNING','UNCERTAIN')", (KIND,str(pid))).fetchone():
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND status IN ('QUEUED','SUBMITTING','RUNNING','UNCERTAIN')", (KIND,str(pid))).fetchone():
             raise HTTPException(409, 'Aguarde a geração atual antes de substituir um trecho pela biblioteca.')
         item = c.execute('SELECT * FROM visual_library WHERE id=%s AND channel_id=%s', (lid, row['channel_id'])).fetchone()
         if not item: raise HTTPException(404, 'Trecho indisponível neste canal')
@@ -392,9 +502,19 @@ def reuse(pid: uuid.UUID, lid: uuid.UUID):
             for kind in ('image', 'video'):
                 aid = uuid.uuid4(); a = {k: v for k, v in item['data'][kind].items() if k not in ('id', 'url')}
                 a['clip_id'] = str(clip.id)
-                if kind == 'image': a['visual_signature'] = signature(draft, clip, 'image')
+                if kind=='image':a['visual_signature']=signature(draft,clip,'image')
+                elif clip.image_id:a['source_image_id']=str(clip.image_id)
                 c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)', (aid, pid, json.dumps(a)))
                 setattr(clip, kind + '_id', aid)
+            for variant in item['data'].get('variant_assets',[]):
+                image=variant['image'];video=variant['video']
+                if not compatible_image(draft,clip,image) or video.get('signature')!=signature(draft,clip,'video',image['sha256']):continue
+                image_id=uuid.uuid4();video_id=uuid.uuid4()
+                for aid,asset in [(image_id,image),(video_id,video)]:
+                    copied={k:v for k,v in asset.items() if k not in ('id','url')}
+                    copied['clip_id']=str(clip.id)
+                    if copied['kind']=='video':copied['source_image_id']=str(image_id)
+                    c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,pid,json.dumps(copied)))
         elif item['data'].get('is_base'):
             raise HTTPException(409, 'O visual da biblioteca é diferente deste projeto. A base atual foi preservada. Duplique o projeto de origem para reaproveitar cenário e referências.')
         else:
@@ -407,6 +527,120 @@ def reuse(pid: uuid.UUID, lid: uuid.UUID):
 class Render(Strict):
     request_id: uuid.UUID
     revision: int
+    variant_key: str | None = Field(default=None, pattern='^[a-f0-9]{64}$')
+
+
+class SplitRequest(Strict):
+    revision: int
+    total_seconds: int = Field(ge=2,le=600)
+
+
+class SplitPart(Strict):
+    seconds: int = Field(ge=2,le=60)
+    motion: str = Field(min_length=1,max_length=3000)
+
+
+class ApplySplit(SplitRequest):
+    parts: list[SplitPart] = Field(min_length=1,max_length=200)
+
+
+@router.post('/projects/{pid}/clips/{cid}/split-plan')
+def plan_split(pid: uuid.UUID, cid: uuid.UUID, body: SplitRequest):
+    from .visual_workshop import split_proposal
+    from .workshop_provider import capabilities, quote as provider_quote
+    with db() as c:
+        row=project(c,pid);draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid)
+        if row['revision']!=body.revision:raise HTTPException(409,'Salve a versão atual antes de planejar')
+        if not clip or clip.id==draft.base.id:raise HTTPException(409,'Escolha uma inserção')
+        accepted=capabilities()['durations']
+        try:parts=split_proposal(clip,body.total_seconds,accepted)
+        except ValueError as exc:raise HTTPException(422,str(exc)) from None
+        # Verify overlaps and limits before quoting or changing anything.
+        from .visual_workshop import apply_split
+        try:proposed=apply_split(draft,cid,parts,accepted)
+        except ValueError as exc:raise HTTPException(422,str(exc)) from None
+        phases=max(1,len(variant_plan(proposed,get_clip(proposed,cid),assets(c,pid))))
+    prices={n:provider_quote('video',n)['usd'] for n in {p['seconds'] for p in parts}}
+    return {'parts':parts,'total_seconds':body.total_seconds,'new_clips_max':len(parts)*phases,
+            'usd_max':round(sum(prices[p['seconds']] for p in parts)*phases,6),
+            'note':'Revise as ações de cada parte. Aplicar o plano não inicia geração nem reserva dinheiro.'}
+
+
+@router.post('/projects/{pid}/clips/{cid}/split')
+def commit_split(pid: uuid.UUID, cid: uuid.UUID, body: ApplySplit):
+    from .visual_workshop import apply_split
+    from .workshop_provider import capabilities
+    with db() as c:
+        row=project(c,pid,True)
+        if row['revision']!=body.revision:raise HTTPException(409,'O projeto mudou; confira o plano novamente')
+        if sum(p.seconds for p in body.parts)!=body.total_seconds:raise HTTPException(422,'As partes não somam a duração da ação')
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND status IN ('QUEUED','SUBMITTING','RUNNING','UNCERTAIN')",(KIND,str(pid))).fetchone():
+            raise HTTPException(409,'Aguarde ou confira os pedidos atuais antes de dividir a ação')
+        try:draft=apply_split(Draft.model_validate(row['data']),cid,[p.model_dump() for p in body.parts],capabilities()['durations'])
+        except ValueError as exc:raise HTTPException(422,str(exc)) from None
+        save(c,row,draft);audit(c,'VISUAL_ACTION_SPLIT',str(cid));c.commit()
+    return {'saved':True,'paid_calls':0}
+
+
+def selected_variant(draft,clip,media,key=None):
+    if clip.id == draft.base.id:
+        if key: raise HTTPException(422,'A base não tem variantes por horário')
+        return None
+    try:groups=variant_plan(draft,clip,media)
+    except ValueError as exc:raise HTTPException(409,str(exc)) from None
+    if key: groups=[g for g in groups if g['key']==key]
+    if not groups: raise HTTPException(409,'Agende esta inserção e atualize suas fontes')
+    if len(groups)!=1: raise HTTPException(409,'Escolha a versão pelo horário mostrado na tela')
+    return groups[0]
+
+
+@router.post('/projects/{pid}/clips/{cid}/preview')
+def preview_clip(pid: uuid.UUID, cid: uuid.UUID, body: Render):
+    with db() as c:
+        row=project(c,pid,True)
+        old=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone()
+        if old:
+            old=task(c,body.request_id,pid)
+            if old['payload']['operation']!='preview' or old['payload'].get('clip_id')!=str(cid) or old['payload'].get('variant_key')!=body.variant_key:
+                raise HTTPException(409,'Pedido já utilizado')
+            return public_task(old)
+        if row['revision']!=body.revision: raise HTTPException(409,'Salve antes de preparar a prévia')
+        draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
+        if not clip: raise HTTPException(404,'Trecho não encontrado')
+        group=selected_variant(draft,clip,media,body.variant_key)
+        effective=occurrence_clip(draft,clip,group,media) if group else clip
+        if not _status(draft,effective,media,group)['video_ready']: raise HTTPException(409,'Aguarde o vídeo desta versão')
+        total=round(draft.minutes*60*24)/24
+        occurrences=[(round(i.minute*60*24)/24,round(i.minute*60*24)/24+clip.seconds)
+                     for i in sorted(draft.insertions,key=lambda i:i.minute) if group and str(i.id) in group['event_ids']]
+        if cid==draft.base.id: occurrences=[(0,min(total,draft.base.seconds*2))]
+        if not worker_online(c): raise HTTPException(503,'O montador está offline')
+        audio=soundtrack(c,row,draft)
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'clip_id'=%s AND payload->>'operation'='preview' AND COALESCE(payload->>'variant_key','')=%s AND status IN ('QUEUED','RUNNING')",(KIND,str(pid),str(cid),body.variant_key or '')).fetchone():
+            raise HTTPException(409,'A prévia desta versão já está em preparação')
+        jobs=[]
+        for index,(entry,exit) in enumerate(occurrences):
+            start=max(0,entry-2);end=min(total,exit+2)
+            if cid==draft.base.id:
+                # Review the recurring source itself before generating any action,
+                # including projects with an insertion scheduled at second zero.
+                video=media[str(draft.base.video_id)];start=0;end=min(total,draft.base.seconds*2)
+                segments=[{'start':0,'end':end,'clip_id':str(cid),'name':clip.name,'loop':True,
+                           'asset_key':video['key'],'asset_sha256':video['sha256'],'source_seconds':clip.seconds}]
+                render_seconds=end
+            else:
+                try:segments=assemble(draft,media,preview=True,preview_range=(start,end-start))
+                except ValueError as exc:raise HTTPException(409,str(exc)) from None
+                render_seconds=total
+            tid=body.request_id if index==0 else uuid.uuid5(body.request_id,str(index))
+            payload={'project_id':str(pid),'clip_id':str(cid),'operation':'preview','variant_key':body.variant_key,
+                     'seam_binding':seam_binding(draft,clip,media,group['event_ids'] if group else None),
+                     'draft_sha256':digest(row['data']),'segments':segments,'audio':audio,
+                     'seconds':render_seconds,'preview_range':[start,end-start],'base_loop':cid==draft.base.id}
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_timeline_preview',%s,0,'QUEUED','Preparando emendas com música')",(tid,KIND,json.dumps(payload)))
+            jobs.append(str(tid))
+        c.commit()
+    return {'id':jobs[0],'ids':jobs,'status':'QUEUED'}
 
 
 def worker_online(c):
@@ -445,11 +679,21 @@ def render(pid: uuid.UUID, body: Render):
             if old['payload']['operation'] != 'render': raise HTTPException(409, 'Pedido já utilizado')
             return public_task(old)
         if row['revision'] != body.revision: raise HTTPException(409, 'Salve a versão atual antes de montar')
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'operation'='render' AND status IN ('QUEUED','RUNNING')", (KIND, str(pid))).fetchone():
+            raise HTTPException(409, 'Já existe uma montagem em andamento neste projeto')
         draft = Draft.model_validate(row['data'])
         try: segments = assemble(draft, assets(c, pid))
         except ValueError as e: raise HTTPException(409, str(e)) from None
         if not worker_online(c): raise HTTPException(503, 'O montador está offline. Ative o worker de exportação antes de montar.')
         audio = soundtrack(c, row, draft)
+        media = assets(c, pid)
+        for cl in clips(draft):
+            if cl.id!=draft.base.id and not any(i.clip_id==cl.id for i in draft.insertions):continue
+            state=status(draft,cl,media)
+            for variant in state.get('variants',[state]):
+                video=variant.get('video') or {}
+                if video.get('continuity_review_version') and video.get('reviewed_audio')!=audio:
+                    raise HTTPException(409,'A trilha mudou; revise as prévias com a música atual')
         payload = {'project_id': str(pid), 'operation': 'render', 'draft_sha256': digest(row['data']),
                    'seconds': segments[-1]['end'], 'segments': segments, 'audio': audio}
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_ffmpeg_v1',%s,0,'QUEUED','Montagem com música e retorno à base')",
@@ -471,7 +715,7 @@ def render_video(pid: uuid.UUID, tid: uuid.UUID, request: Request):
 def review_render(pid: uuid.UUID, tid: uuid.UUID, body: Review):
     with db() as c:
         row = project(c, pid, True); t = task(c, tid, pid); p = t['payload']
-        if t['status'] != 'COMPLETED' or p.get('draft_sha256') != digest(row['data']):
+        if p.get('operation') != 'render' or t['status'] != 'COMPLETED' or p.get('draft_sha256') != digest(row['data']):
             raise HTTPException(409, 'Monte a versão atual antes de aprovar')
         if p.get('report', {}).get('sha256') != body.sha256: raise HTTPException(409, 'Arquivo mudou')
         if body.approve:
@@ -509,25 +753,50 @@ def duplicate(pid: uuid.UUID):
             for kind in ('image', 'video'):
                 aid = getattr(clip, kind + '_id')
                 if aid: setattr(clip, kind + '_id', uuid.UUID(mapping[str(aid)]))
+        for event in draft.insertions:
+            for kind in ('image','video'):
+                aid=getattr(event,kind+'_id')
+                if aid:setattr(event,kind+'_id',uuid.UUID(mapping[str(aid)]))
         draft.scene_references = [uuid.UUID(mapping[str(r)]) for r in draft.scene_references]
         for ch in draft.characters: ch.references = [uuid.UUID(mapping[str(r)]) for r in ch.references]
+        copied={}
         for aid, asset in media.items():
             data = {k: v for k, v in asset.items() if k not in ('id', 'url')}
-            # A copied project retains files, but requires explicit new review.
+            # Preserve exact-pixel approval only after reproducing its binding.
             data['approved'] = False
-            old_clip = next((cl for cl in clips(original) if str(cl.image_id) == aid or str(cl.video_id) == aid), None)
+            compatible=False
+            old_clip = next((cl for cl in clips(original) if str(cl.image_id)==aid or str(cl.video_id)==aid),None)
+            old_event=next((i for i in original.insertions if str(i.image_id)==aid or str(i.video_id)==aid),None)
+            if old_event:old_clip=get_clip(original,old_event.clip_id)
             if old_clip:
                 new_clip = get_clip(draft, old_clip.id)
                 if data['kind'] == 'image' and compatible_image(original, old_clip, asset):
                     data['signature'] = signature(draft, new_clip, 'image')
-                    data['visual_signature'] = data['signature']
+                    data['visual_signature'] = data['signature'];compatible=True
                 elif data['kind'] == 'video':
-                    old_image = media.get(str(old_clip.image_id))
+                    old_image = media.get(str(old_event.image_id if old_event else old_clip.image_id))
                     if old_image and asset.get('signature') == signature(original, old_clip, 'video', old_image['sha256']):
-                        data['signature'] = signature(draft, new_clip, 'video', old_image['sha256'])
-            data.pop('review_sha256', None)
+                        data['signature'] = signature(draft,new_clip,'video',old_image['sha256']);compatible=True
+            data['approved']=bool(compatible and asset.get('approved') and asset.get('review_sha256')==asset.get('sha256'))
+            if data['kind']=='video':
+                data['continuity_review_version']=1
+                data.pop('reviewed_seam_binding',None)
+            if not data['approved']:data.pop('review_sha256',None)
             if data.get('source_image_id') in mapping: data['source_image_id'] = mapping[data['source_image_id']]
-            c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)', (mapping[aid], new_id, json.dumps(data)))
+            copied[mapping[aid]]=data
+        for item in draft.clips:
+            try:groups=variant_plan(draft,item,copied)
+            except ValueError:continue
+            for group in groups:
+                for event in draft.insertions:
+                    if str(event.id) not in group['event_ids']:continue
+                    event.source_binding=group['key']
+                    image=copied.get(str(event.image_id))
+                    if image and image.get('source_binding'):image['source_binding']=group['key']
+                    video=copied.get(str(event.video_id))
+                    if video and video.get('variant_key'):video['variant_key']=group['key']
+        for aid,data in copied.items():
+            c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,new_id,json.dumps(data)))
         c.execute('UPDATE visual_projects SET data=%s WHERE id=%s', (json.dumps(draft.model_dump(mode='json')), new_id))
         audit(c, 'VISUAL_PROJECT_DUPLICATED', str(new_id)); c.commit()
     return {'id': str(new_id)}
@@ -536,6 +805,7 @@ def duplicate(pid: uuid.UUID):
 class Recover(Strict):
     revision: int
     asset_id: uuid.UUID
+    variant_key: str | None = Field(default=None,pattern='^[a-f0-9]{64}$')
 
 
 @router.post('/projects/{pid}/clips/{cid}/recover')
@@ -547,15 +817,25 @@ def recover(pid: uuid.UUID, cid: uuid.UUID, body: Recover):
         media = assets(c, pid); asset = media.get(str(body.asset_id))
         if not clip or not asset or asset['kind'] not in ('image', 'video'):
             raise HTTPException(404, 'Material não encontrado neste projeto')
-        if asset['kind'] == 'image':
-            if not compatible_image(draft, clip, asset):
-                raise HTTPException(409, 'Esta imagem pertence a outro visual. Baixe o arquivo e use como referência em uma nova versão.')
-            clip.image_id = body.asset_id
+        group=selected_variant(draft,clip,media,body.variant_key) if clip.id!=draft.base.id else None
+        effective=occurrence_clip(draft,clip,group,media) if group else clip
+        if asset['kind']=='image':
+            if not compatible_image(draft,clip,asset):raise HTTPException(409,'Esta imagem pertence a outro visual')
+            if group and asset.get('source_binding') and asset['source_binding']!=group['key']:
+                raise HTTPException(409,'Esta origem não corresponde aos horários desta versão')
+            effective.image_id=body.asset_id
         else:
-            image = media.get(str(clip.image_id))
-            if not image or asset['signature'] != signature(draft, clip, 'video', image['sha256']):
-                raise HTTPException(409, 'Selecione primeiro a imagem de origem e mantenha os movimentos e duração usados neste vídeo.')
-            clip.video_id = body.asset_id
+            image=media.get(str(effective.image_id))
+            if not image or asset['signature']!=signature(draft,effective,'video',image['sha256']):
+                raise HTTPException(409,'Mantenha a origem, os movimentos e a duração compatíveis com este vídeo')
+            effective.video_id=body.asset_id
+        if group:
+            for event in draft.insertions:
+                if str(event.id) in group['event_ids']:
+                    event.image_id=effective.image_id;event.video_id=effective.video_id;event.source_binding=group['key']
+            if clip.image_id==effective.image_id:clip.video_id=effective.video_id
+        else:
+            clip.image_id=effective.image_id;clip.video_id=effective.video_id
         save(c, row, draft); audit(c, 'VISUAL_MEDIA_RECOVERED', str(body.asset_id)); c.commit()
     return {'recovered': True}
 

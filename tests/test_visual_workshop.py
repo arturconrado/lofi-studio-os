@@ -157,9 +157,21 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
     assert cl.post(review_url+'image',json={'sha256':image['sha256'],'approve':True,'confirm_identity':True}).status_code==200
     assert gen('video').status_code==200
     state=cl.get(url).json();video=state['states'][str(draft.base.id)]['video']
-    assert cl.post(review_url+'video',json={'sha256':video['sha256'],'approve':True,'confirm_identity':True,'confirm_motion_and_return':True}).status_code==200
     monkeypatch.setattr(api,'soundtrack',lambda c,row,draft:{'key':'music','sha256':'d'*64,'program_id':'test'})
     monkeypatch.setattr(api,'worker_online',lambda c:True)
+    review_body={'sha256':video['sha256'],'approve':True,'confirm_identity':True,'confirm_motion_and_return':True}
+    assert cl.post(review_url+'video',json=review_body).status_code==409
+    preview_request={'request_id':str(uuid.uuid4()),'revision':state['revision']}
+    preview=cl.post(url+f'/clips/{draft.base.id}/preview',json=preview_request)
+    assert preview.status_code==200,preview.text
+    assert cl.post(url+f'/clips/{draft.base.id}/preview',json=preview_request).json()['id']==preview.json()['id']
+    with db() as c:
+        from psycopg import sql
+        from studio.tenancy import schema_name
+        c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+        c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",
+                  ('{"video_key":"test-preview","report":{"sha256":"'+'e'*64+'","full_decode_pass":true}}',preview.json()['id']));c.commit()
+    assert cl.post(review_url+'video',json=review_body).status_code==200
     request={'request_id':str(uuid.uuid4()),'revision':state['revision']}
     response=cl.post(url+'/render',json=request);assert response.status_code==200,response.text
     assert cl.post(url+'/render',json=request).json()['id']==response.json()['id']
@@ -327,6 +339,14 @@ def test_base_cut_image_uses_the_last_visible_frame(tmp_path, monkeypatch):
     raw = api.base_cut_image({'key': 'local', 'sha256': 'a'*64}, 47)
     red, green, blue = Image.open(io.BytesIO(raw)).getpixel((100, 100))
     assert blue > 180 and red < 60 and green < 60
+    fetches=[]
+    def fetch_once(key,path,sha,limit):
+        fetches.append(key);shutil.copyfile(source,path)
+    monkeypatch.setattr(timeline_worker,'fetch',fetch_once)
+    frames=api.base_cut_images({'key':'local','sha256':'a'*64},[47,0,47])
+    assert len(fetches)==1 and set(frames)=={0,47}
+    assert Image.open(io.BytesIO(frames[0])).getpixel((100,100))[0]>180
+    assert Image.open(io.BytesIO(frames[47])).getpixel((100,100))[2]>180
 
 
 @DB
@@ -359,7 +379,7 @@ def test_insertion_video_prepares_base_frame_without_paid_image(client, monkeypa
     png = io.BytesIO(); Image.new('RGB', (16, 9), 'blue').save(png, 'PNG')
     monkeypatch.setenv('S3_BUCKET', 'test')
     monkeypatch.setattr(api, 'storage', lambda: Store())
-    monkeypatch.setattr(api, 'base_cut_image', lambda source, frame: png.getvalue())
+    monkeypatch.setattr(api,'base_cut_images',lambda source,frames:{frame:png.getvalue() for frame in frames})
     monkeypatch.setattr(provider, 'quote', lambda kind, seconds: {'model': 'test', 'usd': .1, 'seconds': seconds})
     monkeypatch.setattr(provider, 'submit', lambda task_id: None)
     monkeypatch.setattr(financial, 'check_available', lambda c, cap: None)
@@ -376,3 +396,87 @@ def test_insertion_video_prepares_base_frame_without_paid_image(client, monkeypa
     assert selected['base_cut_frame'] == 47
     assert state['states'][str(draft.clips[0].id)]['image_approved']
     assert [job['operation'] for job in state['jobs']] == ['video']
+
+
+@pytest.mark.parametrize('minutes,base_seconds,action_seconds,at', [(62,8,8,15),(3.25,6,4,.7)])
+def test_workshop_and_harness_share_the_exact_schedule(minutes,base_seconds,action_seconds,at):
+    from studio.production_harness import timed_schedule, workshop_plan
+    d,a=fixture();d.minutes=minutes;d.base.seconds=base_seconds;d.clips[0].seconds=action_seconds
+    d.insertions=[Insertion(clip_id=d.clips[0].id,minute=at)]
+    for c in [d.base,*d.clips]:
+        image=a[str(c.image_id)];video=a[str(c.video_id)]
+        video.update(seconds=c.seconds,signature=signature(d,c,'video',image['sha256']))
+    segments=assemble(d,a);plan=workshop_plan(segments,minutes*60)
+    start=round(at*60*24)/24
+    expected=timed_schedule([{'start':start,'end':start+action_seconds,'action':str(d.clips[0].id)}],minutes*60)
+    assert [(s['start'],s['end'],s['action']) for s in plan['segments']]==[(s['start'],s['end'],s['action']) for s in expected]
+    assert plan['planned_timeline_seconds']==minutes*60
+    assert [s['repeat_short_clip'] for s in plan['segments']]==[True,False,True]
+
+
+def test_new_video_requires_current_seam_review_without_losing_approved_pixels():
+    from studio.visual_workshop import seam_binding
+    d,a=fixture();v=a[str(d.clips[0].video_id)]
+    v.update(continuity_review_version=1,reviewed_seam_binding=seam_binding(d,d.clips[0],a))
+    assert status(d,d.clips[0],a)['seams_approved']
+    d.insertions[0].minute=.15
+    state=status(d,d.clips[0],a)
+    assert state['image_approved'] and state['video_approved'] and not state['seams_approved']
+    with pytest.raises(ValueError,match='emendas'):assemble(d,a)
+    assert assemble(d,a,preview=True)
+
+
+def test_preview_keeps_loop_phase_and_does_not_require_unrelated_unfinished_clips():
+    from studio.production_harness import workshop_plan
+    from studio.timeline_preview import clip
+    d,a=fixture();other=Clip(name='Later',motion='Later action',seconds=2)
+    d.clips.append(other);d.insertions.append(Insertion(clip_id=other.id,minute=.8))
+    with pytest.raises(ValueError):assemble(d,a)
+    segments=assemble(d,a,preview=True,preview_range=(3,7))
+    sampled=clip(workshop_plan(segments,60),3,7)
+    assert [(s['start'],s['end']) for s in sampled]==[(0,3),(3,5),(5,7)]
+    assert sampled[0]['source_offset_seconds']==3
+    assert sampled[1]['repeat_short_clip'] is False
+    assert all(s['asset_sha256'] for s in sampled)
+
+
+@pytest.mark.skipif(not shutil.which('ffmpeg') or not shutil.which('ffprobe'),reason='FFmpeg required')
+def test_actual_preview_uses_absolute_audio_and_phase(tmp_path):
+    from studio.workshop_worker import render_segments
+    from studio.timeline_compositor import file_hash,measure
+    base=tmp_path/'base.mp4';audio=tmp_path/'music.wav'
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','testsrc2=size=96x54:rate=24:duration=2',
+                    '-c:v','libx264','-pix_fmt','yuv420p',str(base)],check=True)
+    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','sine=frequency=330:duration=12',str(audio)],check=True)
+    sha=file_hash(base)
+    segments=[{'start':0,'end':12,'loop':True,'asset_sha256':sha,'source_seconds':2}]
+    report=render_segments(segments,{sha:base},audio,tmp_path/'preview.mp4',12,(3,4))
+    assert abs(measure(tmp_path/'preview.mp4','video')[0]-4)<.05
+    assert abs(report['audio_seconds']-4)<.05
+    assert report['segments'][0]['source_offset_seconds']==3
+    assert report['continuous_transitions_reviewed'] is False
+    assert report['engine']=='production_harness/timeline_compositor'
+
+
+
+def test_a_distant_generation_does_not_revoke_an_already_reviewed_seam():
+    from studio.visual_workshop import seam_binding
+    d,a=fixture();cl=d.clips[0]
+    binding=seam_binding(d,cl,a)
+    later=Clip(name='Later',motion='Other motion',seconds=2)
+    d.clips.append(later);d.insertions.append(Insertion(clip_id=later.id,minute=.9))
+    later.video_id=uuid.uuid4();a[str(later.video_id)]={'sha256':'f'*64}
+    assert seam_binding(d,cl,a)==binding
+
+
+
+def test_provider_binds_first_and_return_frames_without_looping_action_parts():
+    from studio.workshop_provider import video_body
+    payload={'prompt':'Action and return','seconds':6,'last_frame':True}
+    request=video_body(payload,['data:first','data:return'])
+    assert [f['frame_type'] for f in request['frame_images']]==['first_frame','last_frame']
+    assert request['frame_images'][1]['image_url']['url']=='data:return'
+    assert request['duration']==6 and request['generate_audio'] is False
+    with pytest.raises(ValueError,match='Return frame'):video_body(payload,['data:first'])
+    payload['last_frame']=False
+    assert len(video_body(payload,['data:first'])['frame_images'])==1
