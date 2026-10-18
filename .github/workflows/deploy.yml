@@ -1,0 +1,45 @@
+name: Deploy
+# Production deploy after the Checks workflow passes on main. The VPS key is bound to
+# ops/auto-deploy.sh (forced command): it can deploy studio, creator and export-worker, nothing else.
+on:
+  workflow_run:
+    workflows: [Checks]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.VPS_DEPLOY_KEY }}
+          KNOWN: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+      - name: Deploy (waits while production is busy)
+        env:
+          HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          for attempt in 1 2 3 4 5 6 7; do
+            set +e
+            git archive HEAD studio web requirements.txt | ssh -i ~/.ssh/deploy -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" "deploy $sha"
+            code=$?
+            set -e
+            [ "$code" = 0 ] && exit 0
+            [ "$code" = 75 ] || exit "$code"
+            echo "Produção ocupada; nova tentativa em 5 minutos ($attempt/7)"
+            sleep 300
+          done
+          echo "Produção continuou ocupada; rode o workflow Deploy manualmente depois." && exit 1
