@@ -132,6 +132,7 @@ def detail(pid: uuid.UUID):
                     current_segments = assemble(draft, media)
                     current = job['payload'].get('draft_sha256') == digest(row['data']) and current_segments == job['payload'].get('segments')
                 except ValueError: current = False
+                job['payload']['current'] = current
                 if not current: job['payload']['approved'] = False
         music = c.execute("SELECT id,seconds FROM production_batches WHERE channel_id=%s AND state='ready' AND audio_key IS NOT NULL ORDER BY updated_at DESC LIMIT 100", (row['channel_id'],)).fetchall()
         library = c.execute('SELECT id,name,data FROM visual_library WHERE channel_id=%s ORDER BY created_at DESC LIMIT 200', (row['channel_id'],)).fetchall()

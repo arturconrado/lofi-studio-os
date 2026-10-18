@@ -113,8 +113,8 @@ export function Workshop({ id }: { id?: string }) {
     const state = d?.states[clip.id];
     const sourceApproved = clip.continues_from ? d?.states[clip.continues_from]?.video_approved : d?.states[draft.base.id]?.video_approved;
     const scheduled = draft.insertions.some(i => i.clip_id === clip.id);
-    return <section class="card stack" key={clip.id}>
-      <div class="row"><h3 class="grow">{base ? '2. Vídeo-base que se repete' : clip.name}</h3><Pill tone={!dirty && state?.video_approved ? 'ok' : 'warn'}>{!dirty && state?.video_approved ? 'Aprovado' : 'Em preparação'}</Pill></div>
+    return <section class="card stack" key={clip.id} id={`clip-${clip.id}`}>
+      <div class="row"><h3 class="grow">{base ? '2. Vídeo-base que se repete' : clip.name}</h3><Pill tone={!dirty && state?.video_approved ? 'ok' : 'warn'}>{!dirty && state?.video_approved ? state?.seams_approved === false ? 'Revisar emendas' : 'Aprovado' : 'Em preparação'}</Pill></div>
       <Field label="Nome do trecho"><input class="input" value={clip.name} onInput={e => editClip({ ...clip, name: e.currentTarget.value })} /></Field>
       <Field label={base ? 'Movimentos da base e pose inicial/final' : 'Movimentos desta inserção e retorno à pose-base'}><textarea class="textarea" value={clip.motion} onInput={e => editClip({ ...clip, motion: e.currentTarget.value })} /></Field>
       <Field label="Duração deste trecho (segundos)"><select class="select" value={clip.seconds} disabled={!capabilities.data?.durations} onChange={e => editClip({ ...clip, seconds: Number(e.currentTarget.value) })}>
@@ -126,7 +126,7 @@ export function Workshop({ id }: { id?: string }) {
       <p class="faint">{base ? 'A imagem reúne cenário e personagens. Aprove antes de animar.' : 'Esta inserção começa no quadro em que o vídeo-base parar no horário marcado. O quadro inicial é preparado automaticamente, sem gerar outra imagem.'}</p>
       <div class="grid cols-2">{(['image', 'video'] as const).filter(kind => base || kind === 'video').map(kind => {
         const aid = kind === 'image' ? clip.image_id : clip.video_id; const asset = aid ? d?.media[aid] : undefined;
-        const ok = !dirty && (kind === 'image' ? state?.image_approved : state?.video_approved); const key = clip.id + kind + asset?.sha256;
+        const ok = !dirty && (kind === 'image' ? state?.image_approved : state?.video_approved && state?.seams_approved !== false); const key = clip.id + kind + asset?.sha256;
         return <div class="stack" key={kind}><h4>{kind === 'image' ? 'Imagem de partida' : 'Animação'}</h4>
           <Field label={kind === 'image' ? 'Versão da imagem' : 'Versão do vídeo'}><select class="select" value={aid || ''} onChange={e => editClip({ ...clip, [kind + '_id']: e.currentTarget.value || null, ...(kind === 'image' ? { video_id: null } : {}) })}>
             <option value="">Nenhuma selecionada</option>{Object.values(d?.media || {}).filter(a => a.kind === kind && (a.clip_id === clip.id || a.id === aid)).map((a, index) => <option value={a.id}>Versão {index + 1}{a.approved ? ' · revisada' : ''}</option>)}</select></Field>
@@ -156,11 +156,24 @@ export function Workshop({ id }: { id?: string }) {
         {!base && <button class="btn ghost" disabled={busy} onClick={() => change({ ...draft, clips: draft.clips.filter(c => c.id !== clip.id).map(c=>c.continues_from===clip.id?{...c,continues_from:null}:c), insertions: draft.insertions.filter(i => i.clip_id !== clip.id) })}>Retirar trecho do projeto</button>}</div>
     </section>;
   };
+  const usedClips = [draft.base, ...draft.clips.filter(c=>scheduledIds.has(c.id))];
+  const nextClip = usedClips.find(c=>!d?.states[c.id]?.video_approved || d?.states[c.id]?.seams_approved === false);
+  const focusClip = (clip: Clip) => { const node=document.getElementById('clip-'+clip.id); const parent=node?.closest('details'); if(parent) parent.open=true; node?.scrollIntoView({behavior:'smooth',block:'start'}); };
+  const completeVideo = d?.jobs.find(j=>j.operation==='render' && j.status==='COMPLETED' && j.current !== false);
+  const nextLabel = !id || dirty ? 'Salvar' : !d?.states[draft.base.id]?.image_approved ? 'Preparar imagem inicial' : nextClip ? nextClip.video_id ? 'Revisar '+nextClip.name : 'Gerar vídeo de '+nextClip.name : activeRender ? 'Montagem em andamento' : completeVideo ? completeVideo.approved ? 'Vídeo completo aprovado' : 'Revisar vídeo completo' : 'Montar vídeo';
+  const nextAction = () => {
+    if(!id || dirty) return save();
+    if(!d?.states[draft.base.id]?.image_approved) return draft.base.image_id ? focusClip(draft.base) : generate(draft.base,'image');
+    if(nextClip) return nextClip.video_id ? focusClip(nextClip) : generate(nextClip,'video');
+    if(completeVideo) return document.getElementById('job-'+completeVideo.id)?.scrollIntoView({behavior:'smooth'});
+    return run(()=>post(`${prefix}/projects/${id}/render`,{request_id:uuid(),revision:d!.revision}),'Montagem enviada.');
+  };
   if (id && resource.loading) return <Skeleton />;
   if (id && resource.error) return <Empty title="Não foi possível abrir o projeto"><p>{resource.error}</p><button class="btn" onClick={resource.reload}>Tentar novamente</button></Empty>;
   return <div class="stack">
     <div class="page-head" style={{position:"sticky",top:0,zIndex:5,background:"var(--bg, #fff)",padding:"12px"}}><div><h1>Criar vídeo</h1><p class="muted">Prepare a base, aprove cada inserção e monte o vídeo com música.</p></div><div class="row">
       {id && <><a class="btn ghost" href={href('/criar-video')}>Meus projetos / novo projeto</a><button class="btn" disabled={busy || dirty} onClick={() => run(async () => { const r = await post(`${prefix}/projects/${id}/duplicate`); navigate('/criar-video/' + r.id); })}>Duplicar projeto</button></>}<button class="btn primary" disabled={busy || !channel.value} onClick={save}>{id ? 'Salvar projeto' : 'Criar projeto'}</button></div></div>
+    <div class="card row"><b class="grow">Próximo passo: {nextLabel}</b><button class="btn primary" disabled={busy || !!activeRender || scheduleIssue || (!!nextClip && !!pending(nextClip.id,"video")) || !!pending(draft.base.id,"image") || (!!completeVideo?.approved && allApproved && !dirty) || !channel.value} onClick={nextAction}>{nextLabel}</button></div>
     {message && <div class="notice" role="status">{message}</div>}{busy && <p role="status">Processando… aguarde antes de enviar outro pedido.</p>}
     {scheduleIssue && <p role="alert" class="notice warn">Há sobreposição ou uma inserção termina depois do vídeo. Ajuste a agenda antes de gerar.</p>}
     {dirty && id && <div class="notice warn">Há alterações não salvas. Salve antes de gerar, revisar ou montar.</div>}
@@ -216,7 +229,7 @@ export function Workshop({ id }: { id?: string }) {
       </div>)}
     </details>}
     {d && <section class="card stack"><div class="row"><h3 class="grow">Gerações e montagens</h3><button class="btn" disabled={busy || dirty} onClick={() => run(async () => { for (const j of d.jobs.filter(j => j.status === 'RUNNING' && j.operation === 'video')) await post(`${prefix}/projects/${id}/jobs/${j.id}/refresh`); })}>Atualizar andamento</button></div>
-      {d.jobs.map(j => <div class="card stack" key={j.id}><b>{j.operation === 'preview' ? 'Prévia das emendas' : j.operation === 'render' ? 'Vídeo completo' : j.operation === 'image' ? 'Imagem' : 'Animação'} · {jobLabel(j.status)}</b><p>{j.detail}</p>{j.preview_range && <p>{draft.clips.find(c=>c.id===j.clip_id)?.name || draft.base.name} · {formatTime(j.preview_range[0]/60)} a {formatTime((j.preview_range[0]+j.preview_range[1])/60)}{j.current === false && " · Agenda alterada: prepare outra prévia"}</p>}{j.asset_url && <a class="btn" href={j.asset_url} target="_blank">Abrir material concluído</a>}
+      {d.jobs.map(j => <div class="card stack" key={j.id} id={`job-${j.id}`}><b>{j.operation === 'preview' ? 'Prévia das emendas' : j.operation === 'render' ? 'Vídeo completo' : j.operation === 'image' ? 'Imagem' : 'Animação'} · {jobLabel(j.status)}</b><p>{j.detail}</p>{j.preview_range && <p>{draft.clips.find(c=>c.id===j.clip_id)?.name || draft.base.name} · {formatTime(j.preview_range[0]/60)} a {formatTime((j.preview_range[0]+j.preview_range[1])/60)}{j.current === false && " · Agenda alterada: prepare outra prévia"}</p>}{j.asset_url && <a class="btn" href={j.asset_url} target="_blank">Abrir material concluído</a>}
         {j.url && <><video src={j.url} controls preload="metadata" style={{ width: '100%' }} /><a class="btn" href={j.url} download>Baixar vídeo</a>{j.operation === 'render' && <><Pill tone={j.approved ? 'ok' : 'warn'}>{j.approved ? 'Revisão final aprovada' : 'Revisão final pendente'}</Pill>
           <label><input type="checkbox" checked={!!reviewed[j.id]} onChange={e => setReviewed({ ...reviewed, [j.id]: e.currentTarget.checked })} /> Conferi a música, todos os horários e o retorno à base</label>
           <button class="btn primary" disabled={busy || dirty || !reviewed[j.id]} onClick={() => run(() => post(`${prefix}/projects/${id}/renders/${j.id}/review`, { sha256: j.report!.sha256, approve: true, confirm_identity: true, confirm_motion_and_return: true }), 'Vídeo completo aprovado.')}>Aprovar vídeo completo</button></>}</>}
