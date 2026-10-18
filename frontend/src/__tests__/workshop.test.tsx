@@ -146,3 +146,19 @@ it('proposes and applies continuous parts without starting paid generation', asy
   expect(body.parts.map((p:any)=>p.seconds)).toEqual([8,6]);
   expect(fetcher.mock.calls.some(c=>c[0].includes('/generate/'))).toBe(false);
 });
+
+
+it('moves every continuous part when the action time changes', async () => {
+  const draft=initialDraft();draft.clips=[{...draft.base,id:'first',name:'Carinho',seconds:8},{...draft.base,id:'second',name:'Carinho — parte 2',seconds:6,continues_from:'first'}];
+  draft.insertions=[{id:'e1',clip_id:'first',minute:15},{id:'e2',clip_id:'second',minute:15+8/60}];
+  const detail={id:'p',revision:1,data:draft,media:{},states:{},jobs:[],library:[],music:[]};
+  const fetcher=vi.fn(async(url:string,_init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/capabilities')?{durations:[4,6,8]}:detail),{status:200}));vi.stubGlobal('fetch',fetcher);
+  const view=render(<Workshop id="p" />);await waitFor(()=>expect(view.queryByLabelText('Horário da inserção 1 (mm:ss)')).not.toBeNull());
+  expect((view.getByLabelText('Horário da inserção 2 (mm:ss)') as HTMLInputElement).disabled).toBe(true);
+  fireEvent.blur(view.getByLabelText('Horário da inserção 1 (mm:ss)'),{target:{value:'16:00'}});
+  fireEvent.click(view.getByText('Salvar projeto'));
+  await waitFor(()=>expect(fetcher.mock.calls.some(c=>c[1]?.method==='PUT')).toBe(true));
+  const body=JSON.parse(String(fetcher.mock.calls.find(c=>c[1]?.method==='PUT')![1]!.body));
+  expect(body.data.insertions.map((i:any)=>i.minute)).toEqual([16,16+8/60]);
+  expect(fetcher.mock.calls.some(c=>c[0].includes('/generate/'))).toBe(false);
+});

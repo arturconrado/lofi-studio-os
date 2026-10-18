@@ -73,7 +73,7 @@ def complete(c, task, raw, mime, seconds=None):
     attached = False
     if clip:
         group=next((g for g in variant_plan(draft,clip,assets(c,pid)) if g['key']==p.get('variant_key')),None) if p.get('variant_key') else None
-        effective=occurrence_clip(draft,clip,group) if group else clip
+        effective=occurrence_clip(draft,clip,group,assets(c,pid)) if group else clip
         image=assets(c,pid).get(str(effective.image_id))
         expected=signature(draft,effective,p['operation'],image['sha256'] if p['operation']=='video' and image else None)
         if p['signature']==expected and (not p.get('variant_key') or group):
@@ -189,7 +189,7 @@ def tick(task_id=None):
         payload=task['payload'];row=project(c,payload['project_id']);draft=Draft.model_validate(row['data'])
         clip=get_clip(draft,payload['clip_id']);media=assets(c,row['id'])
         group=next((g for g in variant_plan(draft,clip,media) if g['key']==payload.get('variant_key')),None) if clip else None
-        effective=occurrence_clip(draft,clip,group) if group else clip
+        effective=occurrence_clip(draft,clip,group,media) if group else clip
         image=media.get(str(effective.image_id)) if effective else None
         from .visual_workshop import _status
         valid=bool(group and image and str(effective.image_id)==payload.get('source_image_id') and

@@ -14,6 +14,7 @@ type Variant = { key: string; minutes: number[]; event_ids: string[]; image_id: 
 type Detail = { id: string; revision: number; data: Draft; media: Record<string, Media>;
   states: Record<string, { image_approved: boolean; video_approved: boolean; seams_approved?: boolean; variants?: Variant[] }>;
   jobs: { id: string; status: string; detail: string; operation: string; clip_id?: string; variant_key?: string | null; url?: string; asset_url?: string; asset_id?: string; created_at?: string; report?: { sha256: string }; current?: boolean; preview_range?: [number,number]; approved: boolean }[];
+  planning_errors?: string[];
   music: { id: string; seconds: number }[]; library: { id: string; name: string }[] };
 const prefix = '/api/creator/workshop';
 const newClip = (name: string): Clip => ({ id: uuid(), name, motion: 'Descreva o movimento e a pose de retorno à base.', seconds: 8, references: [], continues_from: null, image_id: null, video_id: null });
@@ -75,7 +76,53 @@ export function Workshop({ id }: { id?: string }) {
   useEffect(() => { if (d && !dirtyRef.current) setDraft(d.data); }, [d]);
   const change = (value: Draft) => { if (!dirtyRef.current) editRevision.current = d?.revision ?? null; dirtyRef.current = true; setDraft(value); setDirty(true); setReviewed({}); };
   const field = (key: keyof Draft, value: any) => change({ ...draft, [key]: value });
-  const editClip = (clip: Clip) => change(clip.id === draft.base.id ? { ...draft, base: clip } : { ...draft, clips: draft.clips.map(c => c.id === clip.id ? clip : c) });
+  const editClip = (clip: Clip) => {
+    if(clip.id===draft.base.id){change({...draft,base:clip});return;}
+    const previous=draft.clips.find(c=>c.id===clip.id);const delta=(clip.seconds-(previous?.seconds || clip.seconds))/60;
+    const descendants=new Set(draft.insertions.filter(i=>i.clip_id===clip.id).flatMap(i=>linkedOccurrences(i).slice(1).map(i=>i.id)));
+    change({...draft,clips:draft.clips.map(c=>c.id===clip.id?clip:c),insertions:draft.insertions.map(i=>descendants.has(i.id)?{...i,minute:Math.round((i.minute+delta)*1440)/1440}:i)});
+  };
+  const linkedOccurrences = (event: Draft['insertions'][number]) => {
+    const linked=[event];let current=event;
+    for(let n=0;n<draft.clips.length;n++){
+      const parent=draft.clips.find(c=>c.id===current.clip_id);
+      const child=draft.clips.find(c=>c.continues_from===current.clip_id && scheduledIds.has(c.id));
+      const next=parent && child && draft.insertions.find(i=>i.clip_id===child.id && Math.abs(i.minute-current.minute-parent.seconds/60)<1/2880);
+      if(!next || linked.some(i=>i.id===next.id)) break;
+      linked.push(next);current=next;
+    }
+    return linked;
+  };
+  const actionRoot = (event: Draft['insertions'][number]) => {
+    let current=event;
+    for(let n=0;n<draft.clips.length;n++){
+      const clip=draft.clips.find(c=>c.id===current.clip_id);
+      const parent=draft.clips.find(c=>c.id===clip?.continues_from);
+      const previous=parent && draft.insertions.find(i=>i.clip_id===parent.id && Math.abs(i.minute+parent.seconds/60-current.minute)<1/2880);
+      if(!previous) break;current=previous;
+    }
+    return current;
+  };
+  const scheduleAction = (clipId: string, minute: number, rootId=uuid()) => {
+    const events: Draft['insertions'] = [];let item=draft.clips.find(c=>c.id===clipId);let cursor=minute;
+    for(let n=0;item && n<draft.clips.length;n++){
+      events.push({id:n===0?rootId:uuid(),clip_id:item.id,minute:cursor});cursor+=item.seconds/60;
+      const parentId=item.id;item=draft.clips.find(c=>c.continues_from===parentId && (scheduledIds.has(c.id) || !!c.action_goal));
+    }
+    return events;
+  };
+  const moveOccurrence = (event: Draft['insertions'][number], minute: number) => {
+    const ids=new Set(linkedOccurrences(event).map(i=>i.id));const delta=minute-event.minute;
+    field('insertions',draft.insertions.map(i=>ids.has(i.id)?{...i,minute:Math.round((i.minute+delta)*1440)/1440}:i));
+  };
+  const removeOccurrence = (event: Draft['insertions'][number]) => {
+    const ids=new Set(linkedOccurrences(actionRoot(event)).map(i=>i.id));field('insertions',draft.insertions.filter(i=>!ids.has(i.id)));
+  };
+  const removeClip = (clipId: string) => {
+    const ids=new Set([clipId]);for(let n=0;n<draft.clips.length;n++)for(const c of draft.clips)if(c.continues_from && ids.has(c.continues_from))ids.add(c.id);
+    change({...draft,clips:draft.clips.filter(c=>!ids.has(c.id)),insertions:draft.insertions.filter(i=>!ids.has(i.clip_id))});
+  };
+
   const run = async (fn: () => Promise<any>, success = '') => {
     if (busy || running.current) return;
     running.current = true;
@@ -104,7 +151,7 @@ export function Workshop({ id }: { id?: string }) {
     return run(async () => {
     const q = await api(`${prefix}/projects/${id}/clips/${clip.id}/quote/${kind}${variantKey ? "?variant_key="+variantKey : ""}`);
     if(q.new_clips===0){setMessage('Os vídeos já estão disponíveis para revisão.');return;}
-    if (!confirm(`Gerar ${kind === 'image' ? 'imagem' : 'vídeo'} de “${clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. Sem repetição paga automática.`)) return;
+    if (!confirm(`Gerar ${kind === 'image' ? 'imagem' : 'vídeo'} de “${clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. ${q.waiting_variants || 0} versão(ões) aguardam o vídeo anterior. Sem repetição paga automática.`)) return;
     await post(`${prefix}/projects/${id}/clips/${clip.id}/generate/${kind}`, { request_id: uuid(), revision: d!.revision, max_usd: q.usd, confirm_cost: true, variant_key:variantKey || null });
   }); };
   const review = (clip: Clip, kind: 'image' | 'video', approve: boolean, variantKey?: string) => run(async () => {
@@ -162,7 +209,7 @@ export function Workshop({ id }: { id?: string }) {
           const second={...newClip(clip.name.slice(0,80)+' — parte 2'),continues_from:clip.id,motion:'Continue a ação a partir do último quadro da parte 1 e termine na pose-base. Descreva aqui as ações restantes.'};
           change({...draft,clips:[...draft.clips,second],insertions:[...draft.insertions,...draft.insertions.filter(i=>i.clip_id===clip.id).map(i=>({id:uuid(),clip_id:second.id,minute:i.minute+clip.seconds/60}))]});
         }}>Adicionar parte 2 com continuidade</button>}
-        {!base && <button class="btn ghost" disabled={busy} onClick={() => change({ ...draft, clips: draft.clips.filter(c => c.id !== clip.id).map(c=>c.continues_from===clip.id?{...c,continues_from:null}:c), insertions: draft.insertions.filter(i => i.clip_id !== clip.id) })}>Retirar trecho do projeto</button>}</div>
+        {!base && <button class="btn ghost" disabled={busy} onClick={()=>removeClip(clip.id)}>Retirar trecho do projeto</button>}</div>
     </section>;
   };
   const usedClips = [draft.base, ...draft.clips.filter(c=>scheduledIds.has(c.id))];
@@ -186,6 +233,7 @@ export function Workshop({ id }: { id?: string }) {
     <div class="card row"><b class="grow">Próximo passo: {nextLabel}</b><button class="btn primary" disabled={busy || !!activeRender || scheduleIssue || (!!nextClip && !!pending(nextClip.id,"video")) || !!pending(draft.base.id,"image") || (!!completeVideo?.approved && allApproved && !dirty) || !channel.value} onClick={nextAction}>{nextLabel}</button></div>
     {splitPlan && <section class="card stack"><h3>Proposta de ação em partes</h3><p>{splitPlan.total_seconds}s · Até {splitPlan.new_clips_max} vídeos novos · Custo máximo estimado: US$ {splitPlan.usd_max.toFixed(2)}</p><p>Revise a ação de cada parte. Aplicar esta proposta apenas salva o roteiro e os horários.</p>{splitPlan.parts.map((part,n)=><Field label={`Parte ${n+1} · ${part.seconds}s`}><textarea class="textarea" value={part.motion} onInput={e=>setSplitPlan({...splitPlan,parts:splitPlan.parts.map((p,i)=>i===n?{...p,motion:e.currentTarget.value}:p)})} /></Field>)}<button class="btn primary" disabled={busy || dirty} onClick={()=>run(async()=>{await post(`${prefix}/projects/${id}/clips/${splitPlan.clip_id}/split`,{revision:d!.revision,total_seconds:splitPlan.total_seconds,parts:splitPlan.parts});setSplitPlan(null);},'Partes e horários salvos. Nenhuma geração iniciada.')}>Aplicar partes e horários</button><button class="btn ghost" onClick={()=>setSplitPlan(null)}>Cancelar proposta</button></section>}
     {message && <div class="notice" role="status">{message}</div>}{busy && <p role="status">Processando… aguarde antes de enviar outro pedido.</p>}
+    {d?.planning_errors?.map(error=><p role="alert" class="notice warn">{error}. Ajuste os horários das partes; os materiais estão preservados.</p>)}
     {scheduleIssue && <p role="alert" class="notice warn">Há sobreposição ou uma inserção termina depois do vídeo. Ajuste a agenda antes de gerar.</p>}
     {dirty && id && <div class="notice warn">Há alterações não salvas. Salve antes de gerar, revisar ou montar.</div>}
     {!id && <button class="btn ghost" onClick={()=>{if(confirm('Limpar apenas este formulário não salvo? Os projetos e materiais salvos serão mantidos.')){setDraft(initialDraft());dirtyRef.current=false;setDirty(false);}}}>Limpar formulário</button>}
@@ -219,11 +267,11 @@ export function Workshop({ id }: { id?: string }) {
     <details><summary>Rascunhos não agendados</summary>{draft.clips.filter(c=>!scheduledIds.has(c.id)).map(c=>card(c))}</details>
     <section class="card stack"><h3>Agenda das inserções</h3>
       {ordered.map((event, index) => <div class="row" key={event.id}>
-        <Field label={`Horário da inserção ${index + 1} (mm:ss)`}><input class="input" type="text" inputMode="numeric" defaultValue={formatTime(event.minute)} key={`${event.id}-${formatTime(event.minute)}`} onBlur={e => { const match=/^(\d+):([0-5]\d)$/.exec(e.currentTarget.value); if(match) field('insertions', draft.insertions.map(i => i.id === event.id ? {...i,minute:Number(match[1])+Number(match[2])/60} : i)); else {e.currentTarget.value=formatTime(event.minute);setMessage('Use um horário como 15:08.');} }} /></Field>
-        <Field label="Trecho"><select class="select" value={event.clip_id} onChange={e => field('insertions', draft.insertions.map(i => i.id === event.id ? { ...i, clip_id: e.currentTarget.value } : i))}>{draft.clips.map(c => <option value={c.id}>{c.name} · {c.seconds}s</option>)}</select></Field>
-        <button class="btn ghost" onClick={() => field('insertions', draft.insertions.filter(i => i.id !== event.id))}>Retirar horário</button>
+        <Field label={`Horário da inserção ${index + 1} (mm:ss)`}><input class="input" type="text" inputMode="numeric" disabled={!!draft.clips.find(c=>c.id===event.clip_id)?.continues_from && !d?.planning_errors?.length} defaultValue={formatTime(event.minute)} key={`${event.id}-${formatTime(event.minute)}`} onBlur={e => { const match=/^(\d+):([0-5]\d)$/.exec(e.currentTarget.value); if(match) moveOccurrence(event,Number(match[1])+Number(match[2])/60); else {e.currentTarget.value=formatTime(event.minute);setMessage('Use um horário como 15:08.');} }} /></Field>
+        <Field label="Trecho"><select class="select" value={event.clip_id} disabled={!!draft.clips.find(c=>c.id===event.clip_id)?.continues_from} onChange={e=>{const ids=new Set(linkedOccurrences(event).map(i=>i.id));field('insertions',[...draft.insertions.filter(i=>!ids.has(i.id)),...scheduleAction(e.currentTarget.value,event.minute,event.id)]);}}>{draft.clips.filter(c=>!c.continues_from || c.id===event.clip_id).map(c => <option value={c.id}>{c.name} · {c.seconds}s</option>)}</select></Field>
+        <button class="btn ghost" onClick={()=>removeOccurrence(event)}>Retirar horário</button>
       </div>)}
-      <button class="btn" disabled={!draft.clips.length || draft.insertions.length >= 500} onClick={() => field('insertions', [...draft.insertions, { id: uuid(), clip_id: draft.clips[0].id, minute: 0 }])}>Adicionar horário</button>
+      <button class="btn" disabled={!draft.clips.length || draft.insertions.length >= 500} onClick={()=>{const first=draft.clips.find(c=>!c.continues_from);if(first)field('insertions',[...draft.insertions,...scheduleAction(first.id,0)]);}}>Adicionar horário</button>
       <p class="faint">Os minutos são contados desde o início. Inserções não prolongam a duração total e não podem se sobrepor.</p>
     </section>
     <section class="card stack"><h3>4. Música, prévia e vídeo completo</h3><p>Total: {formatTime(draft.minutes)} · {ordered.length} inserções</p>{!allApproved && <p>Próximo passo: aprove a base e revise as inserções com suas prévias.</p>}{activeRender && <p role="status">Montagem em andamento.</p>}

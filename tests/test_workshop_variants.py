@@ -1,7 +1,7 @@
 import uuid
 import pytest
 from studio.visual_workshop import (Clip, Insertion, Draft, signature, digest, status, assemble,
-    variant_plan, seam_binding, split_durations, split_proposal, apply_split, prompt)
+    variant_plan, seam_binding, split_durations, split_proposal, apply_split, prompt, validate_continuations)
 from test_visual_workshop import fixture
 
 
@@ -10,7 +10,7 @@ def bind_variants(draft,media,clip,approved=True):
         image_id=uuid.uuid4();video_id=uuid.uuid4();image_sha=digest(['image',group['key']]);video_sha=digest(['video',group['key']])
         image={'kind':'image','key':image_sha,'sha256':image_sha,'signature':signature(draft,clip,'image'),
                'approved':True,'review_sha256':image_sha,'source_binding':group['key']}
-        if clip.continues_from:image.update(source='previous_video_end',continuation_sha256=group['source']['sha256'])
+        if group.get('source_kind')=='previous_video_end':image.update(source='previous_video_end',continuation_sha256=group['source']['sha256'])
         else:image.update(source='base_video_cut',base_video_sha256=group['source']['sha256'],base_cut_frame=group['frame'])
         media[str(image_id)]=image
         media[str(video_id)]={'kind':'video','key':video_sha,'sha256':video_sha,'seconds':clip.seconds,
@@ -96,7 +96,7 @@ def test_split_refuses_impossible_duration_overlap_and_nonconsecutive_parts():
     with pytest.raises(ValueError):apply_split(d,clip.id,split_proposal(clip,20,[4,6,8]),[4,6,8])
     second=Clip(name='Part 2',motion='Finish',seconds=2,continues_from=clip.id)
     d.clips.append(second);d.insertions.append(Insertion(clip_id=second.id,minute=.5))
-    with pytest.raises(ValueError,match='consecutivas'):Draft.model_validate(d.model_dump())
+    with pytest.raises(ValueError,match='consecutivas'):validate_continuations(Draft.model_validate(d.model_dump()))
 
 
 def test_unscheduled_continuation_does_not_remove_the_return_from_a_scheduled_action():
@@ -251,3 +251,76 @@ def test_http_duplicate_keeps_variant_pixels_and_requires_new_seam_review(client
     assert len(variants)==2 and all(v['video_ready'] and v['video_approved'] for v in variants)
     assert not all(v['seams_approved'] for v in variants)
     assert client.get(url).json()['data']==original['data']
+
+
+
+def test_adjacent_independent_actions_use_the_actual_previous_video_end():
+    d,a=fixture();first=d.clips[0];second=Clip(name='Coffee',motion='Pick up and return cup',seconds=2)
+    d.clips.append(second);d.insertions.append(Insertion(clip_id=second.id,minute=8/60))
+    bind_variants(d,a,first,approved=False)
+    group=variant_plan(d,second,a)[0]
+    assert group['source_kind']=='previous_video_end' and group['source_ready']
+    assert group['source']['sha256']==a[str(d.insertions[0].video_id)]['sha256']
+    assert group['source']['sha256']!=a[str(d.base.video_id)]['sha256']
+    bind_variants(d,a,second,approved=False)
+    assert status(d,second,a)['video_ready']
+    assert assemble(d,a,preview=True)
+
+
+
+def test_history_reuse_binds_the_preview_to_the_material_actually_selected():
+    d,a=fixture();clip=d.clips[0];d.insertions[1].minute=19/60;bind_variants(d,a,clip)
+    first=d.insertions[0].model_copy();remaining=d.insertions[1]
+    expected=a[str(first.video_id)]['sha256']
+    for aid,asset in a.items():asset['id']=aid
+    d.insertions=[remaining];remaining.minute=.1
+    state=status(d,clip,a)
+    assert state['video_ready'] and state['video']['sha256']==expected
+    before=seam_binding(d,clip,a)
+    remaining.image_id=first.image_id;remaining.video_id=first.video_id;remaining.source_binding=first.source_binding
+    assert seam_binding(d,clip,a)==before
+
+
+def test_every_occurrence_must_include_the_complete_scheduled_chain():
+    d,a=fixture();first=d.clips[0];second=Clip(name='Part 2',motion='Finish',seconds=2,continues_from=first.id)
+    d.clips.append(second);d.insertions.append(Insertion(clip_id=second.id,minute=8/60))
+    with pytest.raises(ValueError,match='todas as partes'):validate_continuations(Draft.model_validate(d.model_dump()))
+
+
+
+def test_legacy_nonconsecutive_parts_remain_readable_but_cannot_render():
+    d,a=fixture();first=d.clips[0];second=Clip(name='Old part 2',motion='Finish',seconds=2,continues_from=first.id)
+    d.clips.append(second);d.insertions.append(Insertion(clip_id=second.id,minute=.5))
+    restored=Draft.model_validate(d.model_dump())
+    assert status(restored,second,a)['planning_error']
+    with pytest.raises(ValueError):assemble(restored,a,preview=True)
+    assert restored.base.image_id==d.base.image_id
+
+
+
+@DB
+def test_library_preserves_all_compatible_variants_without_new_generation(client):
+    d,a=fixture();d.insertions[1].minute=19/60;bind_variants(d,a,d.clips[0])
+    url,identity=seed_project(client,d,a)
+    result=client.post(url+f'/clips/{d.clips[0].id}/library',json={'name':'Saved action'})
+    assert result.status_code==200,result.text
+    state=client.get(url).json();library=state['library'][0]['id']
+    # Keep only the base in this disposable project: the library must carry both
+    # variants itself instead of accidentally finding the old project inventory.
+    state['data']['clips']=[];state['data']['insertions']=[]
+    assert client.put(url,json={'revision':state['revision'],'data':state['data']}).status_code==200
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    token=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            c.execute('DELETE FROM visual_media WHERE project_id=%s AND id NOT IN(%s,%s)',(url.rsplit('/',1)[-1],d.base.image_id,d.base.video_id));c.commit()
+    finally:WORKSPACE.reset(token)
+    result=client.post(url+f'/library/{library}');assert result.status_code==200,result.text
+    state=client.get(url).json();clip=next(c for c in state['data']['clips'] if c['name']=='Saved action')
+    state['data']['insertions'] += [{'id':str(uuid.uuid4()),'clip_id':clip['id'],'minute':30/60},{'id':str(uuid.uuid4()),'clip_id':clip['id'],'minute':43/60}]
+    result=client.put(url,json={'revision':state['revision'],'data':state['data']});assert result.status_code==200,result.text
+    final=client.get(url).json();variants=final['states'][clip['id']]['variants']
+    assert len(variants)==2 and all(v['video_ready'] and v['video_approved'] for v in variants)
+    assert not all(v['seams_approved'] for v in variants)
+    assert client.get(url+f'/clips/{clip["id"]}/quote/video').json()['new_clips']==0

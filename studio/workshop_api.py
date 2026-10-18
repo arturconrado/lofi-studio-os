@@ -11,7 +11,7 @@ from pydantic import Field
 from PIL import Image
 from .core import db, storage, audit, ensure_once
 from .channels import profile
-from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame, seam_binding, variant_plan, occurrence_clip, _status
+from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame, seam_binding, variant_plan, occurrence_clip, _status, validate_continuations
 
 router = APIRouter(prefix='/workshop')
 KIND = 'visual_workshop_v1'
@@ -144,8 +144,10 @@ def detail(pid: uuid.UUID):
                 if not current: job['payload']['approved'] = False
         music = c.execute("SELECT id,seconds FROM production_batches WHERE channel_id=%s AND state='ready' AND audio_key IS NOT NULL ORDER BY updated_at DESC LIMIT 100", (row['channel_id'],)).fetchall()
         library = c.execute('SELECT id,name,data FROM visual_library WHERE channel_id=%s ORDER BY created_at DESC LIMIT 200', (row['channel_id'],)).fetchall()
-    state_cache={}
-    return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,
+    state_cache={};planning_errors=[]
+    try:validate_continuations(draft)
+    except ValueError as exc:planning_errors.append(str(exc))
+    return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,'planning_errors':planning_errors,
             'states': {str(cl.id): status(draft,cl,media,_cache=state_cache) for cl in clips(draft)},
             'jobs': [public_task(j) for j in jobs], 'music': music,
             'library': [{'id': l['id'], 'name': l['name']} for l in library]}
@@ -252,7 +254,7 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
         if not clip: raise HTTPException(404, 'Trecho não encontrado')
         media = assets(c,pid)
         group = selected_variant(draft,clip,media,body.variant_key) if kind=='video' else None
-        effective = occurrence_clip(draft,clip,group) if group else clip
+        effective = occurrence_clip(draft,clip,group,media) if group else clip
         aid = getattr(effective,kind+'_id'); asset=media.get(str(aid))
         image = media.get(str(effective.image_id))
         expected = signature(draft, effective, kind, image['sha256'] if kind == 'video' and image else None)
@@ -294,6 +296,8 @@ class Generate(Strict):
 
 
 def generation_targets(draft, clip, media, variant_key=None):
+    try:validate_continuations(draft)
+    except ValueError as exc:raise HTTPException(409,str(exc)) from None
     if clip.id == draft.base.id:
         if variant_key: raise HTTPException(422,'A base não tem variantes por horário')
         return [None]
@@ -303,7 +307,10 @@ def generation_targets(draft, clip, media, variant_key=None):
         groups = [g for g in groups if g['key'] == variant_key]
         if not groups: raise HTTPException(409,'Os horários ou fontes mudaram; consulte o custo novamente')
     else:
-        groups = [g for g in groups if not _status(draft,occurrence_clip(draft,clip,g),media,g)['video_ready']]
+        missing=[g for g in groups if not _status(draft,occurrence_clip(draft,clip,g,media),media,g)['video_ready']]
+        ready=[g for g in missing if g['source_ready']]
+        if missing and not ready:raise HTTPException(409,'Aguarde o vídeo anterior para preparar estas ocorrências')
+        groups=ready
     for group in groups:
         if not group['source_ready']: raise HTTPException(409,'Aguarde o vídeo da parte anterior antes de continuar')
     return groups
@@ -319,7 +326,8 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
         groups=generation_targets(draft,clip,media,variant_key) if kind=='video' else [None]
     q=provider_quote(kind,clip.seconds) if groups else {'usd':0,'seconds':clip.seconds}
     return {**q,'unit_usd':q['usd'],'usd':round(q['usd']*len(groups),6),'new_clips':len(groups),
-            'reused_occurrences':sum(len(g['event_ids']) for g in variant_plan(draft,clip,media) if g not in groups) if clip.id!=draft.base.id else 0,
+            'reused_occurrences':sum(len(g['event_ids']) for g in variant_plan(draft,clip,media) if _status(draft,occurrence_clip(draft,clip,g,media),media,g)['video_ready']) if clip.id!=draft.base.id else 0,
+            'waiting_variants':sum(not g['source_ready'] for g in variant_plan(draft,clip,media)) if clip.id!=draft.base.id else 0,
             'variants':[{'key':g['key'],'minutes':g['minutes']} for g in groups if g]}
 
 
@@ -388,7 +396,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
             if kind=='video':
                 if group:
                     source=group['source'];frame=group['frame'];raw=prepared[source['sha256']][frame]
-                    origin={'source':'previous_video_end','continuation_sha256':source['sha256']} if clip.continues_from else {
+                    origin={'source':'previous_video_end','continuation_sha256':source['sha256']} if group['source_kind']=='previous_video_end' else {
                         'source':'base_video_cut','base_video_sha256':source['sha256'],'base_cut_frame':frame}
                     aid,derived=store_media(c,pid,raw,'image','image/png',origin|{
                         'clip_id':str(cid),'source_binding':group['key'],'signature':signature(draft,clip,'image'),
@@ -418,7 +426,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 'variant_key':group['key'] if group else None,'requested_variant_key':body.variant_key,
                 'occurrence_ids':group['event_ids'] if group else [],'batch_ids':[str(t) for t in tids],
                 'signature':signature(draft,effective,kind,image['sha256'] if kind=='video' else None),
-                'prompt':prompt(draft,clip,kind),'seconds':clip.seconds,
+                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None),'seconds':clip.seconds,
                 'visual_signature':signature(draft,clip,'image'),'source_image_id':str(effective.image_id) if effective.image_id else None,
                 'last_frame':bool(return_frame),'references':[{'key':a['key'],'sha256':a['sha256'],'mime':a['mime']} for a in selected]}
             c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,%s,'Pedido reservado; envio único sem repetição automática')",(tids[index],KIND,q['model'],json.dumps(payload),q['usd'],'QUEUED' if queued else 'SUBMITTING'))
@@ -468,7 +476,8 @@ def save_library(pid: uuid.UUID, cid: uuid.UUID, body: LibraryName):
         if not clip: raise HTTPException(404, 'Trecho não encontrado')
         state = status(draft, clip, assets(c, pid))
         if not state['video_approved']: raise HTTPException(409, 'Aprove o trecho antes de salvar na biblioteca')
-        data = {'clip': clip.model_dump(mode='json'), 'image': state['image'], 'video': state['video'], 'is_base': clip.id == draft.base.id}
+        data = {'clip':clip.model_dump(mode='json'),'image':state['image'],'video':state['video'],'is_base':clip.id==draft.base.id,
+                'variant_assets':[{'image':v['image'],'video':v['video']} for v in state.get('variants',[])]}
         c.execute('INSERT INTO visual_library(id,channel_id,name,data) VALUES(%s,%s,%s,%s)',
                   (uuid.uuid4(), row['channel_id'], body.name, json.dumps(data))); c.commit()
     return {'saved': True}
@@ -479,7 +488,7 @@ def reuse(pid: uuid.UUID, lid: uuid.UUID):
     from .visual_workshop import Clip
     with db() as c:
         row = project(c, pid, True); draft = Draft.model_validate(row['data'])
-        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND status IN ('SUBMITTING','RUNNING','UNCERTAIN')", (KIND,str(pid))).fetchone():
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND status IN ('QUEUED','SUBMITTING','RUNNING','UNCERTAIN')", (KIND,str(pid))).fetchone():
             raise HTTPException(409, 'Aguarde a geração atual antes de substituir um trecho pela biblioteca.')
         item = c.execute('SELECT * FROM visual_library WHERE id=%s AND channel_id=%s', (lid, row['channel_id'])).fetchone()
         if not item: raise HTTPException(404, 'Trecho indisponível neste canal')
@@ -493,9 +502,19 @@ def reuse(pid: uuid.UUID, lid: uuid.UUID):
             for kind in ('image', 'video'):
                 aid = uuid.uuid4(); a = {k: v for k, v in item['data'][kind].items() if k not in ('id', 'url')}
                 a['clip_id'] = str(clip.id)
-                if kind == 'image': a['visual_signature'] = signature(draft, clip, 'image')
+                if kind=='image':a['visual_signature']=signature(draft,clip,'image')
+                elif clip.image_id:a['source_image_id']=str(clip.image_id)
                 c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)', (aid, pid, json.dumps(a)))
                 setattr(clip, kind + '_id', aid)
+            for variant in item['data'].get('variant_assets',[]):
+                image=variant['image'];video=variant['video']
+                if not compatible_image(draft,clip,image) or video.get('signature')!=signature(draft,clip,'video',image['sha256']):continue
+                image_id=uuid.uuid4();video_id=uuid.uuid4()
+                for aid,asset in [(image_id,image),(video_id,video)]:
+                    copied={k:v for k,v in asset.items() if k not in ('id','url')}
+                    copied['clip_id']=str(clip.id)
+                    if copied['kind']=='video':copied['source_image_id']=str(image_id)
+                    c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,pid,json.dumps(copied)))
         elif item['data'].get('is_base'):
             raise HTTPException(409, 'O visual da biblioteca é diferente deste projeto. A base atual foi preservada. Duplique o projeto de origem para reaproveitar cenário e referências.')
         else:
@@ -567,7 +586,8 @@ def selected_variant(draft,clip,media,key=None):
     if clip.id == draft.base.id:
         if key: raise HTTPException(422,'A base não tem variantes por horário')
         return None
-    groups=variant_plan(draft,clip,media)
+    try:groups=variant_plan(draft,clip,media)
+    except ValueError as exc:raise HTTPException(409,str(exc)) from None
     if key: groups=[g for g in groups if g['key']==key]
     if not groups: raise HTTPException(409,'Agende esta inserção e atualize suas fontes')
     if len(groups)!=1: raise HTTPException(409,'Escolha a versão pelo horário mostrado na tela')
@@ -588,7 +608,7 @@ def preview_clip(pid: uuid.UUID, cid: uuid.UUID, body: Render):
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         group=selected_variant(draft,clip,media,body.variant_key)
-        effective=occurrence_clip(draft,clip,group) if group else clip
+        effective=occurrence_clip(draft,clip,group,media) if group else clip
         if not _status(draft,effective,media,group)['video_ready']: raise HTTPException(409,'Aguarde o vídeo desta versão')
         total=round(draft.minutes*60*24)/24
         occurrences=[(round(i.minute*60*24)/24,round(i.minute*60*24)/24+clip.seconds)
@@ -765,7 +785,9 @@ def duplicate(pid: uuid.UUID):
             if data.get('source_image_id') in mapping: data['source_image_id'] = mapping[data['source_image_id']]
             copied[mapping[aid]]=data
         for item in draft.clips:
-            for group in variant_plan(draft,item,copied):
+            try:groups=variant_plan(draft,item,copied)
+            except ValueError:continue
+            for group in groups:
                 for event in draft.insertions:
                     if str(event.id) not in group['event_ids']:continue
                     event.source_binding=group['key']
@@ -796,7 +818,7 @@ def recover(pid: uuid.UUID, cid: uuid.UUID, body: Recover):
         if not clip or not asset or asset['kind'] not in ('image', 'video'):
             raise HTTPException(404, 'Material não encontrado neste projeto')
         group=selected_variant(draft,clip,media,body.variant_key) if clip.id!=draft.base.id else None
-        effective=occurrence_clip(draft,clip,group) if group else clip
+        effective=occurrence_clip(draft,clip,group,media) if group else clip
         if asset['kind']=='image':
             if not compatible_image(draft,clip,asset):raise HTTPException(409,'Esta imagem pertence a outro visual')
             if group and asset.get('source_binding') and asset['source_binding']!=group['key']:
