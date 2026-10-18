@@ -11,7 +11,7 @@ from pydantic import Field
 from PIL import Image
 from .core import db, storage, audit, ensure_once
 from .channels import profile
-from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context
+from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame
 
 router = APIRouter(prefix='/workshop')
 KIND = 'visual_workshop_v1'
@@ -183,6 +183,19 @@ def image_bytes(raw):
     return output.getvalue()
 
 
+def base_cut_image(source, frame):
+    """Extract the actual frame shown before a scheduled cut; no image provider call."""
+    import subprocess
+    from .timeline_worker import fetch
+    with tempfile.TemporaryDirectory() as folder:
+        video = Path(folder) / 'base.mp4'; still = Path(folder) / 'cut.png'
+        fetch(source['key'], video, source['sha256'], 64 * 1024**2)
+        subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-ss', f'{frame / 24:.6f}', '-i', str(video),
+                        '-frames:v', '1', str(still)], check=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.PIPE, timeout=60)
+        return image_bytes(still.read_bytes())
+
+
 @router.post('/projects/{pid}/references')
 async def upload_reference(pid: uuid.UUID, file: UploadFile = File(...)):
     ready()
@@ -255,6 +268,8 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], bo
             return public_task(old)
         draft = Draft.model_validate(row['data']); clip = get_clip(draft, cid)
         if not clip: raise HTTPException(404, 'Trecho não encontrado')
+        if kind == 'image' and clip.id != draft.base.id:
+            raise HTTPException(409, 'A imagem de cenário e personagens é aprovada uma vez na base. Gere diretamente o vídeo da inserção.')
     q = provider_quote(kind, clip.seconds)
     if q['usd'] > body.max_usd: raise HTTPException(409, 'Cotação aumentou; confira novamente')
     with db() as c:
@@ -276,6 +291,32 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], bo
             if not base['image_approved']: raise HTTPException(409, 'Aprove primeiro a imagem da base geral')
             selected.insert(0, base['image'])
         if kind == 'video':
+            if clip.id != draft.base.id:
+                if clip.continues_from:
+                    previous = get_clip(draft, clip.continues_from)
+                    preceding = status(draft, previous, media)
+                    if not preceding['video_approved']:
+                        raise HTTPException(409, 'Aprove o vídeo da parte anterior para continuar esta inserção.')
+                    source = preceding['video']; frame = previous.seconds * 24 - 1
+                    origin = {'source': 'previous_video_end', 'continuation_sha256': source['sha256']}
+                else:
+                    if not base['video_approved']:
+                        raise HTTPException(409, 'Aprove primeiro o vídeo-base; ele fornece automaticamente o quadro inicial da inserção.')
+                    try: frame = base_cut_frame(draft, clip)
+                    except ValueError as exc: raise HTTPException(409, str(exc)) from None
+                    source = base['video']
+                    origin = {'source': 'base_video_cut', 'base_video_sha256': source['sha256'], 'base_cut_frame': frame}
+                raw = base_cut_image(source, frame)
+                aid, derived = store_media(c, pid, raw, 'image', 'image/png', origin | {
+                    'clip_id': str(clip.id), 'signature': signature(draft, clip, 'image'),
+                    'visual_signature': signature(draft, clip, 'image'),
+                    'approved': True, 'review_sha256': __import__('hashlib').sha256(raw).hexdigest()})
+                clip.image_id = aid
+                clip.video_id = None
+                image = derived | {'id': str(aid)}
+                media[str(aid)] = image
+                save(c, row, draft)
+                audit(c, 'VISUAL_BASE_CUT_PREPARED', str(aid))
             if not status(draft, clip, media)['image_approved']: raise HTTPException(409, 'Aprove a imagem antes de animar')
             selected = [image]
         if len(selected) > 14: raise HTTPException(422, 'Use até 14 referências por imagem')

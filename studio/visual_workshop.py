@@ -134,6 +134,23 @@ def compatible_image(draft, clip, asset):
                for n in range(2, 61))
 
 
+def base_cut_frame(draft, clip):
+    """Frame shown immediately before an insertion, on the assembly's 24 fps clock."""
+    cursor = 0
+    phases = set()
+    cycle = draft.base.seconds * 24
+    for event in sorted(draft.insertions, key=lambda e: e.minute):
+        start = round(event.minute * 60 * 24)
+        if event.clip_id == clip.id:
+            phases.add((start - cursor - 1) % cycle if start > cursor else 0)
+        cursor = start + get_clip(draft, event.clip_id).seconds * 24
+    if not phases:
+        raise ValueError('Marque ao menos um horário para esta inserção antes de gerar o vídeo.')
+    if len(phases) != 1:
+        raise ValueError('Esta inserção começa em quadros diferentes da base. Duplique o trecho para cada horário antes de gerar.')
+    return phases.pop()
+
+
 def approved(asset, expected):
     return bool(asset and asset.get('signature') == expected and asset.get('sha256')
                 and asset.get('review_sha256') == asset['sha256'] and asset.get('approved'))
@@ -144,6 +161,13 @@ def status(draft, clip, assets):
     video = assets.get(str(clip.video_id))
     image_ok = bool(image and compatible_image(draft, clip, image) and image.get('approved')
                     and image.get('sha256') == image.get('review_sha256'))
+    if image and image.get('source') == 'base_video_cut':
+        base_state = status(draft, draft.base, assets)
+        try: frame = base_cut_frame(draft, clip)
+        except ValueError: frame = None
+        image_ok = bool(image_ok and base_state['video_approved'] and frame is not None
+                        and image.get('base_video_sha256') == base_state['video']['sha256']
+                        and image.get('base_cut_frame') == frame)
     if clip.continues_from:
         previous = get_clip(draft, clip.continues_from)
         previous_state = status(draft, previous, assets) if previous else {}
@@ -193,4 +217,5 @@ def prompt(draft, clip, kind):
                + ('Seamless loop: end in the exact starting pose.' if clip.id == draft.base.id else
                   ('This is an intermediate part: end at the final action pose, the next part continues from that frame.' if any(c.continues_from == clip.id for c in draft.clips) else
                    'Continue naturally from the supplied final frame of the previous part. End in the base pose.' if clip.continues_from else
-                   'Start and end in the base pose so the base animation resumes naturally.'))))
+                   'Start exactly from the supplied frame where the base animation was interrupted. '
+                   'Finish in the first pose of the base loop so it resumes naturally.'))))
