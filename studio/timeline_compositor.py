@@ -348,6 +348,10 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
     if not windows and duration+.001<target+compiled.get('audio_offset_seconds',0):raise ValueError('Audio shorter than target')
     needed=math.ceil(target*2_000_000/8*3+512*1024**2)
     if shutil.disk_usage(folder).free<needed:raise ValueError('Insufficient local scratch capacity')
+    if compiled.get('continuity_policy'):
+        from .workshop_continuity import prepare
+        plan,sources=prepare(plan,sources,folder,width,height,fps)
+        segments=plan['segments']
     binding=checkpoint_binding(compiled,plan,environment,file_hash(audio),width,height,fps)
     masks=environment_files(environment,folder,(width,height),compiled['lighting'],fps);chunks=[];previous=None;receipts=[]
     frames=compiled['lighting']['keyframes'];objects=compiled['lighting'].get('object_keyframes',{})
@@ -402,7 +406,7 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
             x,y,_,_=environment['cushion_box']
             filters += [f'[{last}][{names["label"]}:v]overlay=x={round(x*width)}:y={round(y*height)}:shortest=1[labelled]'];last='labelled'
         steady_args=args.copy();steady_filters=filters.copy();steady_last=last
-        if previous:
+        if previous and not compiled.get('continuity_policy'):
             prev_index=args.count('-i');args+=['-loop','1','-framerate',str(fps),'-i',str(previous)]
             filters += [f'[{last}]format=yuva420p,fade=t=in:st=0:d=0.35:alpha=1[faded]',f'[{prev_index}:v][faded]overlay=shortest=1[transition]'];last='transition'
         chunk=folder/f'chunk-{index:04}.mp4'
@@ -421,7 +425,7 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
             save_checkpoint(checkpoint,chunk,segment_binding,seconds)
         previous=folder/'boundary.png'
         subprocess.run(['ffmpeg','-v','error','-y','-ss',str(max(0,seconds-1/fps)),'-i',str(chunk),'-frames:v','1','-threads','1',str(previous)],check=True,timeout=30,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
-        chunks.append(chunk);receipts.append({**segment,'rendered_seconds':seconds,'source_verified':True,'checkpoint_reused':reused,'transition_seconds':.35 if index else 0,
+        chunks.append(chunk);receipts.append({**segment,'rendered_seconds':seconds,'source_verified':True,'checkpoint_reused':reused,'transition_seconds':(0 if compiled.get('continuity_policy') else .35) if index else 0,
                                              'base_cycle_reused':periodic_base_eligible(compiled,environment,segment,seconds,cycle,fps)})
         peak=max(peak,scratch_bytes(folder))
         if progress:progress(index+1,len(segments),segment['end'])
@@ -438,6 +442,6 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
                     continuous_transitions_reviewed=False,perceptible_motion_reviewed=False,time_progression_reviewed=False)
     resources=resource_report(started,cpu_before,max(peak,scratch_bytes(folder)),output,target)
     resources['checkpoint_reused_segments']=sum(bool(s['checkpoint_reused']) for s in receipts)
-    return {'video':evidence,'segments':receipts,'local_resources':resources,'paid_calls':0,'environment_clock':'absolute_no_hourly_reset',
+    return {'continuity_policy':compiled.get('continuity_policy'),'video':evidence,'segments':receipts,'local_resources':resources,'paid_calls':0,'environment_clock':'absolute_no_hourly_reset',
             'eligible_for_live':False,'final_human_review_required':True,'target_seconds':target,'preview_only':compiled.get('preview_only',False),'parent_spec_sha256':compiled.get('spec_sha256'),'clock_offset_seconds':compiled.get('clock_offset_seconds',0),
             'preview_mode':compiled.get('preview_mode','window' if compiled.get('preview_only') else None),'sample_map':compiled.get('sample_map')}

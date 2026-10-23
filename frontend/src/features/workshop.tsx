@@ -242,7 +242,7 @@ export function Workshop({ id }: { id?: string }) {
     <section class="card stack"><h3>1. Duração, cenário e personagens</h3>
       {visualLocked && <div class="notice">Visual aprovado e protegido. Duração, movimentos, música e horários continuam editáveis. <button class="btn" onClick={() => { if(confirm('Editar o visual cria uma nova versão. Os arquivos anteriores ficam preservados. Continuar?')) setEditVisual(true); }}>Editar visual — criar nova versão</button></div>}
       <div class="grid cols-2"><Field label="Nome do projeto"><input class="input" value={draft.name} onInput={e => field('name', e.currentTarget.value)} /></Field>
-        <Field label="Duração total (minutos)"><input class="input" type="number" min={1} max={480} step={0.1} value={draft.minutes} onInput={e => field('minutes', Number(e.currentTarget.value))} /></Field></div>
+        <Field label="Duração total (minutos)"><input class="input" type="number" min={1} max={1440} step={0.1} value={draft.minutes} onInput={e => field('minutes', Number(e.currentTarget.value))} /></Field></div>
       <Field label="Tema"><input class="input" disabled={visualLocked} value={draft.theme} onInput={e => field('theme', e.currentTarget.value)} /></Field>
       <Field label="Cenário e estilo visual"><textarea class="textarea" disabled={visualLocked} value={draft.scene} onInput={e => field('scene', e.currentTarget.value)} /></Field>
       <Field label="Movimentos do cenário"><textarea class="textarea" placeholder="Ex.: chuva suave na janela e vapor do café" value={draft.scene_motion} onInput={e => field('scene_motion', e.currentTarget.value)} /></Field>

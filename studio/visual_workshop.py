@@ -34,7 +34,7 @@ class Clip(Strict):
 class Insertion(Strict):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     clip_id: uuid.UUID
-    minute: float = Field(ge=0, le=480)
+    minute: float = Field(ge=0, le=1440)
     image_id: uuid.UUID | None = None
     video_id: uuid.UUID | None = None
     source_binding: str | None = Field(default=None, pattern='^[a-f0-9]{64}$')
@@ -42,7 +42,7 @@ class Insertion(Strict):
 
 class Draft(Strict):
     name: str = Field(min_length=1, max_length=120)
-    minutes: float = Field(default=60, ge=1, le=480)
+    minutes: float = Field(default=60, ge=1, le=1440)
     theme: str = Field(default='', max_length=1000)
     scene: str = Field(min_length=1, max_length=3000)
     scene_motion: str = Field(default='', max_length=2000)
@@ -345,7 +345,7 @@ def prompt(draft, clip, kind, previous_motion=None):
             + (f'Complete action goal, shared across continuous parts: {clip.action_goal}. ' if clip.action_goal and kind=='video' else '')
             + ('Create one starting still image for human approval, no text or watermark.' if kind == 'image' else
                f'Animate for {clip.seconds} seconds. No sound, speech, camera cut, or extra characters. '
-               + ('Seamless loop: end in the exact starting pose.' if clip.id == draft.base.id else
+               + ('Cyclic motion contract: preserve position, lighting, camera and motion direction across the last and first one-second windows. Complete the motion cycle without pausing, resetting or freezing rain, coffee steam, the cat or the character. End in the starting pose and velocity; the compositor will apply the cyclic overlap policy.' if clip.id == draft.base.id else
                   ('This is an intermediate part: end at the final action pose, the next part continues from that frame.' if any(c.continues_from == clip.id and any(i.clip_id == c.id for i in draft.insertions) for c in draft.clips) else
                    'Continue naturally from the supplied final frame of the previous part. End in the base pose.' if clip.continues_from else
                    f'The preceding motion is: {previous_motion or draft.base.motion}. '
