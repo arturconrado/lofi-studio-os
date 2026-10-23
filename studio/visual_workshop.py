@@ -42,6 +42,7 @@ class Insertion(Strict):
 
 class Draft(Strict):
     name: str = Field(min_length=1, max_length=120)
+    automatic_motion: bool = True
     minutes: float = Field(default=60, ge=1, le=1440)
     theme: str = Field(default='', max_length=1000)
     scene: str = Field(min_length=1, max_length=3000)
@@ -261,7 +262,7 @@ def _status(draft, clip, assets, group=None, _seams=True):
         base = _status(draft,draft.base,assets)
         try: frame = group['frame'] if group else base_cut_frame(draft,clip)
         except ValueError: frame = None
-        image_ok = bool(image_ok and base['video_approved'] and frame is not None
+        image_ok = bool(image_ok and base['video_ready' if draft.automatic_motion else 'video_approved'] and frame is not None
             and image.get('base_video_sha256') == base['video']['sha256']
             and image.get('base_cut_frame') == frame)
     if group and image and image.get('source_binding'):
@@ -272,7 +273,7 @@ def _status(draft, clip, assets, group=None, _seams=True):
         else:
             previous = get_clip(draft,clip.continues_from)
             prior = status(draft,previous,assets) if previous else {}
-            source = prior.get('video') or {}; source_ready = prior.get('video_approved')
+            source = prior.get('video') or {}; source_ready = prior.get('video_ready' if draft.automatic_motion else 'video_approved')
         image_ok = bool(image_ok and source_ready and image.get('continuation_sha256') == source.get('sha256'))
     video_ready = bool(image_ok and video and video.get('signature') == signature(draft,clip,'video',image['sha256'])
                        and video.get('sha256') and float(video.get('seconds',0))+.05 >= clip.seconds)
@@ -326,9 +327,9 @@ def assemble(draft, assets, preview=False, preview_range=None):
         if visible:
             if state.get('video') and float(state['video'].get('seconds',0))+.05<item.seconds:
                 raise ValueError('Vídeo mais curto que o trecho: ajuste a duração ou gere outro')
-            if not state['video_approved'] and not (preview and state['video_ready']):
+            if not state['video_approved'] and not ((preview or draft.automatic_motion) and state['video_ready']):
                 raise ValueError('Aprove os vídeos usados; para prévia, aguarde os vídeos das partes vizinhas')
-            if not preview and not state['seams_approved']:
+            if not preview and not draft.automatic_motion and not state['seams_approved']:
                 raise ValueError('Revise as emendas nos horários e com a música atuais; os vídeos estão preservados.')
         asset = state['video'] or {}
         segments.append({**event,'clip_id':str(item.id),'name':item.name,'loop':idle,

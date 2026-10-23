@@ -8,14 +8,34 @@ import json
 import subprocess
 from pathlib import Path
 
-POLICY = {'version': 1, 'window_seconds': 1.0,
+POLICY = {'version': 2, 'window_seconds': 1.0,
           'loop': 'cyclic_cosine_overlap', 'joins': 'moving_cosine_bridge',
           'preserve_timeline': True, 'manual_seam_approval': False}
 
 
+def inspect_cycle(path, expected_frames):
+    """Reject incomplete periods and boundary outliers before multiplying them."""
+    raw = subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(path),
+                                   '-vf', 'scale=160:90', '-pix_fmt', 'gray',
+                                   '-f', 'rawvideo', '-'], stderr=subprocess.PIPE, timeout=60)
+    frames = [raw[i:i+14400] for i in range(0, len(raw), 14400)]
+    if len(frames) != expected_frames or any(len(f) != 14400 for f in frames):
+        raise ValueError('Cyclic continuity: incomplete frame period')
+    def difference(a, b):
+        return sum(abs(x-y) for x, y in zip(a, b)) / len(a)
+    changes = sorted(difference(a, b) for a, b in zip(frames, frames[1:]))
+    boundary = difference(frames[-1], frames[0])
+    p95 = changes[int(len(changes)*.95)]
+    if boundary > max(p95*1.5, .1):
+        raise ValueError('Cyclic continuity: boundary exceeds motion tolerance')
+    return {'frame_count': len(frames), 'boundary_mae': boundary,
+            'internal_p95_mae': p95, 'technical_check_passed': True,
+            'artistic_acceptance': False}
+
+
 def prepare(plan, sources, folder, width, height, fps):
     from .timeline_compositor import file_hash, normalize_source
-    folder = Path(folder) / 'continuity-v1'; folder.mkdir(exist_ok=True)
+    folder = Path(folder) / 'continuity-v2'; folder.mkdir(exist_ok=True)
     sources = dict(sources); segments = [dict(s) for s in plan['segments']]
 
     def encode(path, args, graph, label, frames):
@@ -42,13 +62,21 @@ def prepare(plan, sources, folder, width, height, fps):
             w = min(round(POLICY['window_seconds'] * fps), frames // 4) / fps
             key = hashlib.sha256(json.dumps([s['asset_sha256'], cycle, width, height, fps, POLICY]).encode()).hexdigest()
             path = folder / f'loop-{key}.mp4'
-            weight = f'(1-cos(PI*T/{w}))/2'
-            graph = (f'[0:v]split=3[a][b][c];[a]trim=start={w}:end={cycle-w},setpts=PTS-STARTPTS[core];'
+            weight = f'(1-cos(PI*T/{w-1/fps}))/2'
+            core_frames = frames-round(w*fps)
+            graph = (f'[0:v]split=3[a][b][c];[a]trim=start={w}:end={cycle-w},setpts=(PTS-STARTPTS)*{(cycle-w)/(cycle-2*w)},fps={fps},tpad=stop_mode=clone:stop_duration=0.1,trim=end_frame={core_frames},setpts=PTS-STARTPTS[core];'
                      f'[b]trim=start={cycle-w}:end={cycle},setpts=PTS-STARTPTS[tail];'
                      f'[c]trim=end={w},setpts=PTS-STARTPTS[head];'
                      f"[tail][head]blend=all_expr='A*(1-({weight}))+B*({weight})'[seam];"
-                     f'[core][seam]concat=n=2:v=1:a=0,setpts=PTS*{cycle/(cycle-w)},fps={fps}[out]')
+                     f'[core][seam]concat=n=2:v=1:a=0[out]')
             s['asset_sha256'] = encode(path, ['-i', str(src)], graph, 'out', frames)
+            receipt = path.with_suffix('.quality.json')
+            try:
+                checked = json.loads(receipt.read_text())
+            except (OSError, ValueError):
+                checked = {}
+            if checked.get('sha256') != s['asset_sha256']:
+                receipt.write_text(json.dumps({**inspect_cycle(path, frames), 'sha256': s['asset_sha256']}))
         else:
             sha = file_hash(src); sources[sha] = src; s['asset_sha256'] = sha
 

@@ -373,8 +373,8 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if pending: raise HTTPException(409,'Este trecho já tem um pedido ativo ou incerto. Consulte o andamento')
         check_available(c,total)
         base=status(draft,draft.base,media)
-        if clip.id!=draft.base.id and not base['video_approved']:
-            raise HTTPException(409,'Aprove primeiro o vídeo-base')
+        if clip.id!=draft.base.id and not base['video_ready' if draft.automatic_motion else 'video_approved']:
+            raise HTTPException(409,'Aguarde a preparação do vídeo-base')
         refs=[*draft.scene_references,*(r for ch in draft.characters for r in ch.references),*clip.references]
         prepared={}
         if kind=='video' and clip.id!=draft.base.id:
@@ -659,7 +659,7 @@ def soundtrack(c, row, draft):
         try: _, sha = program_snapshot(c, source['id'])
         except ValueError: continue
         review = c.execute('SELECT snapshot_sha256 FROM program_reviews WHERE program_id=%s', (source['id'],)).fetchone()
-        if not review or review['snapshot_sha256'] != sha: continue
+        if not draft.automatic_motion and (not review or review['snapshot_sha256'] != sha): continue
         obj = storage().get_object(Bucket=os.environ['S3_BUCKET'], Key=source['manifest_key'])
         try: manifest = json.loads(obj['Body'].read(1024**2 + 1))
         finally: obj['Body'].close()
@@ -692,7 +692,7 @@ def render(pid: uuid.UUID, body: Render):
             state=status(draft,cl,media)
             for variant in state.get('variants',[state]):
                 video=variant.get('video') or {}
-                if video.get('continuity_review_version') and video.get('reviewed_audio')!=audio:
+                if not draft.automatic_motion and video.get('continuity_review_version') and video.get('reviewed_audio')!=audio:
                     raise HTTPException(409,'A trilha mudou; revise as prévias com a música atual')
         payload = {'project_id': str(pid), 'operation': 'render', 'draft_sha256': digest(row['data']),
                    'seconds': segments[-1]['end'], 'segments': segments, 'audio': audio}
@@ -851,7 +851,7 @@ def continuation_image(pid: uuid.UUID, cid: uuid.UUID, body: Render):
         if not clip or not clip.continues_from: raise HTTPException(409, 'Escolha a parte anterior.')
         previous = get_clip(draft, clip.continues_from)
         state = status(draft, previous, assets(c, pid))
-        if not state['video_approved']: raise HTTPException(409, 'Aprove o vídeo da parte anterior antes de continuar.')
+        if not state['video_ready' if draft.automatic_motion else 'video_approved']: raise HTTPException(409, 'Aguarde o vídeo da parte anterior antes de continuar.')
         source = state['video']
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / 'previous.mp4'; frame = Path(folder) / 'last.png'
