@@ -192,7 +192,73 @@ def encode_chunk(args,timeout,progress,index,total,start,end,log):
             proc.stdout.close()
 
 
-CHECKPOINT_VERSION = 2  # 2: weather phase follows the program clock
+CHECKPOINT_VERSION = 3  # 3: bounded encoding of periodic workshop base intervals
+
+
+def copy_periodic_base(steady_args, transition_args, chunk, seconds, cycle, fps,
+                       previous, progress, index, total, start, end, folder):
+    """Encode at most one cycle per unique recipe, then concatenate packets.
+
+    The entry cycle retains the existing fade from the preceding action. Only
+    steady cycles repeat; neither actions nor entry transitions are looped.
+    A fractional final cycle is encoded to an exact frame count, never cut at
+    an arbitrary compressed-video packet boundary.
+    """
+    frames = round(seconds * fps)
+    cycle_frames = round(cycle * fps)
+    if abs(frames / fps - seconds) > 1e-6 or abs(cycle_frames / fps - cycle) > 1e-6:
+        raise ValueError('Periodic base requires frame-aligned durations')
+
+    def encoded(args, count, entry=False):
+        recipe = [args, count, fps, file_hash(previous) if entry else None]
+        digest = hashlib.sha256(json.dumps(recipe).encode()).hexdigest()
+        path = folder / f'base-cycle-{digest}.mp4'
+        receipt = path.with_suffix('.json')
+        duration = count / fps
+        if not reusable_chunk(path, receipt, digest, duration):
+            command = args + ['-an', '-frames:v', str(count), '-c:v', 'libx264',
+                              '-threads', '1', '-preset', 'veryfast', '-crf', '19',
+                              '-pix_fmt', 'yuv420p', '-g', str(fps * 2), '-r', str(fps), str(path)]
+            encode_chunk(command, max(120, int(duration * 12)), None, index, total,
+                         start, end, folder / 'encoder.log')
+            save_checkpoint(receipt, path, digest, duration)
+        return path
+
+    pieces = []
+    remaining = frames
+    if previous:
+        pieces.append(encoded(transition_args, cycle_frames, entry=True))
+        remaining -= cycle_frames
+    repeats, tail = divmod(remaining, cycle_frames)
+    if repeats:
+        steady = encoded(steady_args, cycle_frames)
+        pieces.extend([steady] * repeats)
+    if tail:
+        pieces.append(encoded(steady_args, tail))
+    listing = chunk.with_suffix('.concat.txt')
+    listing.write_text(''.join(f"file '{p.name}'\n" for p in pieces), encoding='utf-8')
+    subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-f', 'concat', '-safe', '1',
+                    '-i', str(listing), '-map', '0:v:0', '-c:v', 'copy', '-an',
+                    '-movflags', '+faststart', str(chunk)], check=True,
+                   timeout=max(120, int(seconds)), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    measured, _ = measure(chunk, 'video')
+    if abs(measured - seconds) > 1 / fps + .001:
+        raise ValueError('Periodic base duration mismatch')
+    if progress:
+        progress(index + 1, total, end)
+
+
+def periodic_base_eligible(compiled, environment, segment, seconds, cycle, fps):
+    # Strictly opt in the workshop's static environment. Time-varying light,
+    # procedural rain, recoloring, labels and other overlays retain the original
+    # absolute-clock renderer. Motion already inside the source remains intact.
+    lighting = compiled.get('lighting', {})
+    return (compiled.get('reuse_base_cycles') is True and not environment
+            and lighting == {'keyframes': [{'minute': 0, 'night': 0, 'sky_light': 0, 'city_lights': 0}]}
+            and segment['action'] == 'typing_idle' and not segment.get('label')
+            and seconds >= 2 * cycle and cycle >= .35
+            and abs(round(seconds * fps) / fps - seconds) < 1e-6
+            and abs(round(cycle * fps) / fps - cycle) < 1e-6)
 
 
 def checkpoint_binding(compiled, plan, environment, audio_sha, width, height, fps):
@@ -335,6 +401,7 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
         if 'label' in masks:
             x,y,_,_=environment['cushion_box']
             filters += [f'[{last}][{names["label"]}:v]overlay=x={round(x*width)}:y={round(y*height)}:shortest=1[labelled]'];last='labelled'
+        steady_args=args.copy();steady_filters=filters.copy();steady_last=last
         if previous:
             prev_index=args.count('-i');args+=['-loop','1','-framerate',str(fps),'-i',str(previous)]
             filters += [f'[{last}]format=yuva420p,fade=t=in:st=0:d=0.35:alpha=1[faded]',f'[{prev_index}:v][faded]overlay=shortest=1[transition]'];last='transition'
@@ -344,11 +411,18 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
         segment_binding=hashlib.sha256(json.dumps([binding,index,file_hash(previous) if previous else None]).encode()).hexdigest()
         reused=reusable_chunk(chunk,checkpoint,segment_binding,seconds)
         if not reused:
-            encode_chunk(args,max(120,int(seconds*12)),progress,index,len(segments),segment['start'],segment['end'],folder/'encoder.log')
+            if periodic_base_eligible(compiled,environment,segment,seconds,cycle,fps):
+                transition_args=args[:args.index('-filter_complex')+4]
+                copy_periodic_base(steady_args+['-filter_complex',';'.join(steady_filters),'-map',f'[{steady_last}]'],
+                                   transition_args,chunk,seconds,cycle,fps,previous,progress,index,
+                                   len(segments),segment['start'],segment['end'],folder)
+            else:
+                encode_chunk(args,max(120,int(seconds*12)),progress,index,len(segments),segment['start'],segment['end'],folder/'encoder.log')
             save_checkpoint(checkpoint,chunk,segment_binding,seconds)
         previous=folder/'boundary.png'
         subprocess.run(['ffmpeg','-v','error','-y','-ss',str(max(0,seconds-1/fps)),'-i',str(chunk),'-frames:v','1','-threads','1',str(previous)],check=True,timeout=30,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
-        chunks.append(chunk);receipts.append({**segment,'rendered_seconds':seconds,'source_verified':True,'checkpoint_reused':reused,'transition_seconds':.35 if index else 0})
+        chunks.append(chunk);receipts.append({**segment,'rendered_seconds':seconds,'source_verified':True,'checkpoint_reused':reused,'transition_seconds':.35 if index else 0,
+                                             'base_cycle_reused':periodic_base_eligible(compiled,environment,segment,seconds,cycle,fps)})
         peak=max(peak,scratch_bytes(folder))
         if progress:progress(index+1,len(segments),segment['end'])
         if shutil.disk_usage(folder).free<512*1024**2:raise ValueError('Scratch capacity exhausted')

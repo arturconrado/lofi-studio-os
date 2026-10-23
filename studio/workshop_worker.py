@@ -28,7 +28,7 @@ def render_segments(segments, sources, audio, destination, seconds, preview_rang
         if actual + .05 < segment['source_seconds']:
             raise ValueError('Clip shorter than requested action')
         segment['cycle_seconds'] = segment['source_seconds']
-    compiled = {'duration_seconds': seconds, 'lighting': {'keyframes': [
+    compiled = {'duration_seconds': seconds, 'reuse_base_cycles': True, 'lighting': {'keyframes': [
         {'minute': 0, 'night': 0, 'sky_light': 0, 'city_lights': 0}]}}
     if preview_range:
         compiled.update(duration_seconds=length, clock_offset_seconds=start,
