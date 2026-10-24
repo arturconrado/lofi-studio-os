@@ -335,6 +335,87 @@ def finish(row,response):
     if privacy not in ('private','unlisted','public'):raise ValueError('Missing visibility')
     progress(row['id'],state='uploaded',video_id=video['id'],actual_privacy=privacy,bytes_sent=row['total_bytes'],detail='Recebido pelo YouTube; processamento e verificações podem continuar.' if privacy==row['privacy'] else 'YouTube retornou outra visibilidade. Projetos sem auditoria podem ter uploads restritos a privado.')
 
+def purge_uploaded_media(jid):
+    """Remove only the final MP4 after a confirmed YouTube upload; keep all source assets and records."""
+    with db() as c:
+        row=c.execute('''SELECT p.id,p.state,p.video_id,p.export_id,p.pilot_id,
+          COALESCE(e.object_key,a.video_key) object_key,e.program_id,e.report export_report,a.report pilot_report,
+          a.silent_key,b.audio_key,b.video_key,b.manifest_key
+          FROM youtube_publications p LEFT JOIN export_jobs e ON e.id=p.export_id
+          LEFT JOIN ambient_pilots a ON a.id=p.pilot_id
+          LEFT JOIN production_batches b ON b.id=e.program_id WHERE p.id=%s FOR UPDATE OF p''',(jid,)).fetchone()
+        if not row or row['state']!='uploaded' or not row['video_id'] or not row['object_key']:
+            return False
+        report=(row['pilot_report'] if row['pilot_id'] else row['export_report']) or {}
+        if report.get('media_purged'):
+            return True
+        key=row['object_key']
+        # Guard against a bad relationship ever pointing cleanup at a source or reusable asset.
+        protected={row.get(k) for k in ('silent_key','audio_key','video_key','manifest_key') if row.get(k)}
+        if row['pilot_id']:
+            protected.update(v for v in (report.get('delivery_assets') or {}).values() if isinstance(v,str))
+        else:
+            for source in c.execute('SELECT video_key,image_key FROM program_scenes WHERE batch_id=%s',(row['program_id'],)).fetchall():
+                protected.update(v for v in source.values() if v)
+        if key in protected:
+            report['media_purge']={'state':'blocked','object_key':key,'reason':'Final output key is also referenced as a source asset; refusing cleanup','updated_at':datetime.now(timezone.utc).isoformat()}
+            if row['pilot_id']:
+                c.execute('UPDATE ambient_pilots SET report=%s::jsonb WHERE id=%s',(json.dumps(report),row['pilot_id']))
+            else:
+                c.execute('UPDATE export_jobs SET report=%s::jsonb,updated_at=now() WHERE id=%s',(json.dumps(report),row['export_id']))
+            audit(c,'YOUTUBE_PUBLICATION_MEDIA_PURGE_BLOCKED',str(jid),key);c.commit()
+            return False
+        report['media_purge']={'state':'pending','youtube_video_id':row['video_id'],'object_key':key,'requested_at':datetime.now(timezone.utc).isoformat()}
+        if row['pilot_id']:
+            c.execute('UPDATE ambient_pilots SET report=%s::jsonb WHERE id=%s',(json.dumps(report),row['pilot_id']))
+        else:
+            c.execute('UPDATE export_jobs SET report=%s::jsonb,updated_at=now() WHERE id=%s',(json.dumps(report),row['export_id']))
+        c.commit()
+
+    try:
+        client=storage();bucket=os.environ['S3_BUCKET']
+        # Delete every version of this exact final-output key so versioning cannot retain its bytes.
+        # Exact key filtering is essential: never delete by prefix or touch adjacent assets.
+        exact=[];markers={}
+        while True:
+            versions=client.list_object_versions(Bucket=bucket,Prefix=key,**markers)
+            exact.extend({'Key':v['Key'],'VersionId':v['VersionId']} for v in versions.get('Versions',[]) if v.get('Key')==key)
+            exact.extend({'Key':v['Key'],'VersionId':v['VersionId']} for v in versions.get('DeleteMarkers',[]) if v.get('Key')==key)
+            if not versions.get('IsTruncated'):break
+            markers={'KeyMarker':versions['NextKeyMarker'],'VersionIdMarker':versions['NextVersionIdMarker']}
+        if exact:
+            for item in exact:
+                client.delete_object(Bucket=bucket,Key=key,VersionId=item['VersionId'])
+        else:
+            client.delete_object(Bucket=bucket,Key=key)
+        with db() as c:
+            table='ambient_pilots' if row['pilot_id'] else 'export_jobs'
+            ident=row['pilot_id'] or row['export_id']
+            current=c.execute(f'SELECT report FROM {table} WHERE id=%s FOR UPDATE',(ident,)).fetchone()
+            report=(current['report'] or {})
+            report['media_purged']={'at':datetime.now(timezone.utc).isoformat(),'youtube_video_id':row['video_id'],'object_key':key}
+            report['media_purge']={'state':'complete','object_key':key,'versions_removed':len(exact)}
+            if row['pilot_id']:
+                c.execute('UPDATE ambient_pilots SET report=%s::jsonb WHERE id=%s',(json.dumps(report),ident))
+            else:
+                c.execute('UPDATE export_jobs SET report=%s::jsonb,updated_at=now() WHERE id=%s',(json.dumps(report),ident))
+            audit(c,'YOUTUBE_PUBLICATION_MEDIA_PURGED',str(jid),json.dumps({'video_id':row['video_id'],'object_key':key,'versions_removed':len(exact)}))
+            c.commit()
+        return True
+    except Exception as error:
+        with db() as c:
+            table='ambient_pilots' if row['pilot_id'] else 'export_jobs'
+            ident=row['pilot_id'] or row['export_id']
+            current=c.execute(f'SELECT report FROM {table} WHERE id=%s FOR UPDATE',(ident,)).fetchone()
+            report=(current['report'] or {})
+            report['media_purge']={'state':'retrying','object_key':key,'last_error':str(error)[:500],'updated_at':datetime.now(timezone.utc).isoformat()}
+            if row['pilot_id']:
+                c.execute('UPDATE ambient_pilots SET report=%s::jsonb WHERE id=%s',(json.dumps(report),ident))
+            else:
+                c.execute('UPDATE export_jobs SET report=%s::jsonb,updated_at=now() WHERE id=%s',(json.dumps(report),ident))
+            audit(c,'YOUTUBE_PUBLICATION_MEDIA_PURGE_RETRY',str(jid),str(error)[:500]);c.commit()
+        return False
+
 def run_one():
     with db() as lock:
         ensure(lock);lock.commit()
@@ -357,6 +438,8 @@ def run_one():
                     if r.status_code in (200,201):
                         finish(row,r)
                         if row.get('pilot_id'):set_pilot_thumbnail(client,row,r.json()['id'])
+                        try:purge_uploaded_media(row['id'])
+                        except Exception:pass  # upload remains confirmed; the reconciler retries cleanup
                         return True
                     if r.status_code!=308:r.raise_for_status();raise ValueError('Unexpected status')
                     offset=accepted_offset(r,total)
@@ -376,6 +459,8 @@ def run_one():
                     if r.status_code in (200,201):
                         finish(row,r)
                         if row.get('pilot_id'):set_pilot_thumbnail(client,row,r.json()['id'])
+                        try:purge_uploaded_media(row['id'])
+                        except Exception:pass  # upload remains confirmed; the reconciler retries cleanup
                         return True
                     if r.status_code!=308:r.raise_for_status();raise ValueError('Unexpected status')
                     next_offset=accepted_offset(r,total)
@@ -396,6 +481,13 @@ def main():
                 with db() as c:
                     if not c.execute("SELECT to_regclass('youtube_publications') found").fetchone()['found']:continue
                     c.execute("UPDATE youtube_publications SET state=CASE WHEN session_encrypted IS NULL THEN 'uncertain' ELSE 'interrupted' END,detail='Processo interrompido; confira ou retome a sessão existente.' WHERE state='uploading' AND updated_at<now()-interval '5 minutes'");c.commit()
+                    cleanup=c.execute("""SELECT p.id FROM youtube_publications p LEFT JOIN export_jobs e ON e.id=p.export_id LEFT JOIN ambient_pilots a ON a.id=p.pilot_id
+                      WHERE p.state='uploaded' AND COALESCE(e.report->'media_purged',a.report->'media_purged') IS NULL
+                      AND COALESCE(e.report->'media_purge'->>'state',a.report->'media_purge'->>'state','')<>'blocked'
+                      AND (COALESCE(e.report->'media_purge'->>'state',a.report->'media_purge'->>'state','')<>'retrying'
+                        OR COALESCE(e.report->'media_purge'->>'updated_at',a.report->'media_purge'->>'updated_at')::timestamptz<now()-interval '5 minutes')
+                      ORDER BY p.updated_at LIMIT 1""").fetchone()
+                if cleanup:purge_uploaded_media(cleanup['id'])
                 run_one()
             except Exception:pass
             finally:WORKSPACE.reset(marker)
