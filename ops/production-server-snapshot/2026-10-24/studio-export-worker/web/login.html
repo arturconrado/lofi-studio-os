@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b111b"><title>Entrar · Lo-Fi Studio OS</title><link rel="stylesheet" href="/static/login.css"></head>
+<body data-access="user">
+<main class="auth-shell">
+<section class="intro" aria-label="Seu espaço para criar">
+  <a class="brand" href="/login"><span class="brand-icon" aria-hidden="true">♫</span><span>Lo-Fi Studio OS</span></a>
+  <div class="intro-copy"><p class="eyebrow">ENCONTRE O SEU RITMO</p><h1>Seu espaço.<br>Sua próxima criação.</h1><p>Da primeira ideia ao próximo play.<br>Crie, organize e transmita no seu ritmo.</p></div>
+  <div class="intro-footer"><span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span>Um estúdio só seu. Infinitas possibilidades.</span></div>
+</section>
+<section class="access" aria-labelledby="title">
+  <div class="card">
+    <div class="card-brand"><span class="logo" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none"><path d="M10 27v-6a14 14 0 0 1 28 0v6" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><rect x="7" y="23" width="9" height="17" rx="4" fill="currentColor"/><rect x="32" y="23" width="9" height="17" rx="4" fill="currentColor"/><path d="M21 15v21m6-21v21" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg></span><span>Lo-Fi Studio OS</span><small>Crie. Transmita. Cresça.</small></div>
+    <p class="access-badge" id="access-badge" hidden>ACESSO ADMINISTRATIVO</p>
+    <h2 id="title">Bem-vindo de volta</h2><p id="description">Entre para abrir seu estúdio.</p>
+    <form id="access-form">
+      <label id="name-field" hidden>Nome do estúdio<input id="studio-name" autocomplete="organization" minlength="2" maxlength="100" placeholder="Como vamos chamar seu espaço?"></label>
+      <label id="email-field"><span id="email-label">E-mail</span><input id="email" type="email" autocomplete="username" required maxlength="254" placeholder="voce@exemplo.com" spellcheck="false" autocapitalize="none"></label>
+      <div id="password-field"><label for="password">Senha</label><span class="password-wrap"><input id="password" type="password" autocomplete="current-password" minlength="12" maxlength="128" required placeholder="Sua senha"><button id="show-password" type="button" aria-label="Mostrar senha" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.6"/></svg></button></span></div>
+      <p class="hint" id="password-hint" hidden>Use pelo menos 12 caracteres.</p>
+      <div class="recovery-row"><button id="forgot" type="button" class="text-button">Esqueceu a senha?</button></div>
+      <button id="submit" type="submit">Entrar no estúdio <span aria-hidden="true">→</span></button>
+    </form>
+    <p id="feedback" role="status" aria-live="polite"></p>
+    <div class="signup-row" id="signup-row"><span>Ainda não tem uma conta?</span><button id="register" class="text-button" type="button">Crie seu estúdio</button></div>
+    <button id="back" class="text-button back" type="button" hidden>← Voltar para entrar</button>
+    <p class="hint availability" id="availability"></p>
+    <div class="access-footer"><span id="privacy-note">Seu conteúdo. Suas configurações. Seu estúdio.</span><a id="other-access" href="/admin/login">Acesso do administrador <span aria-hidden="true">↗</span></a></div>
+  </div>
+</section>
+</main><script src="/static/login.js"></script>
+</body></html>
