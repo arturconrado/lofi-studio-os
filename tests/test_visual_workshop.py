@@ -12,7 +12,7 @@ from studio.visual_workshop import Draft, Clip, Character, Insertion, assemble, 
 def fixture():
     base = Clip(name='Digitar', motion='Digitar suavemente', seconds=2)
     pet = Clip(name='Carinho', motion='Fazer carinho e voltar a digitar', seconds=2)
-    draft = Draft(name='Teste', minutes=1, scene='Mesa e janela', characters=[Character(name='Ana', description='Cabelo preto')],
+    draft = Draft(name='Teste', automatic_motion=False, minutes=1, scene='Mesa e janela', characters=[Character(name='Ana', description='Cabelo preto')],
                   base=base, clips=[pet], insertions=[Insertion(clip_id=pet.id, minute=.1), Insertion(clip_id=pet.id, minute=.3)])
     assets = {}
     for clip in [draft.base, *draft.clips]:
@@ -95,7 +95,7 @@ def test_real_render_preserves_absolute_times_returns_to_base_and_includes_music
     result=tmp_path/'result.mp4'
     report=render_segments(segments,{file_hash(p):p for p in sources.values()},audio,result,8)
     assert report['full_decode_pass'] and abs(report['seconds']-8)<.15 and abs(report['audio_seconds']-8)<.15
-    for second,color in [(1,'blue'),(2.5,'red'),(3.5,'red'),(4.5,'blue'),(7,'blue')]:
+    for second,color in [(1,'blue'),(2.5,'red'),(3.5,'red'),(5.5,'blue'),(7,'blue')]:
         pixel=run(['-ss',str(second),'-i',str(result),'-frames:v','1','-vf','scale=1:1','-pix_fmt','rgb24','-f','rawvideo','-'])
         assert (pixel[0]>180 and pixel[2]<60) if color=='red' else (pixel[2]>180 and pixel[0]<60)
 
@@ -480,3 +480,16 @@ def test_provider_binds_first_and_return_frames_without_looping_action_parts():
     with pytest.raises(ValueError,match='Return frame'):video_body(payload,['data:first'])
     payload['last_frame']=False
     assert len(video_body(payload,['data:first'])['frame_images'])==1
+
+
+def test_automatic_motion_uses_ready_clips_without_fabricating_human_approval():
+    draft, assets = fixture()
+    draft.automatic_motion = True
+    for asset in assets.values():
+        if asset['kind']=='video':
+            asset.update(approved=False, continuity_review_version=1)
+            asset.pop('review_sha256', None)
+    assert status(draft,draft.base,assets)['video_ready']
+    assert not status(draft,draft.base,assets)['video_approved']
+    assert assemble(draft,assets)[-1]['end']==60
+    assert all(not asset['approved'] for asset in assets.values() if asset['kind']=='video')

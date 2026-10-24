@@ -1,5 +1,5 @@
 """Tenant-scoped reviewed MP4 publication with persisted resumable sessions."""
-import json,os,re,time,uuid,hashlib
+import json,os,re,time,uuid,hashlib,math
 from urllib.parse import urlparse
 from datetime import datetime,timezone,timedelta
 import httpx
@@ -10,7 +10,7 @@ from .youtube import cipher,configured
 from .channels import profile
 router=APIRouter(prefix='/api/youtube/publications')
 UPLOAD_SCOPE='https://www.googleapis.com/auth/youtube.upload'
-FIELDS='id,channel_id,export_id,pilot_id,thumbnail_detail,title,description,privacy,state,bytes_sent,total_bytes,video_id,actual_privacy,detail,created_at,updated_at'
+FIELDS='id,channel_id,export_id,pilot_id,thumbnail_detail,title,description,keywords,publication_metadata,privacy,state,bytes_sent,total_bytes,video_id,actual_privacy,detail,created_at,updated_at'
 
 def ensure(c):
     c.execute('SELECT pg_advisory_xact_lock(192837480)')
@@ -27,6 +27,10 @@ def ensure(c):
         c.execute("ALTER TABLE youtube_publications ADD COLUMN thumbnail_detail TEXT NOT NULL DEFAULT ''")
     if not c.execute("SELECT 1 FROM pg_attribute WHERE attrelid='youtube_publications'::regclass AND attname='pilot_sha256' AND NOT attisdropped").fetchone():
         c.execute('ALTER TABLE youtube_publications ADD COLUMN pilot_sha256 TEXT')
+    if not c.execute("SELECT 1 FROM pg_attribute WHERE attrelid='youtube_publications'::regclass AND attname='keywords' AND NOT attisdropped").fetchone():
+        c.execute("ALTER TABLE youtube_publications ADD COLUMN keywords JSONB NOT NULL DEFAULT '[]'::jsonb")
+    if not c.execute("SELECT 1 FROM pg_attribute WHERE attrelid='youtube_publications'::regclass AND attname='publication_metadata' AND NOT attisdropped").fetchone():
+        c.execute("ALTER TABLE youtube_publications ADD COLUMN publication_metadata JSONB NOT NULL DEFAULT '{}'::jsonb")
 
 
 
@@ -139,6 +143,32 @@ class Release(BaseModel):
     confirm_release:bool=False
     allow_repeat_visual:bool=False
 
+class ReadyAuthorization(BaseModel):
+    confirm_review:bool=False
+    confirm_rights:bool=False
+    allow_repeat_visual:bool=False
+
+@router.post('/{jid}/authorize-ready')
+def authorize_ready(jid:uuid.UUID,body:ReadyAuthorization):
+    if not body.confirm_review or not body.confirm_rights:
+        raise HTTPException(422,'Confirme o vídeo e os direitos antes de publicar.')
+    if not configured():raise HTTPException(503,'Configure a conexão Google.')
+    with db() as c:
+        ensure(c)
+        row=c.execute("SELECT * FROM youtube_publications WHERE id=%s FOR UPDATE",(jid,)).fetchone()
+        if not row or row['state']!='ready':raise HTTPException(409,'Este item não está pronto para publicação.')
+        pilot=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(row['pilot_id'],row['channel_id'])).fetchone()
+        if not pilot or pilot['status']!='approved' or not ready_pilot(pilot):raise HTTPException(409,'Revise e aprove o vídeo completo antes de publicar.')
+        if pilot['report']['artifact_sha256']['video']!=row['pilot_sha256']:raise HTTPException(409,'O vídeo mudou desde a preparação da publicação.')
+        from .provenance import publication_gate
+        publication_gate(c,pilot=pilot)
+        refuse_duplicates(c,row['channel_id'],body.allow_repeat_visual,pilot=pilot)
+        cred=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s',(row['channel_id'],)).fetchone()
+        if not cred or not upload_allowed(json.loads(cipher().decrypt(cred['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio pelo Google no menu Canais.')
+        c.execute("UPDATE youtube_publications SET state='queued',youtube_channel_id=%s,detail='Publicação autorizada; aguardando envio',updated_at=now() WHERE id=%s",(cred['youtube_channel_id'],jid))
+        audit(c,'PREPARED_PUBLICATION_AUTHORIZED',str(jid),'Explicit review and rights confirmation');c.commit()
+    return {'id':jid,'state':'queued'}
+
 
 @router.post('/{jid}/release')
 def release(jid:uuid.UUID,body:Release):
@@ -225,6 +255,31 @@ def update_metadata(jid:uuid.UUID,body:MetadataUpdate):
     return {'id':jid,'video_id':row['video_id'],'title':update['title'],'updated':True}
 
 
+def retryable_publication(row):
+    return (row.get('state')=='failed' and not row.get('video_id')
+            and not row.get('session_encrypted') and row.get('bytes_sent',0)==0)
+
+
+@router.post('/{jid}/retry')
+def retry(jid:uuid.UUID):
+    with db() as c:
+        ensure(c)
+        row=c.execute('SELECT * FROM youtube_publications WHERE id=%s FOR UPDATE',(jid,)).fetchone()
+        if not row or not retryable_publication(row):
+            raise HTTPException(409,'Este pedido não pode ser repetido com segurança.')
+        cred=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s',(row['channel_id'],)).fetchone()
+        if not cred or cred['youtube_channel_id']!=row['youtube_channel_id']:
+            raise HTTPException(409,'Reconecte o mesmo canal antes de tentar novamente.')
+        tokens=json.loads(cipher().decrypt(cred['token_encrypted'].encode()))
+        if not upload_allowed(tokens):raise HTTPException(409,'Autorize o envio pelo Google em Canais.')
+        if cred['updated_at']<=row['updated_at']:
+            raise HTTPException(409,'Reconecte o YouTube em Canais antes de tentar novamente.')
+        c.execute("UPDATE youtube_publications SET state='queued',detail='Retomada solicitada após reconexão; aguardando envio',updated_at=now() WHERE id=%s",(jid,))
+        audit(c,'YOUTUBE_PUBLICATION_RETRIED',str(jid),'Same publication; zero bytes; no previous session; same channel reconnected')
+        c.commit()
+    return {'id':jid,'state':'queued'}
+
+
 @router.post('/{jid}/resume')
 def resume(jid:uuid.UUID):
     with db() as c:
@@ -270,6 +325,9 @@ def run_one():
         ensure(lock);lock.commit()
         if not lock.execute('SELECT pg_try_advisory_lock(192837479) ok').fetchone()['ok']:return False
         row=lock.execute("SELECT p.*,COALESCE(e.object_key,a.video_key) object_key,CASE WHEN p.pilot_id IS NOT NULL THEN 'completed' ELSE e.state END export_state,a.report pilot_report FROM youtube_publications p LEFT JOIN export_jobs e ON e.id=p.export_id LEFT JOIN ambient_pilots a ON a.id=p.pilot_id WHERE p.state='queued' ORDER BY p.created_at LIMIT 1").fetchone()
+        # The session advisory lock still protects this worker. Do not hold a
+        # table transaction across hashing, OAuth and a multi-gigabyte upload.
+        lock.commit()
         if not row:return False
         progress(row['id'],state='uploading');starting=False
         try:
@@ -289,7 +347,9 @@ def run_one():
                     offset=accepted_offset(r,total)
                 else:
                     starting=True
-                    r=client.post('https://www.googleapis.com/upload/youtube/v3/videos',params={'uploadType':'resumable','part':'snippet,status'},headers=headers|{'X-Upload-Content-Length':str(total),'X-Upload-Content-Type':'video/mp4'},json={'snippet':{'title':row['title'],'description':row['description'],'categoryId':'10'},'status':{'privacyStatus':row['privacy'],'selfDeclaredMadeForKids':row['made_for_kids'],'containsSyntheticMedia':True}})
+                    tags=row.get('keywords') or []
+                    if not isinstance(tags,list) or not all(isinstance(t,str) and 0<len(t)<=80 for t in tags) or sum(len(t)+1 for t in tags)>500:raise ValueError('Invalid publication keywords')
+                    r=client.post('https://www.googleapis.com/upload/youtube/v3/videos',params={'uploadType':'resumable','part':'snippet,status'},headers=headers|{'X-Upload-Content-Length':str(total),'X-Upload-Content-Type':'video/mp4'},json={'snippet':{'title':row['title'],'description':row['description'],'categoryId':'10','tags':tags},'status':{'privacyStatus':row['privacy'],'selfDeclaredMadeForKids':row['made_for_kids'],'containsSyntheticMedia':True}})
                     r.raise_for_status();url=secure_session(r.headers['Location']);progress(row['id'],session_encrypted=cipher().encrypt(url.encode()).decode());row['session_encrypted']=True;starting=False;offset=0
                 while offset<total:
                     end=min(offset+8*1024*1024,total)-1
@@ -330,7 +390,11 @@ def main():
 def ready_pilot(row):
     report=row['report']
     if report.get('media_purged'):return False  # files removed from the server after publication
-    return float(report.get('duration_seconds',0))==3600 and bool(report.get('technical_integrity') or report.get('decoded_without_errors')) and bool(report.get('full_decode_pass') or report.get('decoded_without_errors')) and re.fullmatch(r'[a-f0-9]{64}',report.get('artifact_sha256',{}).get('video','')) is not None
+    seconds=float(report.get('duration_seconds',0))
+    audio=float(report.get('audio_seconds',seconds))
+    workshop=bool(report.get('workshop_project_id') and report.get('workshop_render_id') and report.get('seconds')==seconds and report.get('audio_seconds')==seconds)
+    duration_ok=seconds==3600 or (workshop and seconds>=60)
+    return math.isfinite(seconds) and duration_ok and math.isfinite(audio) and abs(audio-seconds)<.15 and bool(report.get('technical_integrity') or report.get('decoded_without_errors')) and bool(report.get('full_decode_pass') or report.get('decoded_without_errors')) and re.fullmatch(r'[a-f0-9]{64}',report.get('artifact_sha256',{}).get('video','')) is not None
 
 @router.get('/pilots/{pid}/draft')
 def pilot_draft(pid:uuid.UUID):

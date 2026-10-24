@@ -10,4 +10,5 @@ python-multipart==0.0.32
 Pillow==12.3.0
 
 numpy==2.2.4
+opencv-python-headless==4.11.0.86
 starlette==1.8.0
