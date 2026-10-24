@@ -54,6 +54,19 @@ def validate_growth_packaging(title,description,primary_phrase):
     if phrase.casefold() not in opening.casefold():raise HTTPException(422,'Use a mesma frase naturalmente na primeira frase da descrição.')
     return phrase
 
+def validate_growth_receipt(c,channel_id,publication_metadata):
+    native=(publication_metadata or {}).get('native_growth') or {}
+    if not native.get('generated') or not native.get('request_id'):
+        raise HTTPException(422,'Gere o pacote nativo de título e descrição antes de publicar.')
+    try:request_id=uuid.UUID(str(native['request_id']))
+    except (TypeError,ValueError):raise HTTPException(422,'Recibo do pacote Growth inválido.') from None
+    if not c.execute("SELECT to_regclass('factory_tasks') found").fetchone()['found']:
+        raise HTTPException(422,'Não foi possível confirmar a geração do pacote Growth.')
+    task=c.execute('SELECT kind,status,payload FROM factory_tasks WHERE id=%s',(request_id,)).fetchone()
+    if not task or task['kind']!='growth_packaging_20261024' or task['status']!='COMPLETED' or task['payload'].get('channel_id')!=str(channel_id) or not task['payload'].get('package'):
+        raise HTTPException(422,'Gere novamente o pacote Growth para este canal antes de publicar.')
+    return native
+
 class Publication(BaseModel):
     request_id:uuid.UUID
     channel_id:uuid.UUID
@@ -62,6 +75,7 @@ class Publication(BaseModel):
     description:str=Field(max_length=5000)
     intent:Literal['coding_focus','study_focus','reading_focus','sleep_relaxation']='coding_focus'
     primary_phrase:str=Field(default='',max_length=100)
+    publication_metadata:dict=Field(default_factory=dict)
     privacy:str='public'
     made_for_kids:bool
     confirm_review:bool=False
@@ -126,13 +140,14 @@ def create(body:Publication):
     if not body.confirm_review or not body.confirm_rights:raise HTTPException(422,'Confirme o preview e os direitos antes de publicar.')
     if not body.title.strip() or any(x in body.title+body.description for x in '<>'):raise HTTPException(422,'Título ou descrição inválidos.')
     with db() as c:
-        ensure(c);profile(c,body.channel_id);primary_phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(body.export_id),))
+        ensure(c);profile(c,body.channel_id)
+        e=c.execute('SELECT e.*,m.channel_id FROM export_jobs e JOIN production_batches m ON m.id=e.program_id WHERE e.id=%s',(body.export_id,)).fetchone()
+        if not e or e['channel_id']!=body.channel_id:raise HTTPException(404,'MP4 indisponível neste canal.')
+        growth_receipt=validate_growth_receipt(c,body.channel_id,body.publication_metadata);primary_phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(body.export_id),))
         old=c.execute('SELECT '+FIELDS+',made_for_kids FROM youtube_publications WHERE request_id=%s OR export_id=%s',(body.request_id,body.export_id)).fetchone()
         if old:
             if any(old[k]!=v for k,v in {'channel_id':body.channel_id,'export_id':body.export_id,'title':body.title.strip(),'description':body.description,'intent':body.intent,'primary_phrase':primary_phrase,'privacy':body.privacy,'made_for_kids':body.made_for_kids}.items()):raise HTTPException(409,'Este MP4 já tem um envio registrado. Confira o histórico.')
             c.commit();return {k:v for k,v in old.items() if k!='made_for_kids'}
-        e=c.execute('SELECT e.*,m.channel_id FROM export_jobs e JOIN production_batches m ON m.id=e.program_id WHERE e.id=%s',(body.export_id,)).fetchone()
-        if not e or e['channel_id']!=body.channel_id:raise HTTPException(404,'MP4 indisponível neste canal.')
         saved_metadata=c.execute('SELECT intent FROM program_metadata WHERE program_id=%s',(e['program_id'],)).fetchone()
         if body.intent!=((saved_metadata.get('intent') or 'coding_focus') if saved_metadata else 'coding_focus'):raise HTTPException(409,'A intenção do pacote mudou. Atualize os metadados do programa antes de exportar/publicar.')
         if e['state']!='completed':raise HTTPException(409,'Aguarde a exportação do MP4.')
@@ -150,8 +165,8 @@ def create(body:Publication):
         credential=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s FOR UPDATE',(body.channel_id,)).fetchone()
         if not credential or not upload_allowed(json.loads(cipher().decrypt(credential['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio de vídeos no menu Canais antes de publicar.')
         jid=uuid.uuid4()
-        c.execute('INSERT INTO youtube_publications(id,request_id,channel_id,export_id,youtube_channel_id,title,description,intent,primary_phrase,privacy,made_for_kids) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',(jid,body.request_id,body.channel_id,body.export_id,credential['youtube_channel_id'],body.title.strip(),body.description,body.intent,primary_phrase,body.privacy,body.made_for_kids))
-        audit(c,'YOUTUBE_PUBLICATION_REQUESTED',str(jid),body.privacy);c.commit()
+        c.execute('INSERT INTO youtube_publications(id,request_id,channel_id,export_id,youtube_channel_id,title,description,intent,primary_phrase,privacy,made_for_kids,publication_metadata) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)',(jid,body.request_id,body.channel_id,body.export_id,credential['youtube_channel_id'],body.title.strip(),body.description,body.intent,primary_phrase,body.privacy,body.made_for_kids,json.dumps(body.publication_metadata)))
+        audit(c,'YOUTUBE_PUBLICATION_REQUESTED',str(jid),json.dumps({'privacy':body.privacy,'primary_phrase':primary_phrase,'growth_metadata':growth_receipt}));c.commit()
     return {'id':jid,'state':'queued'}
 
 class Release(BaseModel):
@@ -162,6 +177,11 @@ class ReadyAuthorization(BaseModel):
     confirm_review:bool=False
     confirm_rights:bool=False
     allow_repeat_visual:bool=False
+    title:str=Field(min_length=1,max_length=100)
+    description:str=Field(max_length=5000)
+    intent:Literal['coding_focus','study_focus','reading_focus','sleep_relaxation']
+    primary_phrase:str=Field(min_length=2,max_length=50)
+    publication_metadata:dict=Field(default_factory=dict)
 
 @router.post('/{jid}/authorize-ready')
 def authorize_ready(jid:uuid.UUID,body:ReadyAuthorization):
@@ -175,13 +195,20 @@ def authorize_ready(jid:uuid.UUID,body:ReadyAuthorization):
         pilot=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(row['pilot_id'],row['channel_id'])).fetchone()
         if not pilot or pilot['status']!='approved' or not ready_pilot(pilot):raise HTTPException(409,'Revise e aprove o vídeo completo antes de publicar.')
         if pilot['report']['artifact_sha256']['video']!=row['pilot_sha256']:raise HTTPException(409,'O vídeo mudou desde a preparação da publicação.')
+        phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase)
+        pilot_intent=(pilot.get('plan') or {}).get('intent','coding_focus')
+        if body.intent!=pilot_intent:raise HTTPException(409,'A intenção do vídeo mudou. Gere novamente a sugestão com a intenção atual.')
+        growth_receipt=validate_growth_receipt(c,row['channel_id'],body.publication_metadata)
         from .provenance import publication_gate
         publication_gate(c,pilot=pilot)
         refuse_duplicates(c,row['channel_id'],body.allow_repeat_visual,pilot=pilot)
         cred=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s',(row['channel_id'],)).fetchone()
         if not cred or not upload_allowed(json.loads(cipher().decrypt(cred['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio pelo Google no menu Canais.')
-        c.execute("UPDATE youtube_publications SET state='queued',youtube_channel_id=%s,detail='Publicação autorizada; aguardando envio',updated_at=now() WHERE id=%s",(cred['youtube_channel_id'],jid))
-        audit(c,'PREPARED_PUBLICATION_AUTHORIZED',str(jid),'Explicit review and rights confirmation');c.commit()
+        metadata=(row.get('publication_metadata') or {})|body.publication_metadata
+        c.execute("""UPDATE youtube_publications SET state='queued',youtube_channel_id=%s,title=%s,description=%s,intent=%s,
+          primary_phrase=%s,publication_metadata=%s::jsonb,detail='Pacote Growth revisado; publicação aguardando envio',updated_at=now() WHERE id=%s""",
+          (cred['youtube_channel_id'],body.title.strip(),body.description,body.intent,phrase,json.dumps(metadata),jid))
+        audit(c,'PREPARED_PUBLICATION_AUTHORIZED',str(jid),json.dumps({'primary_phrase':phrase,'growth_metadata':growth_receipt}));c.commit()
     return {'id':jid,'state':'queued'}
 
 
@@ -232,6 +259,9 @@ def delete_video(jid:uuid.UUID,body:Removal):
 class MetadataUpdate(BaseModel):
     description:str=Field(max_length=5000)
     title:str|None=Field(default=None,min_length=1,max_length=100)
+    intent:Literal['coding_focus','study_focus','reading_focus','sleep_relaxation']|None=None
+    primary_phrase:str|None=Field(default=None,max_length=50)
+    publication_metadata:dict|None=None
     confirm_update:bool=False
 
 
@@ -248,6 +278,8 @@ def update_metadata(jid:uuid.UUID,body:MetadataUpdate):
         row=c.execute('SELECT * FROM youtube_publications WHERE id=%s',(jid,)).fetchone()
         if not row:raise HTTPException(404,'Publicação não encontrada.')
         if row['state']!='uploaded' or not row['video_id']:raise HTTPException(409,'Só um vídeo já recebido pelo YouTube pode ser editado.')
+        if body.primary_phrase:
+            validate_growth_packaging(body.title or row['title'],body.description,body.primary_phrase)
         credential=c.execute('SELECT token_encrypted FROM channel_credentials WHERE channel_id=%s',(row['channel_id'],)).fetchone()
         if not credential or not manage_allowed(json.loads(cipher().decrypt(credential['token_encrypted'].encode()))):
             raise HTTPException(409,'Reconecte o YouTube em Canais autorizando o gerenciamento de vídeos para editar pela plataforma.')
@@ -265,7 +297,9 @@ def update_metadata(jid:uuid.UUID,body:MetadataUpdate):
         r=client.put('https://www.googleapis.com/youtube/v3/videos',params={'part':'snippet'},headers=headers,json={'id':row['video_id'],'snippet':update})
     if r.status_code!=200:raise HTTPException(502,f'O YouTube recusou a alteração ({r.status_code}). Nada foi alterado.')
     with db() as c:
-        c.execute('UPDATE youtube_publications SET description=%s,title=%s,updated_at=now() WHERE id=%s',(body.description,update['title'],jid))
+        c.execute('''UPDATE youtube_publications SET description=%s,title=%s,intent=COALESCE(%s,intent),
+          primary_phrase=COALESCE(%s,primary_phrase),publication_metadata=COALESCE(publication_metadata,'{}'::jsonb)||%s::jsonb,updated_at=now() WHERE id=%s''',
+          (body.description,update['title'],body.intent,body.primary_phrase,json.dumps(body.publication_metadata or {}),jid))
         audit(c,'YOUTUBE_METADATA_UPDATED',str(jid),row['video_id']);c.commit()
     return {'id':jid,'video_id':row['video_id'],'title':update['title'],'updated':True}
 
@@ -532,6 +566,7 @@ class PilotPublication(BaseModel):
     description:str=Field(max_length=5000)
     intent:Literal['coding_focus','study_focus','reading_focus','sleep_relaxation']='coding_focus'
     primary_phrase:str=Field(default='',max_length=100)
+    publication_metadata:dict=Field(default_factory=dict)
     privacy:str='public'
     made_for_kids:bool
     confirm_publication:bool=False
@@ -546,6 +581,7 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
         ensure(c);profile(c,body.channel_id);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(pid),))
         p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(pid,body.channel_id)).fetchone()
         if not p:raise HTTPException(404,'Vídeo inexistente neste canal.')
+        growth_receipt=validate_growth_receipt(c,body.channel_id,body.publication_metadata)
         primary_phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase)
         pilot_intent=(p.get('plan') or {}).get('intent','coding_focus')
         if body.intent!=pilot_intent:raise HTTPException(409,'A intenção deste vídeo mudou. Atualize a intenção e gere novamente a sugestão antes de publicar.')
@@ -560,9 +596,9 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
         cred=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s FOR UPDATE',(body.channel_id,)).fetchone()
         if not cred or not upload_allowed(json.loads(cipher().decrypt(cred['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio pelo Google no menu Canais.')
         jid=uuid.uuid4()
-        c.execute('''INSERT INTO youtube_publications(id,request_id,channel_id,pilot_id,youtube_channel_id,title,description,intent,primary_phrase,privacy,made_for_kids,pilot_sha256)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',(jid,body.request_id,body.channel_id,pid,cred['youtube_channel_id'],body.title.strip(),body.description,body.intent,primary_phrase,body.privacy,body.made_for_kids,p['report']['artifact_sha256']['video']))
-        audit(c,'PILOT_PUBLICATION_AUTHORIZED',str(jid),str(pid));c.commit()
+        c.execute('''INSERT INTO youtube_publications(id,request_id,channel_id,pilot_id,youtube_channel_id,title,description,intent,primary_phrase,privacy,made_for_kids,pilot_sha256,publication_metadata)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)''',(jid,body.request_id,body.channel_id,pid,cred['youtube_channel_id'],body.title.strip(),body.description,body.intent,primary_phrase,body.privacy,body.made_for_kids,p['report']['artifact_sha256']['video'],json.dumps(body.publication_metadata)))
+        audit(c,'PILOT_PUBLICATION_AUTHORIZED',str(jid),json.dumps({'pilot_id':str(pid),'primary_phrase':primary_phrase,'growth_metadata':growth_receipt}));c.commit()
     return {'id':jid,'state':'queued','pilot_id':pid}
 
 def verify_pilot_media(row):

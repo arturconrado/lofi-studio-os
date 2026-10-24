@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'preact/hooks';
-import { post } from '../lib/api';
+import { post, uuid } from '../lib/api';
 import { attempt, toast } from '../lib/toast';
 import { Check, Dialog, Pill } from '../ds/ui';
 import { useResource } from '../lib/resource';
@@ -15,7 +15,7 @@ const GROUPS: Record<string, string[]> = {
   prontos: ['PRONTO_PARA_PUBLICAR', 'PUBLICADO', 'AO_VIVO'], encerrados: ['CANCELADO', 'ARQUIVADO'],
 };
 
-type Publication = { id: string; channel_id: string; title: string; description: string; keywords?: string[]; publication_metadata?: { seconds?: number }; pilot_id?: string | null; privacy: string; actual_privacy: string | null; state: string; video_id: string | null; detail: string; bytes_sent?: number; created_at: string };
+type Publication = { id: string; channel_id: string; title: string; description: string; intent?: string; primary_phrase?: string; keywords?: string[]; publication_metadata?: { seconds?: number }; pilot_id?: string | null; privacy: string; actual_privacy: string | null; state: string; video_id: string | null; detail: string; bytes_sent?: number; created_at: string };
 const PUB_STATE: Record<string, [string, string]> = { uploaded: ['ok', 'No YouTube'], ready: ['ok', 'Pronto para publicar'], queued: ['info', 'Na fila'], uploading: ['violet', 'Enviando'], held: ['', 'Pausado pela agenda'],
   interrupted: ['warn', 'Interrompido'], uncertain: ['warn', 'Incerto'], failed: ['bad', 'Falhou'], deleted: ['', 'Excluído'] };
 
@@ -24,17 +24,43 @@ function Publications({ cid }: { cid: string }) {
   const [removing, setRemoving] = useState<Publication | null>(null);
   const [sure, setSure] = useState(false);
   const [editing, setEditing] = useState<Publication | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editPhrase, setEditPhrase] = useState('');
+  const [editMetadata, setEditMetadata] = useState<any>(null);
   const [text, setText] = useState('');
   const [confirmEdit, setConfirmEdit] = useState(false);
+  const [growthCost, setGrowthCost] = useState(false);
+  const [growthBusy, setGrowthBusy] = useState(false);
+  const [growthNote, setGrowthNote] = useState('');
   const [readyForReview, setReadyForReview] = useState<Publication | null>(null);
+  const [readyTitle, setReadyTitle] = useState('');
+  const [readyDescription, setReadyDescription] = useState('');
+  const [readyPhrase, setReadyPhrase] = useState('');
+  const [readyMetadata, setReadyMetadata] = useState<any>(null);
   const [confirmPublication, setConfirmPublication] = useState(false);
   const [confirmRights, setConfirmRights] = useState(false);
   const saveText = async () => {
     if (!editing) return;
-    const ok = await attempt(() => post(`/api/youtube/publications/${editing.id}/metadata`, { description: text, confirm_update: true }), 'Descrição atualizada no YouTube');
+    const ok = await attempt(() => post(`/api/youtube/publications/${editing.id}/metadata`, { title: editTitle, description: text, intent: editing.intent || 'coding_focus', primary_phrase: editPhrase, publication_metadata: editMetadata, confirm_update: true }), 'Título e descrição atualizados no YouTube');
     if (ok !== undefined) { setEditing(null); pubs.reload(); }
   };
-  const authorizeReady = async () => { if (!readyForReview) return; const ok = await attempt(() => post(`/api/youtube/publications/${readyForReview.id}/authorize-ready`, { confirm_review: true, confirm_rights: true }), 'Publicação autorizada para envio'); if (ok !== undefined) { setReadyForReview(null); setConfirmPublication(false); setConfirmRights(false); pubs.reload(); } };
+  const generateGrowthPackage = async (source: Publication, ready = false) => {
+    if (!growthCost) { setGrowthNote('Marque a autorização de custo máximo de US$ 0,02 antes de gerar.'); return; }
+    setGrowthBusy(true); setGrowthNote('Reunindo observações do YouTube Studio e histórico comparável…');
+    const requestId = uuid();
+    const result = await attempt(() => post<any>(`/api/growth/${cid}/package-suggestion`, {
+      request_id: requestId, intent: source.intent || 'coding_focus', content_format: 'long_form',
+      source_title: source.title, source_description: source.description || '', primary_phrase: source.primary_phrase || '', confirm_cost: true,
+    }), 'Sugestão nativa pronta para revisar');
+    if (result) {
+      if (ready) { setReadyTitle(result.title); setReadyDescription(result.description); setReadyPhrase(result.primary_phrase); setReadyMetadata({ native_growth: { generated: true, request_id: requestId, primary_phrase_source: result.primary_phrase_source, search_phrase_options: result.search_phrase_options, historical_context: result.historical_context, cost_usd: result.cost_usd ?? null, generated_at: new Date().toISOString() } }); }
+      else { setEditTitle(result.title); setText(result.description); setEditPhrase(result.primary_phrase); setEditMetadata({ native_growth: { generated: true, request_id: requestId, primary_phrase_source: result.primary_phrase_source, search_phrase_options: result.search_phrase_options, historical_context: result.historical_context, cost_usd: result.cost_usd ?? null, generated_at: new Date().toISOString() } }); setConfirmEdit(false); }
+      setGrowthNote(`Sugestão baseada em ${result.primary_phrase_source === 'observed_youtube_studio' ? 'observações do YouTube Studio' : result.primary_phrase_source === 'user_selected' ? 'sua frase escolhida' : 'contexto do vídeo'}${result.cost_usd != null ? ` · custo: US$ ${Number(result.cost_usd).toFixed(4)}` : ''}. Revise antes de salvar.`);
+      setGrowthCost(false);
+    }
+    setGrowthBusy(false);
+  };
+  const authorizeReady = async () => { if (!readyForReview) return; const ok = await attempt(() => post(`/api/youtube/publications/${readyForReview.id}/authorize-ready`, { confirm_review: true, confirm_rights: true, title: readyTitle, description: readyDescription, intent: readyForReview.intent || 'coding_focus', primary_phrase: readyPhrase, publication_metadata: readyMetadata }), 'Publicação autorizada para envio'); if (ok !== undefined) { setReadyForReview(null); setConfirmPublication(false); setConfirmRights(false); pubs.reload(); } };
   const retry = async (p: Publication) => { const ok = await attempt(() => post(`/api/youtube/publications/${p.id}/retry`, {}), 'Publicação recolocada na fila'); if (ok !== undefined) pubs.reload(); };
   const list = (pubs.data || []).filter(p => p.channel_id === cid);
   if (!list.length) return null;
@@ -64,29 +90,38 @@ function Publications({ cid }: { cid: string }) {
               <td><Pill tone={tone}>{label}</Pill>{p.detail && <div class="faint" style={{ fontSize: '12px', marginTop: '4px' }}>{p.detail}</div>}</td>
               <td>{p.actual_privacy || p.privacy}</td><td class="faint">{ago(p.created_at)}</td>
               <td style={{ textAlign: 'right' }}>
-                {p.state === 'ready' && <button class="btn primary sm" onClick={() => { setReadyForReview(p); setConfirmPublication(false); setConfirmRights(false); }}>Revisar publicação</button>}
+                {p.state === 'ready' && <button class="btn primary sm" onClick={() => { setReadyForReview(p); setReadyTitle(p.title); setReadyDescription(p.description || ''); setReadyPhrase(p.primary_phrase || ''); setReadyMetadata(null); setGrowthCost(false); setGrowthNote(''); setConfirmPublication(false); setConfirmRights(false); }}>Revisar publicação</button>}
                 {p.state === 'held' && <button class="btn sm" onClick={() => release(p)}>Liberar envio</button>}
                 {p.state === 'failed' && !p.video_id && !p.bytes_sent && <button class="btn sm" onClick={() => retry(p)}>Tentar novamente após reconectar</button>}
                 {p.state === 'uploaded' && <div class="row tight" style={{ justifyContent: 'flex-end' }}>
-                  <button class="btn sm" onClick={() => { setEditing(p); setText(p.description || ''); setConfirmEdit(false); }}>Editar descrição</button>
+                  <button class="btn sm" onClick={() => { setEditing(p); setEditTitle(p.title || ''); setText(p.description || ''); setEditPhrase(p.primary_phrase || ''); setEditMetadata(null); setConfirmEdit(false); setGrowthCost(false); setGrowthNote(''); }}>Revisar título e descrição</button>
                   <button class="btn danger sm" onClick={() => { setRemoving(p); setSure(false); }}>Excluir do YouTube</button></div>}
               </td>
             </tr>); })}</tbody></table>
       </div>
       <Dialog open={!!readyForReview} onClose={() => setReadyForReview(null)} title="Publicação pronta para o YouTube">
-        <h3>{readyForReview?.title}</h3><p>{Math.floor((readyForReview?.publication_metadata?.seconds || 0) / 60)} min · Visibilidade: {readyForReview?.privacy}</p>
+        <p>{Math.floor((readyForReview?.publication_metadata?.seconds || 0) / 60)} min · Visibilidade: {readyForReview?.privacy}</p>
         {readyForReview?.pilot_id && <a class="btn" target="_blank" rel="noreferrer" href={`/api/ambient/pilots/${readyForReview.pilot_id}/video`}>Assistir ao vídeo completo</a>}
-        <h4>Descrição</h4><p style={{ whiteSpace: 'pre-wrap' }}>{readyForReview?.description}</p><h4>Palavras-chave</h4><p>{readyForReview?.keywords?.join(', ')}</p>
+        <Check checked={growthCost} onChange={setGrowthCost}>Autorizo o custo máximo de US$ 0,02 para gerar a sugestão</Check>
+        <button class="btn" disabled={growthBusy || !readyForReview} onClick={() => readyForReview && generateGrowthPackage(readyForReview, true)}>{growthBusy ? 'Gerando…' : 'Gerar título e descrição com Growth'}</button>
+        {growthNote && <p class="faint" role="status">{growthNote}</p>}
+        <label class="field"><span>Título</span><input class="input" maxLength={100} value={readyTitle} onInput={e => setReadyTitle((e.target as HTMLInputElement).value)} /></label>
+        <label class="field"><span>Descrição</span><textarea class="textarea" maxLength={5000} value={readyDescription} onInput={e => setReadyDescription((e.target as HTMLTextAreaElement).value)} /></label>
+        <h4>Palavras-chave</h4><p>{readyForReview?.keywords?.join(', ')}</p>
         <Check checked={confirmPublication} onChange={setConfirmPublication}>Conferi o vídeo e os dados desta publicação</Check>
         <Check checked={confirmRights} onChange={setConfirmRights}>Confirmo os direitos para publicar este vídeo e esta música</Check>
-        <div class="row"><button class="btn primary" disabled={!confirmPublication || !confirmRights} onClick={authorizeReady}>Publicar no YouTube</button><button class="btn ghost" onClick={() => setReadyForReview(null)}>Fechar</button></div>
+        <div class="row"><button class="btn primary" disabled={!readyMetadata?.native_growth?.generated || !confirmPublication || !confirmRights} onClick={authorizeReady}>Publicar no YouTube</button><button class="btn ghost" onClick={() => setReadyForReview(null)}>Fechar</button></div>
       </Dialog>
-      <Dialog open={!!editing} onClose={() => setEditing(null)} title={`Descrição · ${editing?.title || ''}`}>
-        <p class="faint" style={{ fontSize: '13px' }}>Escreva para o espectador: clima, cena, quando ouvir e um convite para comentar. Os capítulos (00:00 …) ajudam a reter quem assiste.</p>
+      <Dialog open={!!editing} onClose={() => setEditing(null)} title={`Título e descrição · ${editing?.title || ''}`}>
+        <p class="faint" style={{ fontSize: '13px' }}>Gere uma sugestão contextual com os termos observados no YouTube Studio e revise o resultado antes de atualizar o vídeo.</p>
+        <Check checked={growthCost} onChange={setGrowthCost}>Autorizo o custo máximo de US$ 0,02 para gerar a sugestão</Check>
+        <button class="btn" disabled={growthBusy || !editing} onClick={() => editing && generateGrowthPackage(editing)}>{growthBusy ? 'Gerando…' : 'Gerar título e descrição com Growth'}</button>
+        {growthNote && <p class="faint" role="status">{growthNote}</p>}
+        <label class="field"><span>Título</span><input class="input" maxLength={100} value={editTitle} onInput={e => setEditTitle((e.target as HTMLInputElement).value)} /></label>
         <textarea class="textarea" style={{ minHeight: '320px' }} maxLength={5000} value={text} onInput={e => setText((e.target as HTMLTextAreaElement).value)} />
         <span class="faint" style={{ fontSize: '12px' }}>{text.length}/5000</span>
-        <Check checked={confirmEdit} onChange={setConfirmEdit}>Atualizar a descrição publicada no YouTube</Check>
-        <div class="row"><button class="btn primary" disabled={!confirmEdit || !text.trim()} onClick={saveText}>Salvar no YouTube</button><button class="btn ghost" onClick={() => setEditing(null)}>Cancelar</button></div>
+        <Check checked={confirmEdit} onChange={setConfirmEdit}>Atualizar título e descrição publicados no YouTube</Check>
+        <div class="row"><button class="btn primary" disabled={!confirmEdit || !editTitle.trim() || !text.trim()} onClick={saveText}>Salvar no YouTube</button><button class="btn ghost" onClick={() => setEditing(null)}>Cancelar</button></div>
       </Dialog>
       <Dialog open={!!removing} onClose={() => setRemoving(null)} title="Excluir do YouTube">
         <p>“{removing?.title}” será apagado do canal no YouTube, junto com visualizações e comentários. Os arquivos na plataforma continuam.</p>
