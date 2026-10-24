@@ -328,7 +328,7 @@ def test_publication_creation_is_idempotent_and_scoped(client,monkeypatch):
     from studio.tenancy import WORKSPACE
     _,owner=signup(client)
     cid=client.get('/api/channels').json()[0]['id']
-    eid=uuid.uuid4();bid='UPLOAD-'+uuid.uuid4().hex[:8]
+    eid=uuid.uuid4();bid='UPLOAD-'+uuid.uuid4().hex[:8];growth_id=uuid.uuid4()
     marker=WORKSPACE.set(owner['workspace_id'])
     try:
         with db() as c:
@@ -337,10 +337,11 @@ def test_publication_creation_is_idempotent_and_scoped(client,monkeypatch):
             c.execute("INSERT INTO program_reviews(program_id,snapshot_sha256,note,reviewed_by) VALUES(%s,'reviewed','test','test-user')",(bid,))
             token=yp.cipher().encrypt(json.dumps({'scope':yp.UPLOAD_SCOPE}).encode()).decode()
             c.execute("INSERT INTO channel_credentials(channel_id,youtube_channel_id,token_encrypted) VALUES(%s,%s,%s)",(cid,'CHANNEL-'+uuid.uuid4().hex,token));c.commit()
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,'growth_packaging_20261024','test',%s,0,'COMPLETED')",(growth_id,json.dumps({'channel_id':cid,'package':{'title':'Lo-fi music'}})));c.commit()
     finally:WORKSPACE.reset(marker)
     monkeypatch.setattr(yp,'configured',lambda:True)
     monkeypatch.setattr(miniobs,'program_snapshot',lambda c,b:({},'reviewed'))
-    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'export_id':str(eid),'title':'Lo-fi music for an original focus session','description':'Lo-fi music for an original focus session. Test only.','intent':'coding_focus','primary_phrase':'Lo-fi music','made_for_kids':False,'privacy':'public','confirm_review':True,'confirm_rights':True}
+    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'export_id':str(eid),'title':'Lo-fi music for an original focus session','description':'Lo-fi music for an original focus session. Test only.','intent':'coding_focus','primary_phrase':'Lo-fi music','publication_metadata':{'native_growth':{'generated':True,'request_id':str(growth_id)}},'made_for_kids':False,'privacy':'public','confirm_review':True,'confirm_rights':True}
     headers={'X-CSRF-Token':owner['csrf_token']}
     first=client.post('/api/youtube/publications',json=body,headers=headers)
     assert first.status_code==200,first.text
@@ -361,7 +362,7 @@ def test_exact_library_video_publication_is_scoped_and_idempotent(client,monkeyp
     from studio import youtube_publish as yp
     from studio.core import db
     from studio.tenancy import WORKSPACE
-    _,owner=signup(client);cid=client.get('/api/channels').json()[0]['id'];pid=uuid.uuid4()
+    _,owner=signup(client);cid=client.get('/api/channels').json()[0]['id'];pid=uuid.uuid4();growth_id=uuid.uuid4()
     marker=WORKSPACE.set(owner['workspace_id'])
     try:
         with db() as c:
@@ -369,10 +370,11 @@ def test_exact_library_video_publication_is_scoped_and_idempotent(client,monkeyp
             c.execute("INSERT INTO ambient_pilots(id,channel_id,title,video_key,silent_key,report,plan) VALUES(%s,%s,'Exact selected episode','episode/video.mp4','episode/silent.mp4',%s::jsonb,'{}')",(pid,cid,json.dumps(report)))
             token=yp.cipher().encrypt(json.dumps({'scope':yp.UPLOAD_SCOPE}).encode()).decode()
             c.execute("INSERT INTO channel_credentials(channel_id,youtube_channel_id,token_encrypted) VALUES(%s,%s,%s)",(cid,'CHANNEL-'+uuid.uuid4().hex,token));c.commit()
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,'growth_packaging_20261024','test',%s,0,'COMPLETED')",(growth_id,json.dumps({'channel_id':cid,'package':{'title':'Lo-fi music'}})));c.commit()
     finally:WORKSPACE.reset(marker)
     monkeypatch.setattr(yp,'configured',lambda:True)
     assert client.get(f'/api/youtube/publications/pilots/{pid}/draft').json()['title']=='Exact selected episode'
-    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'title':'Lo-fi music for this exact selected episode','description':'Lo-fi music for this exact selected episode.','intent':'coding_focus','primary_phrase':'Lo-fi music','made_for_kids':False,'privacy':'public','confirm_publication':True}
+    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'title':'Lo-fi music for this exact selected episode','description':'Lo-fi music for this exact selected episode.','intent':'coding_focus','primary_phrase':'Lo-fi music','publication_metadata':{'native_growth':{'generated':True,'request_id':str(growth_id)}},'made_for_kids':False,'privacy':'public','confirm_publication':True}
     url=f'/api/youtube/publications/pilots/{pid}';headers={'X-CSRF-Token':owner['csrf_token']}
     first=client.post(url,json=body,headers=headers);assert first.status_code==200,first.text
     second=client.post(url,json=body,headers=headers);assert second.status_code==200 and second.json()['id']==first.json()['id']
