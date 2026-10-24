@@ -130,7 +130,7 @@ def programs():
             tracks=program_tracks(c,b['id'])
             b['title']={'WARM4H-20261012':'Entre Acordes · primeiras 4 horas','CAFE4H-20261013':'Café entre Páginas · novas 4 horas','LOFI8H-20261013':'Entre Acordes + Café entre Páginas · programa de 8 horas'}.get(b['id'],b['id'])
             b['theme']={'CAFE4H-20261013':'Biblioteca, café e chuva · harmonias acolhedoras','LOFI8H-20261013':'Dois lotes distintos em sequência · repetição contínua opcional'}.get(b['id'],'Lo-fi aconchegante para programar')
-            metadata=c.execute('SELECT title,theme,description,music_description FROM program_metadata WHERE program_id=%s',(b['id'],)).fetchone()
+            metadata=c.execute('SELECT title,theme,description,music_description,intent FROM program_metadata WHERE program_id=%s',(b['id'],)).fetchone()
             if metadata:b.update(metadata)
             b['tracks']=tracks;b['playable_seconds']=sum(float(t['duration_seconds']) for t in tracks)
             b['audio_ready']=bool(b['audio_key']);b['video_ready']=bool(b['video_key'])

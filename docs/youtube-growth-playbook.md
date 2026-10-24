@@ -28,3 +28,7 @@ Capture public title, URL, publication date when known, view count, and observat
 - Recheck changes after a comparable observation window. Record what changed so later comparisons remain interpretable.
 
 Do not promise that metadata, tags, or trend phrases will cause recommendations. Use the data to choose experiments, then evaluate the actual YouTube Studio response.
+
+## Publication harness gate
+
+The YouTube publication form loads the channel's observed phrases and same-intent, same-format historical context before an upload is queued. Select one short, accurate primary phrase, apply it to the title and opening description, and review both fields. The server blocks queueing unless that phrase appears within the first 60 title characters and in the first description sentence. The chosen intent and phrase are stored with the publication record. For exported programs, the publication intent must match the saved program intent; update the program before exporting if the target viewer changes.

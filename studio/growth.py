@@ -192,6 +192,21 @@ def save_snapshot(cid: uuid.UUID,body: Snapshot):
         c.commit()
     return {'id':sid,'source':'manual_youtube_studio','interpretation_note':CAUTION}
 
+@router.get('/{cid}/metadata-context')
+def metadata_context(cid:uuid.UUID,intent:str='coding_focus',content_format:Literal['long_form','short','live_archive']='long_form'):
+    with db() as c:
+        profile(c,cid)
+        rows=c.execute('SELECT metrics FROM analytics_snapshots WHERE channel_id=%s AND intent=%s AND content_format=%s ORDER BY observed_date DESC LIMIT 100',(cid,intent,content_format)).fetchall()
+        snapshots=c.execute('SELECT video_url,observed_date,"window",video_age_days,content_format,intent,metrics FROM analytics_snapshots WHERE channel_id=%s ORDER BY observed_date DESC LIMIT 1000',(cid,)).fetchall()
+    terms=[]
+    for row in rows:
+        metrics=row['metrics'] or {}
+        if isinstance(metrics,str):metrics=json.loads(metrics)
+        terms.extend(x.strip() for x in metrics.get('search_terms',[]) if isinstance(x,str) and x.strip())
+    projection=historical_projection(snapshots,intent=intent,content_format=content_format,window='24h',age_days=1)
+    return {'intent':intent,'content_format':content_format,'observed_search_phrases':list(dict.fromkeys(terms))[:12],
+            'historical_context':projection,'search_volume_measured':False,'interpretation_note':CAUTION}
+
 @router.get('/{cid}/projections')
 def projections(cid:uuid.UUID,intent:str,window:Literal['24h','7d','28d','90d'],content_format:Literal['long_form','short','live_archive']='long_form',age_days:int|None=None):
     with db() as c:
