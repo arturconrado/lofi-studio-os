@@ -300,6 +300,7 @@ def timed_schedule(events, seconds, idle_action='typing_idle'):
 
 def workshop_plan(segments, seconds):
     """Adapt approved workshop media without inventing editor quality receipts."""
+    from .workshop_continuity import POLICY
     cursor = 0; adapted = []
     for segment in segments:
         if abs(segment['start'] - cursor) > .001 or segment['end'] <= cursor:
@@ -312,6 +313,7 @@ def workshop_plan(segments, seconds):
         raise ValueError('Timeline duration mismatch')
     return {'segments': adapted, 'duration_seconds': seconds, 'planned_timeline_seconds': cursor,
             'assets_ready': all(s.get('asset_sha256') for s in adapted),
+            'continuity_policy': POLICY,
             'final_checks_required': ['loop_seam', 'entry', 'continuation', 'return', 'audio', 'final_artifact_review']}
 
 

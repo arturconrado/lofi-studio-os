@@ -34,7 +34,7 @@ class Clip(Strict):
 class Insertion(Strict):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     clip_id: uuid.UUID
-    minute: float = Field(ge=0, le=480)
+    minute: float = Field(ge=0, le=1440)
     image_id: uuid.UUID | None = None
     video_id: uuid.UUID | None = None
     source_binding: str | None = Field(default=None, pattern='^[a-f0-9]{64}$')
@@ -42,7 +42,8 @@ class Insertion(Strict):
 
 class Draft(Strict):
     name: str = Field(min_length=1, max_length=120)
-    minutes: float = Field(default=60, ge=1, le=480)
+    automatic_motion: bool = False
+    minutes: float = Field(default=60, ge=1, le=1440)
     theme: str = Field(default='', max_length=1000)
     scene: str = Field(min_length=1, max_length=3000)
     scene_motion: str = Field(default='', max_length=2000)
@@ -261,7 +262,7 @@ def _status(draft, clip, assets, group=None, _seams=True):
         base = _status(draft,draft.base,assets)
         try: frame = group['frame'] if group else base_cut_frame(draft,clip)
         except ValueError: frame = None
-        image_ok = bool(image_ok and base['video_approved'] and frame is not None
+        image_ok = bool(image_ok and base['video_ready' if draft.automatic_motion else 'video_approved'] and frame is not None
             and image.get('base_video_sha256') == base['video']['sha256']
             and image.get('base_cut_frame') == frame)
     if group and image and image.get('source_binding'):
@@ -272,7 +273,7 @@ def _status(draft, clip, assets, group=None, _seams=True):
         else:
             previous = get_clip(draft,clip.continues_from)
             prior = status(draft,previous,assets) if previous else {}
-            source = prior.get('video') or {}; source_ready = prior.get('video_approved')
+            source = prior.get('video') or {}; source_ready = prior.get('video_ready' if draft.automatic_motion else 'video_approved')
         image_ok = bool(image_ok and source_ready and image.get('continuation_sha256') == source.get('sha256'))
     video_ready = bool(image_ok and video and video.get('signature') == signature(draft,clip,'video',image['sha256'])
                        and video.get('sha256') and float(video.get('seconds',0))+.05 >= clip.seconds)
@@ -326,9 +327,9 @@ def assemble(draft, assets, preview=False, preview_range=None):
         if visible:
             if state.get('video') and float(state['video'].get('seconds',0))+.05<item.seconds:
                 raise ValueError('Vídeo mais curto que o trecho: ajuste a duração ou gere outro')
-            if not state['video_approved'] and not (preview and state['video_ready']):
+            if not state['video_approved'] and not ((preview or draft.automatic_motion) and state['video_ready']):
                 raise ValueError('Aprove os vídeos usados; para prévia, aguarde os vídeos das partes vizinhas')
-            if not preview and not state['seams_approved']:
+            if not preview and not draft.automatic_motion and not state['seams_approved']:
                 raise ValueError('Revise as emendas nos horários e com a música atuais; os vídeos estão preservados.')
         asset = state['video'] or {}
         segments.append({**event,'clip_id':str(item.id),'name':item.name,'loop':idle,
@@ -344,8 +345,8 @@ def prompt(draft, clip, kind, previous_motion=None):
             f'Action: {clip.motion}. '
             + (f'Complete action goal, shared across continuous parts: {clip.action_goal}. ' if clip.action_goal and kind=='video' else '')
             + ('Create one starting still image for human approval, no text or watermark.' if kind == 'image' else
-               f'Animate for {clip.seconds} seconds. No sound, speech, camera cut, or extra characters. '
-               + ('Seamless loop: end in the exact starting pose.' if clip.id == draft.base.id else
+               f'Animate for {clip.seconds} seconds. No sound, speech, camera cut, or extra characters. Never introduce captions, character name labels, subtitles, watermarks or new text. Preserve only the existing approved branding in the reference. '
+               + ('Cyclic motion contract: preserve position, lighting, camera and motion direction across the last and first one-second windows. Complete the motion cycle without pausing, resetting or freezing the configured characters or environmental motion. End in the starting pose and velocity; the compositor will apply the cyclic overlap policy.' if clip.id == draft.base.id else
                   ('This is an intermediate part: end at the final action pose, the next part continues from that frame.' if any(c.continues_from == clip.id and any(i.clip_id == c.id for i in draft.insertions) for c in draft.clips) else
                    'Continue naturally from the supplied final frame of the previous part. End in the base pose.' if clip.continues_from else
                    f'The preceding motion is: {previous_motion or draft.base.motion}. '
@@ -371,8 +372,8 @@ def split_proposal(clip, seconds, accepted):
     for index,duration in enumerate(durations):
         stage=('Inicie a ação a partir da atividade atual; execute somente sua preparação, sem repetir a ação completa.' if index==0 else
                'Continue do último movimento da parte anterior, avance a ação sem reiniciá-la.')
-        if index==len(durations)-1:stage+=' Conclua a ação e retorne à pose e à atividade da base.'
-        else:stage+=' Termine em movimento compatível com a próxima parte; ainda não retorne à base.'
+        if index==len(durations)-1:stage+=' Mostre integralmente a conclusão física, devolva os objetos aos lugares originais e então retome a atividade da base. Não corte nem teletransporte a devolução de um objeto.'
+        else:stage+=' Termine em movimento compatível com a próxima parte; ainda não retorne à base. Não acelere nem tente concluir a ação inteira dentro desta parte.'
         parts.append({'seconds':duration,'motion':f'Parte {index+1} de {len(durations)}. {stage}'})
     return parts
 
