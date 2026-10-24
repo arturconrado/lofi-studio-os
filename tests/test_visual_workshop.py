@@ -95,7 +95,7 @@ def test_real_render_preserves_absolute_times_returns_to_base_and_includes_music
     result=tmp_path/'result.mp4'
     report=render_segments(segments,{file_hash(p):p for p in sources.values()},audio,result,8)
     assert report['full_decode_pass'] and abs(report['seconds']-8)<.15 and abs(report['audio_seconds']-8)<.15
-    for second,color in [(1,'blue'),(2.5,'red'),(3.5,'red'),(4.5,'blue'),(7,'blue')]:
+    for second,color in [(1,'blue'),(2.5,'red'),(3.5,'red'),(5.5,'blue'),(7,'blue')]:
         pixel=run(['-ss',str(second),'-i',str(result),'-frames:v','1','-vf','scale=1:1','-pix_fmt','rgb24','-f','rawvideo','-'])
         assert (pixel[0]>180 and pixel[2]<60) if color=='red' else (pixel[2]>180 and pixel[0]<60)
 

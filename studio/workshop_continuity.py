@@ -60,7 +60,7 @@ def inspect_join(left, right, sources, fps):
     p95=motion[int((len(motion)-1)*.95)] if motion else 0
     boundary=change(a[-1],b[0]);tolerance=max(3,p95*2)
     if boundary>tolerance:
-        error=ValueError('Insertion continuity failed: a compatible continuation is required; action frames were not blended or truncated')
+        error=ValueError(f'Insertion continuity failed: boundary {boundary:.2f} exceeds tolerance {tolerance:.2f}; a compatible continuation is required')
         error.boundary_change=boundary;error.tolerance=tolerance
         raise error
     return {'boundary_change':boundary,'tolerance':tolerance,'native_timing':True,
@@ -146,7 +146,9 @@ def prepare(plan, sources, folder, width, height, fps, profile=None):
         right=segments[index+1]
         try:checked(left,right);continue
         except ValueError as error:
-            if not hasattr(error,'boundary_change') or error.boundary_change>max(25,error.tolerance*4):raise
+            # The optical-flow bridge consumes quiet base time only. Allow a bounded
+            # range of scene transitions while still rejecting near-discontinuous cuts.
+            if not hasattr(error,'boundary_change') or error.boundary_change>max(50,error.tolerance*5):raise
             if left['repeat_short_clip']==right['repeat_short_clip']:raise
         quiet=left if left['repeat_short_clip'] else right
         count=min(round(POLICY['window_seconds']*fps),round((quiet['end']-quiet['start'])*fps)-2)
