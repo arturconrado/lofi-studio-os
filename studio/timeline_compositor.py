@@ -192,7 +192,73 @@ def encode_chunk(args,timeout,progress,index,total,start,end,log):
             proc.stdout.close()
 
 
-CHECKPOINT_VERSION = 2  # 2: weather phase follows the program clock
+CHECKPOINT_VERSION = 3  # 3: bounded encoding of periodic workshop base intervals
+
+
+def copy_periodic_base(steady_args, transition_args, chunk, seconds, cycle, fps,
+                       previous, progress, index, total, start, end, folder, profile=None):
+    """Encode at most one cycle per unique recipe, then concatenate packets.
+
+    The entry cycle retains the existing fade from the preceding action. Only
+    steady cycles repeat; neither actions nor entry transitions are looped.
+    A fractional final cycle is encoded to an exact frame count, never cut at
+    an arbitrary compressed-video packet boundary.
+    """
+    frames = round(seconds * fps)
+    cycle_frames = round(cycle * fps)
+    if abs(frames / fps - seconds) > 1e-6 or abs(cycle_frames / fps - cycle) > 1e-6:
+        raise ValueError('Periodic base requires frame-aligned durations')
+
+    def encoded(args, count, entry=False):
+        recipe = [args, count, fps, file_hash(previous) if entry else None, profile]
+        digest = hashlib.sha256(json.dumps(recipe).encode()).hexdigest()
+        path = folder / f'base-cycle-{digest}.mp4'
+        receipt = path.with_suffix('.json')
+        duration = count / fps
+        if not reusable_chunk(path, receipt, digest, duration):
+            command = args + ['-an', '-frames:v', str(count), '-c:v', 'libx264',
+                              '-threads', str((profile or {}).get('threads',1)), '-preset', (profile or {}).get('preset','veryfast'), '-crf', str((profile or {}).get('crf',19)),
+                              *encoder_memory_options(profile), '-pix_fmt', 'yuv420p', '-g', str(fps * 2), '-r', str(fps), str(path)]
+            encode_chunk(command, max(120, int(duration * 12)), None, index, total,
+                         start, end, folder / 'encoder.log')
+            save_checkpoint(receipt, path, digest, duration)
+        return path
+
+    pieces = []
+    remaining = frames
+    if previous:
+        pieces.append(encoded(transition_args, cycle_frames, entry=True))
+        remaining -= cycle_frames
+    repeats, tail = divmod(remaining, cycle_frames)
+    if repeats:
+        steady = encoded(steady_args, cycle_frames)
+        pieces.extend([steady] * repeats)
+    if tail:
+        pieces.append(encoded(steady_args, tail))
+    listing = chunk.with_suffix('.concat.txt')
+    listing.write_text(''.join(f"file '{p.name}'\n" for p in pieces), encoding='utf-8')
+    subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-f', 'concat', '-safe', '1',
+                    '-i', str(listing), '-map', '0:v:0', '-c:v', 'copy', '-an',
+                    '-movflags', '+faststart', str(chunk)], check=True,
+                   timeout=max(120, int(seconds)), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    measured, _ = measure(chunk, 'video')
+    if abs(measured - seconds) > 1 / fps + .001:
+        raise ValueError('Periodic base duration mismatch')
+    if progress:
+        progress(index + 1, total, end)
+
+
+def periodic_base_eligible(compiled, environment, segment, seconds, cycle, fps):
+    # Strictly opt in the workshop's static environment. Time-varying light,
+    # procedural rain, recoloring, labels and other overlays retain the original
+    # absolute-clock renderer. Motion already inside the source remains intact.
+    lighting = compiled.get('lighting', {})
+    return (compiled.get('reuse_base_cycles') is True and not environment
+            and lighting == {'keyframes': [{'minute': 0, 'night': 0, 'sky_light': 0, 'city_lights': 0}]}
+            and segment['action'] == 'typing_idle' and not segment.get('label')
+            and seconds >= 2 * cycle and cycle >= .35
+            and abs(round(seconds * fps) / fps - seconds) < 1e-6
+            and abs(round(cycle * fps) / fps - cycle) < 1e-6)
 
 
 def checkpoint_binding(compiled, plan, environment, audio_sha, width, height, fps):
@@ -238,15 +304,20 @@ def resource_report(started,cpu_before,peak,output,target):
             'estimate_basis':'linear extrapolation from this render; confirm with a real long render before promising 4/8h'}
 
 
-def normalize_source(source,folder,sha,seconds,width,height,fps):
+def encoder_memory_options(profile):
+    return ['-rc-lookahead',str(min(8,int(profile.get('lookahead_frames',8)))),'-x264-params','sync-lookahead=0'] if profile else []
+
+
+def normalize_source(source,folder,sha,seconds,width,height,fps,profile=None):
     """Shared sampling for rendering and the generated first/last frame sources."""
-    path=Path(folder)/f'normalized-{sha}-{seconds}-{width}-{height}-{fps}.mp4'
+    suffix='-'+hashlib.sha256(json.dumps(profile,sort_keys=True).encode()).hexdigest()[:12] if profile else ''
+    path=Path(folder)/f'normalized-{sha}-{seconds}-{width}-{height}-{fps}{suffix}.mp4'
     if not path.exists():
-        filters=f'fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,trim=duration={seconds},setpts=PTS-STARTPTS'
+        filters=f'fps={fps},scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,trim=duration={seconds},setpts=PTS-STARTPTS'
         temporary=path.with_suffix('.partial.mp4')
         subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-threads','1','-i',str(source),'-an',
-                        '-vf',filters,'-c:v','libx264','-threads','1','-preset','veryfast','-crf','20',
-                        '-pix_fmt','yuv420p',str(temporary)],check=True,timeout=300,
+                        '-vf',filters,'-c:v','libx264','-threads',str((profile or {}).get('threads',1)),'-preset',(profile or {}).get('preset','veryfast'),'-crf',str((profile or {}).get('crf',20)),
+                        *encoder_memory_options(profile),'-pix_fmt','yuv420p',str(temporary)],check=True,timeout=300,
                        stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         temporary.replace(path)
     return path
@@ -266,7 +337,7 @@ def child_cpu_seconds():
 def render(compiled,plan,sources,audio,environment,output,progress=None,width=1280,height=720,fps=24):
     started=time.monotonic();cpu_before=child_cpu_seconds();peak=0
     output=Path(output);folder=output.parent;folder.mkdir(parents=True,exist_ok=True)
-    target=float(compiled['duration_seconds']);segments=plan['segments']
+    target=float(compiled['duration_seconds']);segments=plan['segments'];profile=compiled.get('encoding_profile')
     if not plan['assets_ready'] or not segments:raise ValueError('Reviewed action clips required')
     cursor=0
     for s in segments:
@@ -282,17 +353,25 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
     if not windows and duration+.001<target+compiled.get('audio_offset_seconds',0):raise ValueError('Audio shorter than target')
     needed=math.ceil(target*2_000_000/8*3+512*1024**2)
     if shutil.disk_usage(folder).free<needed:raise ValueError('Insufficient local scratch capacity')
+    if compiled.get('continuity_policy'):
+        from .workshop_continuity import prepare
+        plan,sources=prepare(plan,sources,folder,width,height,fps,profile)
+        segments=plan['segments']
     binding=checkpoint_binding(compiled,plan,environment,file_hash(audio),width,height,fps)
     masks=environment_files(environment,folder,(width,height),compiled['lighting'],fps);chunks=[];previous=None;receipts=[]
     frames=compiled['lighting']['keyframes'];objects=compiled['lighting'].get('object_keyframes',{})
     for index,segment in enumerate(segments):
-        seconds=float(segment['end']-segment['start']);source=Path(sources[segment['asset_sha256']]);available,_=measure(source,'video')
+        seconds=float(segment['end']-segment['start']);source=Path(sources[segment['asset_sha256']]);available,source_info=measure(source,'video')
         idle=segment['action']=='typing_idle'
         if segment['repeat_short_clip'] is not idle or (not idle and available+.001<seconds+segment.get('source_offset_seconds',0)):raise ValueError('Interaction cannot be looped or stretched')
         cycle = segment.get('cycle_seconds', available)
         if cycle <= 0 or cycle > available + .05:raise ValueError('Invalid loop duration')
-        if segment.get('cycle_seconds') is not None:
-            source=normalize_source(source,folder,segment['asset_sha256'],cycle,width,height,fps)
+        prepared=(segment.get('prepared_geometry')==[width,height,fps]
+                  and (source_info['width'],source_info['height'])==(width,height)
+                  and source_info.get('r_frame_rate')==f'{fps}/1'
+                  and int(source_info.get('nb_frames',0))==round(cycle*fps))
+        if segment.get('cycle_seconds') is not None and not prepared:
+            source=normalize_source(source,folder,segment['asset_sha256'],cycle,width,height,fps,profile)
         args=['ffmpeg','-v','error','-y','-threads','1','-filter_complex_threads','1']
         if idle:args+=['-stream_loop','-1']
         args+=['-i',str(source)]
@@ -335,20 +414,28 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
         if 'label' in masks:
             x,y,_,_=environment['cushion_box']
             filters += [f'[{last}][{names["label"]}:v]overlay=x={round(x*width)}:y={round(y*height)}:shortest=1[labelled]'];last='labelled'
-        if previous:
+        steady_args=args.copy();steady_filters=filters.copy();steady_last=last
+        if previous and not compiled.get('continuity_policy'):
             prev_index=args.count('-i');args+=['-loop','1','-framerate',str(fps),'-i',str(previous)]
             filters += [f'[{last}]format=yuva420p,fade=t=in:st=0:d=0.35:alpha=1[faded]',f'[{prev_index}:v][faded]overlay=shortest=1[transition]'];last='transition'
         chunk=folder/f'chunk-{index:04}.mp4'
-        args+=['-filter_complex',';'.join(filters),'-map',f'[{last}]','-an','-t',str(seconds),'-c:v','libx264','-threads','1','-preset','veryfast','-crf','19','-pix_fmt','yuv420p','-g',str(fps*2),'-r',str(fps),str(chunk)]
+        args+=['-filter_complex',';'.join(filters),'-map',f'[{last}]','-an','-t',str(seconds),'-c:v','libx264','-threads',str((profile or {}).get('threads',1)),'-preset',(profile or {}).get('preset','veryfast'),'-crf',str((profile or {}).get('crf',19)),*encoder_memory_options(profile),'-pix_fmt','yuv420p','-g',str(fps*2),'-r',str(fps),str(chunk)]
         checkpoint=folder/f'chunk-{index:04}.json'
         segment_binding=hashlib.sha256(json.dumps([binding,index,file_hash(previous) if previous else None]).encode()).hexdigest()
         reused=reusable_chunk(chunk,checkpoint,segment_binding,seconds)
         if not reused:
-            encode_chunk(args,max(120,int(seconds*12)),progress,index,len(segments),segment['start'],segment['end'],folder/'encoder.log')
+            if periodic_base_eligible(compiled,environment,segment,seconds,cycle,fps):
+                transition_args=args[:args.index('-filter_complex')+4]
+                copy_periodic_base(steady_args+['-filter_complex',';'.join(steady_filters),'-map',f'[{steady_last}]'],
+                                   transition_args,chunk,seconds,cycle,fps,None if compiled.get('continuity_policy') else previous,progress,index,
+                                   len(segments),segment['start'],segment['end'],folder,profile)
+            else:
+                encode_chunk(args,max(120,int(seconds*12)),progress,index,len(segments),segment['start'],segment['end'],folder/'encoder.log')
             save_checkpoint(checkpoint,chunk,segment_binding,seconds)
         previous=folder/'boundary.png'
         subprocess.run(['ffmpeg','-v','error','-y','-ss',str(max(0,seconds-1/fps)),'-i',str(chunk),'-frames:v','1','-threads','1',str(previous)],check=True,timeout=30,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
-        chunks.append(chunk);receipts.append({**segment,'rendered_seconds':seconds,'source_verified':True,'checkpoint_reused':reused,'transition_seconds':.35 if index else 0})
+        chunks.append(chunk);receipts.append({**segment,'rendered_seconds':seconds,'source_verified':True,'checkpoint_reused':reused,'transition_seconds':(0 if compiled.get('continuity_policy') else .35) if index else 0,
+                                             'base_cycle_reused':periodic_base_eligible(compiled,environment,segment,seconds,cycle,fps)})
         peak=max(peak,scratch_bytes(folder))
         if progress:progress(index+1,len(segments),segment['end'])
         if shutil.disk_usage(folder).free<512*1024**2:raise ValueError('Scratch capacity exhausted')
@@ -364,6 +451,6 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
                     continuous_transitions_reviewed=False,perceptible_motion_reviewed=False,time_progression_reviewed=False)
     resources=resource_report(started,cpu_before,max(peak,scratch_bytes(folder)),output,target)
     resources['checkpoint_reused_segments']=sum(bool(s['checkpoint_reused']) for s in receipts)
-    return {'video':evidence,'segments':receipts,'local_resources':resources,'paid_calls':0,'environment_clock':'absolute_no_hourly_reset',
+    return {'continuity_policy':compiled.get('continuity_policy'),'motion_bridges':plan.get('motion_bridges',[]),'join_checks':plan.get('join_checks',[]),'video':evidence,'segments':receipts,'local_resources':resources,'paid_calls':0,'environment_clock':'absolute_no_hourly_reset',
             'eligible_for_live':False,'final_human_review_required':True,'target_seconds':target,'preview_only':compiled.get('preview_only',False),'parent_spec_sha256':compiled.get('spec_sha256'),'clock_offset_seconds':compiled.get('clock_offset_seconds',0),
             'preview_mode':compiled.get('preview_mode','window' if compiled.get('preview_only') else None),'sample_map':compiled.get('sample_map')}

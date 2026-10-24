@@ -19,7 +19,7 @@ VIDEO_MODEL = 'google/veo-3.1-lite'
 BASE = 'https://openrouter.ai/api/v1'
 
 
-def quote(kind, seconds):
+def quote(kind, seconds, resolution='720p'):
     last_frame = False
     try:
         with httpx.Client(timeout=25) as client:
@@ -37,12 +37,13 @@ def quote(kind, seconds):
                 if seconds not in entry.get('supported_durations', []):
                     accepted = ', '.join(str(n) for n in entry.get('supported_durations', []))
                     raise HTTPException(422, f'Este modelo aceita {accepted} segundos por clipe. Ajuste a duração; sua imagem será mantida. Nenhum envio pago foi feito.')
-                if '720p' not in entry.get('supported_resolutions', []) or 'first_frame' not in entry.get('supported_frame_images', []):
+                if resolution not in ('720p','1080p') or resolution not in entry.get('supported_resolutions', []) or 'first_frame' not in entry.get('supported_frame_images', []):
                     raise ValueError('Unsupported duration or first frame')
                 last_frame = 'last_frame' in entry.get('supported_frame_images', [])
                 skus = entry['pricing_skus']
                 if not skus or any(not k.startswith('duration_seconds_') for k in skus): raise ValueError('Unknown units')
-                cap = max(Decimal(str(v)) for v in skus.values()) * seconds; model = VIDEO_MODEL
+                sku = 'duration_seconds_without_audio_720p' if resolution=='720p' else 'duration_seconds_without_audio'
+                cap = Decimal(str(skus[sku])) * seconds; model = VIDEO_MODEL
         if not cap.is_finite() or not 0 < cap <= 12: raise ValueError('Invalid quote')
     except HTTPException:
         raise
@@ -68,6 +69,7 @@ def complete(c, task, raw, mime, seconds=None):
                           'prompt': p['prompt'], 'model': task['model'],
                           'visual_signature': p.get('visual_signature'), 'source_image_id': p.get('source_image_id'),
                           'variant_key':p.get('variant_key'),'occurrence_ids':p.get('occurrence_ids',[]),
+                          'resolution': p.get('resolution', '720p'),
                           'continuity_review_version': 1 if p['operation'] == 'video' else None})
     # A slow generation must not replace a newer edit or carry an approval forward.
     attached = False
@@ -93,12 +95,14 @@ def complete(c, task, raw, mime, seconds=None):
 
 
 def video_body(payload, references):
+    if payload.get('resolution', '720p') not in ('720p', '1080p'):
+        raise ValueError('Unsupported video resolution')
     frames = [{'type': 'image_url', 'image_url': {'url': references[0]}, 'frame_type': 'first_frame'}]
     if payload.get('last_frame'):
         if len(references) < 2: raise ValueError('Return frame missing')
         frames.append({'type': 'image_url', 'image_url': {'url': references[1]}, 'frame_type': 'last_frame'})
     return {'model': VIDEO_MODEL, 'prompt': payload['prompt'], 'duration': payload['seconds'],
-            'resolution': '720p', 'aspect_ratio': '16:9', 'generate_audio': False,
+            'resolution': payload.get('resolution', '720p'), 'aspect_ratio': '16:9', 'generate_audio': False,
             'frame_images': frames, 'provider': {'allow_fallbacks': False}}
 
 
@@ -156,6 +160,8 @@ def refresh(tid):
                             out.write(chunk)
                 from .timeline_compositor import measure
                 seconds, info = measure(path, 'video')
+                if p.get('resolution') == '1080p' and (info['width'] < 1920 or info['height'] < 1080):
+                    raise ValueError('Provider did not deliver requested 1080p')
                 if seconds + .05 < p['seconds'] or seconds > 61: raise ValueError('Unexpected video duration')
                 complete(c, t, path.read_bytes(), 'video/mp4', seconds); c.commit()
 

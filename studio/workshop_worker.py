@@ -23,23 +23,32 @@ def render_segments(segments, sources, audio, destination, seconds, preview_rang
             raise ValueError('Preview outside program')
         plan = {**plan, 'segments': clip(plan, start, length), 'duration_seconds': length}
         plan['assets_ready'] = bool(plan['segments']) and all(s.get('asset_sha256') for s in plan['segments'])
+    native_sizes=[]
     for segment in plan['segments']:
-        actual, _ = measure(sources[segment['asset_sha256']], 'video')
+        actual, info = measure(sources[segment['asset_sha256']], 'video')
         if actual + .05 < segment['source_seconds']:
             raise ValueError('Clip shorter than requested action')
         segment['cycle_seconds'] = segment['source_seconds']
-    compiled = {'duration_seconds': seconds, 'lighting': {'keyframes': [
+        native_sizes.append((info['width'],info['height']))
+    from .workshop_continuity import POLICY
+    compiled = {'continuity_policy': POLICY, 'duration_seconds': seconds, 'reuse_base_cycles': True, 'lighting': {'keyframes': [
         {'minute': 0, 'night': 0, 'sky_light': 0, 'city_lights': 0}]}}
     if preview_range:
         compiled.update(duration_seconds=length, clock_offset_seconds=start,
                         audio_offset_seconds=start, preview_only=True)
-    report = render(compiled, plan, sources, audio, {}, destination)
+    full_hd=bool(native_sizes) and all(w>=1920 and h>=1080 for w,h in native_sizes)
+    if full_hd:compiled['encoding_profile']={'crf':15,'preset':'medium','threads':2,'lookahead_frames':8}
+    report = render(compiled, plan, sources, audio, {}, destination,width=1920 if full_hd else 1280,height=1080 if full_hd else 720)
     measured, _ = measure(destination, 'video')
     soundtrack, _ = measure(destination, 'audio')
     target = compiled['duration_seconds']
     if abs(measured - target) > .15 or abs(soundtrack - target) > .15:
         raise ValueError('Final duration mismatch')
     return {'sha256': file_hash(destination), 'seconds': measured, 'audio_seconds': soundtrack,
+            'width':report['video']['width'],'height':report['video']['height'],
+            'encoding_profile':compiled.get('encoding_profile'), 'local_resources':report['local_resources'],
+            'continuity_policy':report.get('continuity_policy'), 'motion_bridges':report.get('motion_bridges',[]),
+            'join_checks':report.get('join_checks',[]),
             'segments': report['segments'], 'full_decode_pass': report['video']['full_decode_pass'],
             'final_review_required': True, 'continuous_transitions_reviewed': False,
             'engine': 'production_harness/timeline_compositor', 'preview_range': preview_range}

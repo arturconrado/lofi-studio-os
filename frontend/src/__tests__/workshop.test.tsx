@@ -21,6 +21,7 @@ describe('visual workshop', () => {
     fireEvent.click(view.getByText('Criar projeto'));
     await waitFor(() => expect(fetcher.mock.calls.some(c => c[1]?.method === 'POST')).toBe(true));
     const body = JSON.parse(String(fetcher.mock.calls.find(c => c[1]?.method === 'POST')![1].body));
+    expect(body.data.automatic_motion).toBe(true);
     expect(body.data.minutes).toBe(37);
     expect(body.data.insertions[0].minute).toBeCloseTo(12+8/60);
     expect(body.data.insertions[0].clip_id).toBe(body.data.clips[0].id);
@@ -81,7 +82,7 @@ it('offers insertion video directly from the approved base without a separate im
   const insertion={...draft.base,id:'insertion',name:'Carinho no gato',image_id:null,video_id:null};
   draft.clips=[insertion]; draft.insertions=[{id:'event',clip_id:'insertion',minute:15}];
   const detail={id:'p',revision:1,data:draft,media:{},states:{
-    [draft.base.id]:{image_approved:true,video_approved:true},
+    [draft.base.id]:{image_approved:true,video_ready:true,video_approved:true},
     insertion:{image_approved:false,video_approved:false}
   },jobs:[],library:[],music:[]};
   vi.stubGlobal('fetch',vi.fn(async (url:string)=>new Response(JSON.stringify(url.endsWith('/capabilities')?{durations:[8]}:detail),{status:200})));
@@ -108,7 +109,7 @@ it('quotes all necessary variants once and sends their total budget', async () =
   const draft=initialDraft();const clip={...draft.base,id:'action',name:'Carinho',image_id:null,video_id:null};
   draft.clips=[clip];draft.insertions=[{id:'e1',clip_id:clip.id,minute:15},{id:'e2',clip_id:clip.id,minute:30}];
   const variants=['a','b'].map((key,n)=>({key:key.repeat(64),minutes:[15+n*15],event_ids:['e'+n],image_id:null,video_id:null,image_approved:false,video_ready:false,video_approved:false,seams_approved:false,source_ready:true}));
-  const detail={id:'p',revision:3,data:draft,media:{},states:{[draft.base.id]:{image_approved:true,video_approved:true},action:{image_approved:false,video_approved:false,variants}},jobs:[],library:[],music:[]};
+  const detail={id:'p',revision:3,data:draft,media:{},states:{[draft.base.id]:{image_approved:true,video_ready:true,video_approved:true},action:{image_approved:false,video_approved:false,variants}},jobs:[],library:[],music:[]};
   vi.stubGlobal('confirm',vi.fn(()=>true));
   const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/capabilities')?{durations:[8]}:url.includes('/quote/')?{usd:.4,new_clips:2,reused_occurrences:0}:init?.method==='POST'?{id:'batch'}:detail),{status:200}));
   vi.stubGlobal('fetch',fetcher);const view=render(<Workshop id="p" />);
@@ -123,7 +124,7 @@ it('quotes all necessary variants once and sends their total budget', async () =
 it('binds preview and approval controls to the version shown for its hours', async () => {
   const draft=initialDraft();const clip={...draft.base,id:'action',name:'Carinho',image_id:'i1',video_id:'v1'};draft.clips=[clip];draft.insertions=[{id:'e1',clip_id:clip.id,minute:15},{id:'e2',clip_id:clip.id,minute:30}];
   const variants=['a','b'].map((key,n)=>({key:key.repeat(64),minutes:[15+n*15],event_ids:['e'+n],image_id:'i'+(n+1),video_id:'v'+(n+1),image_approved:true,video_ready:true,video_approved:false,seams_approved:false,source_ready:true}));
-  const detail={id:'p',revision:3,data:draft,media:{v1:{id:'v1',kind:'video',sha256:'c'.repeat(64),url:'/v1',approved:false},v2:{id:'v2',kind:'video',sha256:'d'.repeat(64),url:'/v2',approved:false}},states:{[draft.base.id]:{image_approved:true,video_approved:true},action:{image_approved:true,video_approved:false,variants}},jobs:[],library:[],music:[]};
+  const detail={id:'p',revision:3,data:draft,media:{v1:{id:'v1',kind:'video',sha256:'c'.repeat(64),url:'/v1',approved:false},v2:{id:'v2',kind:'video',sha256:'d'.repeat(64),url:'/v2',approved:false}},states:{[draft.base.id]:{image_approved:true,video_ready:true,video_approved:true},action:{image_approved:true,video_approved:false,variants}},jobs:[],library:[],music:[]};
   const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/capabilities')?{durations:[8]}:init?.method==='POST'?{id:'preview'}:detail),{status:200}));vi.stubGlobal('fetch',fetcher);
   const view=render(<Workshop id="p" />);await waitFor(()=>expect(view.queryAllByText('Preparar prévia das emendas')).toHaveLength(2));
   fireEvent.click(view.getAllByText('Preparar prévia das emendas')[1]);
@@ -161,4 +162,28 @@ it('moves every continuous part when the action time changes', async () => {
   const body=JSON.parse(String(fetcher.mock.calls.find(c=>c[1]?.method==='PUT')![1]!.body));
   expect(body.data.insertions.map((i:any)=>i.minute)).toEqual([16,16+8/60]);
   expect(fetcher.mock.calls.some(c=>c[0].includes('/generate/'))).toBe(false);
+});
+
+
+it('assembles ready compatible clips without individual motion or seam approvals', async () => {
+  const draft=initialDraft();draft.base.video_id='v';
+  const detail={id:'p',revision:1,data:draft,media:{v:{id:'v',kind:'video',sha256:'a'.repeat(64),url:'/v',approved:false}},
+    states:{[draft.base.id]:{image_approved:true,video_ready:true,video_approved:false,seams_approved:false}},jobs:[],library:[],music:[]};
+  const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/capabilities')?{durations:[8]}:init?.method==='POST'?{id:'render'}:detail),{status:200}));
+  vi.stubGlobal('fetch',fetcher);const view=render(<Workshop id="p" />);
+  await waitFor(()=>expect((view.getByText('Montar vídeo completo') as HTMLButtonElement).disabled).toBe(false));
+  expect(view.queryByText('Aprovar vídeo')).toBeNull();
+  fireEvent.click(view.getByText('Montar vídeo completo'));
+  await waitFor(()=>expect(fetcher.mock.calls.some(c=>c[0].endsWith('/render'))).toBe(true));
+  expect(fetcher.mock.calls.some(c=>c[0].includes('/review'))).toBe(false);
+});
+
+
+
+it('keeps legacy projects in manual approval mode when the continuity setting is absent', async () => {
+  const draft = initialDraft(); draft.automatic_motion = undefined;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('/capabilities') ? { durations: [8] } : { id: 'p', revision: 1, data: draft, media: {}, states: {}, jobs: [], library: [], music: [] }), { status: 200 })));
+  const view = render(<Workshop id="p" />);
+  await view.findByText('Adicionar trecho');
+  await waitFor(() => expect((view.getByLabelText('Preparar continuidade automaticamente sem aprovar cada trecho') as HTMLInputElement).checked).toBe(false));
 });

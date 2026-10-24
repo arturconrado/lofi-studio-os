@@ -15,8 +15,8 @@ const GROUPS: Record<string, string[]> = {
   prontos: ['PRONTO_PARA_PUBLICAR', 'PUBLICADO', 'AO_VIVO'], encerrados: ['CANCELADO', 'ARQUIVADO'],
 };
 
-type Publication = { id: string; channel_id: string; title: string; description: string; privacy: string; actual_privacy: string | null; state: string; video_id: string | null; detail: string; created_at: string };
-const PUB_STATE: Record<string, [string, string]> = { uploaded: ['ok', 'No YouTube'], queued: ['info', 'Na fila'], uploading: ['violet', 'Enviando'], held: ['', 'Pausado pela agenda'],
+type Publication = { id: string; channel_id: string; title: string; description: string; keywords?: string[]; publication_metadata?: { seconds?: number }; pilot_id?: string | null; privacy: string; actual_privacy: string | null; state: string; video_id: string | null; detail: string; bytes_sent?: number; created_at: string };
+const PUB_STATE: Record<string, [string, string]> = { uploaded: ['ok', 'No YouTube'], ready: ['ok', 'Pronto para publicar'], queued: ['info', 'Na fila'], uploading: ['violet', 'Enviando'], held: ['', 'Pausado pela agenda'],
   interrupted: ['warn', 'Interrompido'], uncertain: ['warn', 'Incerto'], failed: ['bad', 'Falhou'], deleted: ['', 'Excluído'] };
 
 function Publications({ cid }: { cid: string }) {
@@ -26,11 +26,16 @@ function Publications({ cid }: { cid: string }) {
   const [editing, setEditing] = useState<Publication | null>(null);
   const [text, setText] = useState('');
   const [confirmEdit, setConfirmEdit] = useState(false);
+  const [readyForReview, setReadyForReview] = useState<Publication | null>(null);
+  const [confirmPublication, setConfirmPublication] = useState(false);
+  const [confirmRights, setConfirmRights] = useState(false);
   const saveText = async () => {
     if (!editing) return;
     const ok = await attempt(() => post(`/api/youtube/publications/${editing.id}/metadata`, { description: text, confirm_update: true }), 'Descrição atualizada no YouTube');
     if (ok !== undefined) { setEditing(null); pubs.reload(); }
   };
+  const authorizeReady = async () => { if (!readyForReview) return; const ok = await attempt(() => post(`/api/youtube/publications/${readyForReview.id}/authorize-ready`, { confirm_review: true, confirm_rights: true }), 'Publicação autorizada para envio'); if (ok !== undefined) { setReadyForReview(null); setConfirmPublication(false); setConfirmRights(false); pubs.reload(); } };
+  const retry = async (p: Publication) => { const ok = await attempt(() => post(`/api/youtube/publications/${p.id}/retry`, {}), 'Publicação recolocada na fila'); if (ok !== undefined) pubs.reload(); };
   const list = (pubs.data || []).filter(p => p.channel_id === cid);
   if (!list.length) return null;
   const release = async (p: Publication) => {
@@ -59,13 +64,23 @@ function Publications({ cid }: { cid: string }) {
               <td><Pill tone={tone}>{label}</Pill>{p.detail && <div class="faint" style={{ fontSize: '12px', marginTop: '4px' }}>{p.detail}</div>}</td>
               <td>{p.actual_privacy || p.privacy}</td><td class="faint">{ago(p.created_at)}</td>
               <td style={{ textAlign: 'right' }}>
+                {p.state === 'ready' && <button class="btn primary sm" onClick={() => { setReadyForReview(p); setConfirmPublication(false); setConfirmRights(false); }}>Revisar publicação</button>}
                 {p.state === 'held' && <button class="btn sm" onClick={() => release(p)}>Liberar envio</button>}
+                {p.state === 'failed' && !p.video_id && !p.bytes_sent && <button class="btn sm" onClick={() => retry(p)}>Tentar novamente após reconectar</button>}
                 {p.state === 'uploaded' && <div class="row tight" style={{ justifyContent: 'flex-end' }}>
                   <button class="btn sm" onClick={() => { setEditing(p); setText(p.description || ''); setConfirmEdit(false); }}>Editar descrição</button>
                   <button class="btn danger sm" onClick={() => { setRemoving(p); setSure(false); }}>Excluir do YouTube</button></div>}
               </td>
             </tr>); })}</tbody></table>
       </div>
+      <Dialog open={!!readyForReview} onClose={() => setReadyForReview(null)} title="Publicação pronta para o YouTube">
+        <h3>{readyForReview?.title}</h3><p>{Math.floor((readyForReview?.publication_metadata?.seconds || 0) / 60)} min · Visibilidade: {readyForReview?.privacy}</p>
+        {readyForReview?.pilot_id && <a class="btn" target="_blank" rel="noreferrer" href={`/api/ambient/pilots/${readyForReview.pilot_id}/video`}>Assistir ao vídeo completo</a>}
+        <h4>Descrição</h4><p style={{ whiteSpace: 'pre-wrap' }}>{readyForReview?.description}</p><h4>Palavras-chave</h4><p>{readyForReview?.keywords?.join(', ')}</p>
+        <Check checked={confirmPublication} onChange={setConfirmPublication}>Conferi o vídeo e os dados desta publicação</Check>
+        <Check checked={confirmRights} onChange={setConfirmRights}>Confirmo os direitos para publicar este vídeo e esta música</Check>
+        <div class="row"><button class="btn primary" disabled={!confirmPublication || !confirmRights} onClick={authorizeReady}>Publicar no YouTube</button><button class="btn ghost" onClick={() => setReadyForReview(null)}>Fechar</button></div>
+      </Dialog>
       <Dialog open={!!editing} onClose={() => setEditing(null)} title={`Descrição · ${editing?.title || ''}`}>
         <p class="faint" style={{ fontSize: '13px' }}>Escreva para o espectador: clima, cena, quando ouvir e um convite para comentar. Os capítulos (00:00 …) ajudam a reter quem assiste.</p>
         <textarea class="textarea" style={{ minHeight: '320px' }} maxLength={5000} value={text} onInput={e => setText((e.target as HTMLTextAreaElement).value)} />

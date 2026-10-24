@@ -32,9 +32,24 @@ jobs:
           HOST: ${{ secrets.VPS_HOST }}
         run: |
           sha=$(git rev-parse HEAD)
+          bundle=$(mktemp -d)
+          archive=$(mktemp)
+          trap 'rm -rf "$bundle" "$archive"' EXIT
+          git archive HEAD studio web requirements.txt | tar -x -C "$bundle"
+          # The production base image stores requirements.txt with CRLF. Keep
+          # the byte-level safety check in auto-deploy intact while normalizing
+          # only line endings; real dependency changes still require a full build.
+          python3 - "$bundle/requirements.txt" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          content = path.read_bytes().replace(b"\r\n", b"\n")
+          path.write_bytes(content.replace(b"\n", b"\r\n"))
+          PY
+          tar -C "$bundle" -cf "$archive" studio web requirements.txt
           for attempt in 1 2 3 4 5 6 7; do
             set +e
-            git archive HEAD studio web requirements.txt | ssh -i ~/.ssh/deploy -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" "deploy $sha"
+            ssh -i ~/.ssh/deploy -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" "deploy $sha" < "$archive"
             code=$?
             set -e
             [ "$code" = 0 ] && exit 0
