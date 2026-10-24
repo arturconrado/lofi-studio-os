@@ -1,6 +1,7 @@
 """Human-recorded YouTube Studio observations; no causal or reach promises."""
 import json
 import hashlib
+import re
 import statistics
 import uuid
 from collections import defaultdict
@@ -186,7 +187,7 @@ def ranked_search_phrases(rows):
             if not isinstance(raw,str) or not raw.strip():continue
             phrase=' '.join(raw.split())[:50]
             key=phrase.casefold()
-            item=scores[key];item['phrase']=phrase;item['snapshots']+=1
+            item=scores[key];item.setdefault('phrase',phrase);item['snapshots']+=1
             if row.get('video_url'):item['videos'].add(str(row['video_url']))
             seen=row.get('observed_date')
             if seen and (item['last_observed'] is None or seen>item['last_observed']):item['last_observed']=seen
