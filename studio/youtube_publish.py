@@ -121,9 +121,8 @@ def create(body:Publication):
     if body.privacy not in ('public','private','unlisted'):raise HTTPException(422,'Visibilidade inválida.')
     if not body.confirm_review or not body.confirm_rights:raise HTTPException(422,'Confirme o preview e os direitos antes de publicar.')
     if not body.title.strip() or any(x in body.title+body.description for x in '<>'):raise HTTPException(422,'Título ou descrição inválidos.')
-    primary_phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase)
     with db() as c:
-        ensure(c);profile(c,body.channel_id);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(body.export_id),))
+        ensure(c);profile(c,body.channel_id);primary_phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(body.export_id),))
         old=c.execute('SELECT '+FIELDS+',made_for_kids FROM youtube_publications WHERE request_id=%s OR export_id=%s',(body.request_id,body.export_id)).fetchone()
         if old:
             if any(old[k]!=v for k,v in {'channel_id':body.channel_id,'export_id':body.export_id,'title':body.title.strip(),'description':body.description,'intent':body.intent,'primary_phrase':primary_phrase,'privacy':body.privacy,'made_for_kids':body.made_for_kids}.items()):raise HTTPException(409,'Este MP4 já tem um envio registrado. Confira o histórico.')
@@ -359,18 +358,16 @@ def pilot_draft(pid:uuid.UUID):
         obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=key)
         try:description=organic(obj['Body'].read(20000).decode('utf-8'),p['title'])[:5000] or description
         finally:obj['Body'].close()
+    intent=(p.get('plan') or {}).get('intent','coding_focus')
+    if intent not in ('coding_focus','study_focus','reading_focus','sleep_relaxation'):intent='coding_focus'
+    from .growth import historical_projection,ranked_search_phrases
     with db() as c:
-        terms=c.execute("SELECT metrics FROM analytics_snapshots WHERE channel_id=%s AND intent='coding_focus' AND content_format='long_form' ORDER BY observed_date DESC LIMIT 100",(p['channel_id'],)).fetchall()
-    phrases=[]
-    for row in terms:
-        metrics=row['metrics'] or {}
-        if isinstance(metrics,str):metrics=json.loads(metrics)
-        phrases.extend(x.strip() for x in metrics.get('search_terms',[]) if isinstance(x,str) and x.strip())
-    from .growth import historical_projection,WINDOW_DAYS
+        terms=c.execute('SELECT video_url,observed_date,metrics FROM analytics_snapshots WHERE channel_id=%s AND intent=%s AND content_format=\'long_form\' ORDER BY observed_date DESC LIMIT 1000',(p['channel_id'],intent)).fetchall()
+    phrases=ranked_search_phrases(terms)
     with db() as c:
         snapshots=c.execute('SELECT video_url,observed_date,"window",video_age_days,content_format,intent,metrics FROM analytics_snapshots WHERE channel_id=%s ORDER BY observed_date DESC LIMIT 1000',(p['channel_id'],)).fetchall()
-    historical_context=historical_projection(snapshots,intent='coding_focus',content_format='long_form',window='24h',age_days=1)
-    return {'pilot_id':pid,'channel_id':p['channel_id'],'title':p['title'],'description':description,'intent':'coding_focus','observed_search_phrases':list(dict.fromkeys(phrases))[:12],'historical_context':historical_context,'seconds':3600,'thumbnail_url':f'/api/ambient/pilots/{pid}/assets/thumbnail1','video_url':f'/api/ambient/pilots/{pid}/video'}
+    historical_context=historical_projection(snapshots,intent=intent,content_format='long_form',window='24h',age_days=1)
+    return {'pilot_id':pid,'channel_id':p['channel_id'],'title':p['title'],'description':description,'intent':intent,'observed_search_phrases':[x['phrase'] for x in phrases],'search_phrase_options':phrases,'suggested_primary_phrase':phrases[0]['phrase'] if phrases else '','historical_context':historical_context,'seconds':3600,'thumbnail_url':f'/api/ambient/pilots/{pid}/assets/thumbnail1','video_url':f'/api/ambient/pilots/{pid}/video'}
 
 class PilotPublication(BaseModel):
     request_id:uuid.UUID
@@ -389,11 +386,11 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
     if not configured():raise HTTPException(503,'Configure a conexão Google.')
     if not body.confirm_publication:raise HTTPException(422,'Confirme a publicação deste vídeo específico.')
     if body.privacy not in ('public','private','unlisted') or not body.title.strip() or any(x in body.title+body.description for x in '<>'):raise HTTPException(422,'Texto ou visibilidade inválidos.')
-    primary_phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase)
     with db() as c:
         ensure(c);profile(c,body.channel_id);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(pid),))
         p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(pid,body.channel_id)).fetchone()
         if not p:raise HTTPException(404,'Vídeo inexistente neste canal.')
+        primary_phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase)
         pilot_intent=(p.get('plan') or {}).get('intent','coding_focus')
         if body.intent!=pilot_intent:raise HTTPException(409,'A intenção deste vídeo mudou. Atualize a intenção e gere novamente a sugestão antes de publicar.')
         if not ready_pilot(p):raise HTTPException(409,'Vídeo completo de uma hora ainda não validado tecnicamente.')

@@ -10,6 +10,10 @@ Use this workflow for every upload and when reviewing existing videos. The porta
 - Keep title, description, thumbnail, music, and visual aligned. Do not imply a live broadcast, 24/7 availability, exact duration, or benefits that are not true.
 - Treat search phrases as wording evidence only. They do not establish search volume or promise reach.
 
+### Growth packaging suggestion
+
+In the publication review, Growth can compose an editable title and description from the video's current metadata, selected intent, ranked Studio search phrases, and comparable channel history. Phrase ranking uses recurrence across snapshots and distinct videos; it is not a search-volume estimate. Historical comparisons are shown only when at least five matching videos exist. The creator enters or copies Studio observations into the portal; the portal does not automatically sync YouTube Analytics. Generating a package requires an explicit confirmation of a maximum US$0.02 cost. The result never publishes by itself and must be reviewed in the title and description fields.
+
 ## After publishing
 
 Record actual values from YouTube Studio in the portal: video URL, observation date, window (24h, 7d, 28d, or 90d), age in days, format, intent, impressions, CTR, views, watch time, average view duration, returning viewers, and retention at minutes 15, 30, and 45 when available. Record the Studio search terms exactly as shown. Leave unavailable fields blank; blank is not zero.

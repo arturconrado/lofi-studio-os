@@ -340,18 +340,18 @@ def test_publication_creation_is_idempotent_and_scoped(client,monkeypatch):
     finally:WORKSPACE.reset(marker)
     monkeypatch.setattr(yp,'configured',lambda:True)
     monkeypatch.setattr(miniobs,'program_snapshot',lambda c,b:({},'reviewed'))
-    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'export_id':str(eid),'title':'Original first video','description':'Test only','made_for_kids':False,'privacy':'public','confirm_review':True,'confirm_rights':True}
+    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'export_id':str(eid),'title':'Lo-fi music for an original focus session','description':'Lo-fi music for an original focus session. Test only.','intent':'coding_focus','primary_phrase':'Lo-fi music','made_for_kids':False,'privacy':'public','confirm_review':True,'confirm_rights':True}
     headers={'X-CSRF-Token':owner['csrf_token']}
     first=client.post('/api/youtube/publications',json=body,headers=headers)
     assert first.status_code==200,first.text
     second=client.post('/api/youtube/publications',json=body,headers=headers)
     assert second.status_code==200 and first.json()['id']==second.json()['id']
-    body['title']='Changed request'
+    body['title']='Lo-fi music for a changed request'
     assert client.post('/api/youtube/publications',json=body,headers=headers).status_code==409
     listed=client.get('/api/youtube/publications').json()
     assert len(listed)==1 and 'session_encrypted' not in listed[0]
     client.cookies.clear();_,other=signup(client)
-    body['title']='Original first video'
+    body['title']='Lo-fi music for an original focus session'
     assert client.post('/api/youtube/publications',json=body,headers={'X-CSRF-Token':other['csrf_token']}).status_code==404
     assert client.get('/api/youtube/publications').json()==[]
 
@@ -372,7 +372,7 @@ def test_exact_library_video_publication_is_scoped_and_idempotent(client,monkeyp
     finally:WORKSPACE.reset(marker)
     monkeypatch.setattr(yp,'configured',lambda:True)
     assert client.get(f'/api/youtube/publications/pilots/{pid}/draft').json()['title']=='Exact selected episode'
-    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'title':'Exact selected episode','description':'','made_for_kids':False,'privacy':'public','confirm_publication':True}
+    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'title':'Lo-fi music for this exact selected episode','description':'Lo-fi music for this exact selected episode.','intent':'coding_focus','primary_phrase':'Lo-fi music','made_for_kids':False,'privacy':'public','confirm_publication':True}
     url=f'/api/youtube/publications/pilots/{pid}';headers={'X-CSRF-Token':owner['csrf_token']}
     first=client.post(url,json=body,headers=headers);assert first.status_code==200,first.text
     second=client.post(url,json=body,headers=headers);assert second.status_code==200 and second.json()['id']==first.json()['id']
