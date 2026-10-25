@@ -82,7 +82,7 @@ def _font(size):
 
 
 def _caption_image(caption, folder, index, width=1080, height=1920):
-    image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    image = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     font = _font(45)
     words = caption['text'].split()
@@ -104,13 +104,16 @@ def _caption_image(caption, folder, index, width=1080, height=1920):
     pad_x, pad_y, gap = 28, 18, 8
     box_width = min(width - 120, max((b[2] - b[0] for b in boxes), default=1) + 2 * pad_x)
     box_height = len(lines) * line_height + max(0, len(lines) - 1) * gap + 2 * pad_y
-    y = 370 if caption.get('position') == 'top' else height - 450 - box_height
-    x = (width - box_width) // 2
-    draw.rounded_rectangle((x, y, x + box_width, y + box_height), radius=24, fill=(12, 14, 22, 188))
-    cursor_y = y + pad_y
+    # Store only the caption card, not a full 1080x1920 transparent frame. The
+    # full-frame PNG inputs used to multiply several hundred MB of FFmpeg buffers
+    # on the small production worker.
+    image = Image.new('RGBA', (box_width, box_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((0, 0, box_width, box_height), radius=24, fill=(12, 14, 22, 188))
+    cursor_y = pad_y
     for line, bounds in zip(lines, boxes):
         text_width = bounds[2] - bounds[0]
-        draw.text(((width - text_width) / 2, cursor_y), line, font=font, fill=(255, 250, 239, 255),
+        draw.text(((box_width - text_width) / 2, cursor_y), line, font=font, fill=(255, 250, 239, 255),
                   stroke_width=0)
         cursor_y += line_height + gap
     path = Path(folder) / f'caption-{index:02}.png'
@@ -175,14 +178,16 @@ def render_short(spec, sources, audio, audio_sha256, destination, folder):
     for i, caption in enumerate(spec.captions):
         label = f'captioned{i}'
         idx = caption_start + i
-        filters.append(f'[{current}][{idx}:v]overlay=0:0:enable=\'between(t,{caption.start_seconds},{caption.end_seconds})\':shortest=1[{label}]')
+        y = '370' if caption.position == 'top' else 'H-h-450'
+        filters.append(f'[{current}][{idx}:v]overlay=x=(W-w)/2:y={y}:enable=\'between(t,{caption.start_seconds},{caption.end_seconds})\':eof_action=pass:repeatlast=0[{label}]')
         current = label
     final_label = 'shortout'
     filters.append(f'[{current}]format=yuv420p[{final_label}]')
     fade_out = max(0, seconds - .8)
     audio_filter = f'afade=t=in:st=0:d=0.25,afade=t=out:st={fade_out}:d=0.8,atrim=duration={seconds},asetpts=PTS-STARTPTS'
     args += ['-filter_complex', ';'.join(filters), '-map', f'[{final_label}]', '-map', f'{audio_index}:a:0',
-             '-t', str(seconds), '-af', audio_filter, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '19',
+             '-t', str(seconds), '-af', audio_filter, '-c:v', 'libx264', '-threads:v', '1',
+             '-preset', 'veryfast', '-crf', '19',
              '-pix_fmt', 'yuv420p', '-r', '30', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
              '-movflags', '+faststart', str(destination)]
     subprocess.run(args, check=True, timeout=max(180, int(seconds * 15)),

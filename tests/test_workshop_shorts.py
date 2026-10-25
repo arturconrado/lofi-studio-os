@@ -7,7 +7,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from studio.workshop_shorts import ShortSpec, render_short
+from studio.workshop_shorts import ShortSpec, _caption_image, render_short
+
+
+def test_caption_cards_are_cropped_to_keep_ffmpeg_buffers_small(tmp_path):
+    path = _caption_image({'text': 'The sleepiest coworker needed a break.', 'position': 'top'},
+                          tmp_path, 0)
+    from PIL import Image
+    with Image.open(path) as image:
+        assert image.width < 1080
+        assert image.height < 300
 
 
 def test_parent_render_proves_unchanged_soundtrack_after_visual_review_expires(monkeypatch):
