@@ -132,6 +132,42 @@ def pilot_items(c,channel_id):
              'action':{'method':'POST','path':f"/api/ambient/pilots/{r['id']}/approve",'body':{},'label':'Aprovar episódio'}} for r in rows]
 
 
+def short_items(c,channel_id):
+    if not table(c,'factory_tasks') or not table(c,'visual_projects'):
+        return []
+    rows=c.execute('''SELECT t.id,t.payload,t.updated_at,p.channel_id
+      FROM factory_tasks t JOIN visual_projects p ON p.id=(t.payload->>'project_id')::uuid
+      WHERE t.kind='visual_workshop_v1' AND t.payload->>'operation'='short_render' AND t.status='COMPLETED'
+        AND COALESCE(t.payload->>'review_state','')=''
+        AND (%s::uuid IS NULL OR p.channel_id=%s)
+      ORDER BY t.updated_at''',(channel_id,channel_id)).fetchall()
+    items=[]
+    for r in rows:
+        payload=r['payload'];report=payload.get('report') or {};spec=payload.get('spec') or {}
+        if not report.get('sha256') or not payload.get('video_key'):
+            continue
+        pid=payload['project_id'];tid=str(r['id'])
+        review_path=f"/api/creator/workshop/projects/{pid}/shorts/{tid}/review"
+        items.append({'id':f'workshop_short_review:{tid}','kind':'workshop_short_review','priority':8,
+            'title':spec.get('title') or 'Short vertical para revisar',
+            'subtitle':f"{report.get('seconds',0):g}s · 1080 × 1920 · derivado de {spec.get('parent_video_id','')} · revisar história, enquadramento, legendas, áudio e fontes",
+            'channel_id':r['channel_id'],'created_at':r['updated_at'],'project_id':pid,'task_id':tid,
+            'short_package':{'story_title':spec.get('story_title'),'story_summary':spec.get('story_summary'),
+                'title':spec.get('title'),'description':spec.get('description'),
+                'parent_video_id':spec.get('parent_video_id'),'captions':spec.get('captions') or []},
+            'media':{'video_url':f"/api/creator/workshop/projects/{pid}/shorts/{tid}/video"},
+            'evidence':[{'name':'confirm_story','type':'bool','label':'A história tem abertura, mudança e resolução; funciona sem o longo'},
+                {'name':'confirm_framing','type':'bool','label':'O quadro vertical preserva a personagem, o gato e a ação'},
+                {'name':'confirm_captions','type':'bool','label':'As legendas estão sincronizadas, legíveis e não cobrem a ação'},
+                {'name':'confirm_audio','type':'bool','label':'A música está sincronizada, com uma única trilha e final natural'},
+                {'name':'confirm_source_and_rights','type':'bool','label':'Confirmei fontes, proveniência e direitos'},
+                {'name':'note','type':'text','label':'Observações (opcional)','min':0}],
+            'prefill':{},
+            'action':{'method':'POST','path':review_path,'body':{'sha256':report['sha256'],'approve':True},'label':'Aprovar Short'},
+            'reject':{'method':'POST','path':review_path,'body':{'sha256':report['sha256'],'approve':False}}})
+    return items
+
+
 def publish_items(c,channel_id):
     if not (table(c,'production_blocks') and table(c,'export_jobs')):return []
     pubs=table(c,'youtube_publications')
@@ -171,7 +207,7 @@ def failure_items(c,channel_id):
 
 
 def collect(c,channel_id=None):
-    items=failure_items(c,channel_id)+block_items(c,channel_id)+timeline_items(c)+clip_items(c,channel_id)+recipe_items(c)+pilot_items(c,channel_id)+loose_tracks(c,channel_id)+publish_items(c,channel_id)
+    items=failure_items(c,channel_id)+short_items(c,channel_id)+block_items(c,channel_id)+timeline_items(c)+clip_items(c,channel_id)+recipe_items(c)+pilot_items(c,channel_id)+loose_tracks(c,channel_id)+publish_items(c,channel_id)
     items.sort(key=lambda i:(i['priority'],str(i.get('created_at') or '')))
     return items
 

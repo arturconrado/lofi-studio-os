@@ -12,13 +12,14 @@ import { IconPlay, IconPause, IconNext, IconPrev, IconCheck, IconX, IconInbox } 
 type Action = { method: string; path: string; body: Record<string, unknown>; label?: string };
 type Track = { track_id: string; asset_id: string; title: string; seconds: number; editorial_status: string; track_status: string; technical_status: string | null;
   audio_url: string; prefill: Record<string, string>; technical_note_required: boolean };
-type Item = { id: string; kind: string; title: string; subtitle: string; priority: number; created_at: string; production_id?: string; program_id?: string; recipe_id?: string;
+type Item = { id: string; kind: string; title: string; subtitle: string; priority: number; created_at: string; production_id?: string; program_id?: string; recipe_id?: string; project_id?: string;
   media?: { audio_url?: string; video_url?: string; storyboard_url?: string }; tracks?: Track[]; track_evidence?: Evidence[]; track_actions?: any;
-  evidence: Evidence[]; prefill: Record<string, unknown>; action: Action; after?: { method: string; path: string }[]; reject?: any; references?: any; technical_note_required?: boolean };
+  short_package?: { story_title?: string; story_summary?: string; title?: string; description?: string; parent_video_id?: string; captions?: { start_seconds:number; end_seconds:number; text:string }[] };
+  evidence: Evidence[]; prefill: Record<string, unknown>; action: Action; after?: { method: string; path: string }[]; reject?: { method?:string; path:string; body?:Record<string,unknown> } | any; references?: any; technical_note_required?: boolean };
 
 const KIND_LABEL: Record<string, string> = {
   production_failure: 'Pausas', block_review: 'Horas para ouvir', final_timeline_review: 'Montagens', clip_review: 'Clipes', recipe_reference: 'Referências visuais',
-  ambient_pilot_review: 'Episódios', track_listen: 'Faixas avulsas', publish_confirm: 'Publicar',
+  ambient_pilot_review: 'Episódios', workshop_short_review: 'Shorts', track_listen: 'Faixas avulsas', publish_confirm: 'Publicar',
 };
 const REJECT_REASONS = ['Pico de volume ou ruído', 'Fora do estilo da receita', 'Repetitiva / sem evolução', 'Final cortado ou abrupto', 'Parece imitar música existente'];
 
@@ -155,7 +156,7 @@ function GateReview({ item, onDone }: { item: Item; onDone: () => void }) {
   useEffect(() => { setValues(initial(schema, item.prefill)); setHeard(false); }, [item.id]);
   const blockers = missing(schema, values);
   const submit = async () => { const ok = await attempt(() => send(item.action, values, item.after), 'Registrado'); if (ok !== undefined) onDone(); };
-  const reject = async () => { const ok = await attempt(() => post(item.reject.path, { reason }), 'Rejeitado'); if (ok !== undefined) onDone(); };
+  const reject = async () => { const ok = await attempt(() => post(item.reject.path, { ...(item.reject.body || {}), reason }), 'Rejeitado'); if (ok !== undefined) onDone(); };
   return (
     <div class="stack lg">
       {item.media?.video_url && <video class="video" controls preload="metadata" src={item.media.video_url} onEnded={() => setHeard(true)} />}
@@ -168,6 +169,15 @@ function GateReview({ item, onDone }: { item: Item; onDone: () => void }) {
           {(item.references?.asset_sha256 || []).map((s: string) => <code class="mono faint">{s}</code>)}
         </div>
       )}
+      {item.kind === 'workshop_short_review' && item.short_package && <details class="card stack">
+        <summary style={{ cursor: 'pointer' }}>História e pacote para avaliação</summary>
+        <b>{item.short_package.story_title}</b>
+        <p>{item.short_package.story_summary}</p>
+        <div><span class="faint">Título sugerido</span><p>{item.short_package.title}</p></div>
+        <div><span class="faint">Descrição sugerida</span><p style={{ whiteSpace: 'pre-wrap' }}>{item.short_package.description}</p></div>
+        <div><span class="faint">Vídeo longo relacionado</span><p><a href={`https://youtu.be/${item.short_package.parent_video_id}`} target="_blank" rel="noreferrer">Assistir ao vídeo longo</a></p></div>
+        <div><span class="faint">Legendas no Short</span>{item.short_package.captions?.map(c => <p>{c.start_seconds.toFixed(1)}–{c.end_seconds.toFixed(1)}s · {c.text}</p>)}</div>
+      </details>}
       {item.kind === 'production_failure' && <a class="btn ghost" href={href('/projetos/' + item.production_id)}>Abrir produção</a>}
       <div class="card stack">
         <EvidenceForm schema={schema} values={values} onChange={setValues} heard={heard || item.kind === 'recipe_reference'} />

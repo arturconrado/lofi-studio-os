@@ -12,6 +12,7 @@ from PIL import Image
 from .core import db, storage, audit, ensure_once
 from .channels import profile
 from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame, seam_binding, variant_plan, occurrence_clip, _status, validate_continuations
+from .workshop_shorts import ShortSpec
 
 router = APIRouter(prefix='/workshop')
 KIND = 'visual_workshop_v1'
@@ -63,7 +64,7 @@ def task(c, tid, pid):
 
 def public_task(t):
     p = t['payload']
-    return {'id': str(t['id']), 'status': t['status'], 'detail': t.get('detail'),
+    out = {'id': str(t['id']), 'status': t['status'], 'detail': t.get('detail'),
             'created_at': t.get('created_at'), 'asset_id': p.get('asset_id'),
             'asset_url': f'/api/creator/workshop/projects/{p["project_id"]}/media/{p["asset_id"]}' if p.get('asset_id') else None,
             'variant_key': p.get('variant_key'), 'batch_ids': p.get('batch_ids'),
@@ -72,6 +73,11 @@ def public_task(t):
             'preview_range': p.get('preview_range'),
             'report': p.get('report'), 'approved': p.get('approved', False),
             'url': f'/api/creator/workshop/projects/{p["project_id"]}/renders/{t["id"]}' if p.get('video_key') else None}
+    if p.get('operation') == 'short_render':
+        out.update(short_title=p.get('spec', {}).get('title'), short_story=p.get('spec', {}).get('story_title'),
+                   parent_video_id=p.get('spec', {}).get('parent_video_id'),
+                   url=f'/api/creator/workshop/projects/{p["project_id"]}/shorts/{t["id"]}/video' if p.get('video_key') else None)
+    return out
 
 
 def validate_refs(draft, media):
@@ -144,12 +150,19 @@ def detail(pid: uuid.UUID):
                 if not current: job['payload']['approved'] = False
         music = c.execute("SELECT id,seconds FROM production_batches WHERE channel_id=%s AND state='ready' AND audio_key IS NOT NULL ORDER BY updated_at DESC LIMIT 100", (row['channel_id'],)).fetchall()
         library = c.execute('SELECT id,name,data FROM visual_library WHERE channel_id=%s ORDER BY created_at DESC LIMIT 200', (row['channel_id'],)).fetchall()
+        parents = []
+        if c.execute("SELECT to_regclass('public.ambient_pilots') is not null AND to_regclass('public.youtube_publications') is not null available").fetchone()['available']:
+            parents = c.execute('''SELECT y.video_id,y.title,y.description,y.updated_at,a.id pilot_id
+              FROM youtube_publications y JOIN ambient_pilots a ON a.id=y.pilot_id
+              WHERE y.channel_id=%s AND y.state='uploaded' AND a.status='approved'
+                AND a.video_key LIKE %s ORDER BY y.updated_at DESC LIMIT 20''',
+              (row['channel_id'], f'visual-workshop/{pid}/renders/%')).fetchall()
     state_cache={};planning_errors=[]
     try:validate_continuations(draft)
     except ValueError as exc:planning_errors.append(str(exc))
     return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,'planning_errors':planning_errors,
             'states': {str(cl.id): status(draft,cl,media,_cache=state_cache) for cl in clips(draft)},
-            'jobs': [public_task(j) for j in jobs], 'music': music,
+            'jobs': [public_task(j) for j in jobs], 'music': music, 'parent_videos': parents,
             'library': [{'id': l['id'], 'name': l['name']} for l in library]}
 
 
@@ -254,6 +267,24 @@ class Review(Strict):
     confirm_motion_and_return: bool = False
     note: str = Field(default='', max_length=2000)
     variant_key: str | None = Field(default=None, pattern='^[a-f0-9]{64}$')
+
+
+class ShortRender(Strict):
+    request_id: uuid.UUID
+    revision: int
+    spec: ShortSpec
+
+
+class ShortReview(Strict):
+    sha256: str = Field(pattern='^[a-f0-9]{64}$')
+    approve: bool
+    confirm_story: bool = False
+    confirm_framing: bool = False
+    confirm_captions: bool = False
+    confirm_audio: bool = False
+    confirm_source_and_rights: bool = False
+    note: str = Field(default='', max_length=2000)
+    reason: str = Field(default='', max_length=2000)
 
 
 @router.post('/projects/{pid}/clips/{cid}/review/{kind}')
@@ -689,6 +720,175 @@ def soundtrack(c, row, draft):
         if audio.get('sha256'):
             return {'program_id': source['id'], 'key': source['audio_key'], 'sha256': audio['sha256'], 'snapshot': sha}
     raise HTTPException(409, 'A música é obrigatória: revise uma trilha do canal com duração suficiente. Nenhuma música será comprada automaticamente.')
+
+
+def _short_source_segments(c, pid, row, draft, spec, media, parent_render):
+    planned = sorted(parent_render['payload'].get('segments') or [], key=lambda s: float(s['start']))
+    expected = []
+    for selected in spec.segments:
+        clip = get_clip(draft, selected.clip_id)
+        if not clip:
+            raise HTTPException(422, 'O Short referencia um movimento que não pertence ao projeto')
+        if abs(selected.source_start_seconds) > .001:
+            raise HTTPException(422, 'O corte deve começar no início do movimento aprovado')
+        if clip.id == draft.base.id:
+            if selected.duration_seconds > clip.seconds + .05:
+                raise HTTPException(422, 'O trecho de abertura excede o ciclo-base aprovado')
+        elif abs(selected.duration_seconds - clip.seconds) > .05:
+            raise HTTPException(422, 'Use cada movimento completo para preservar a ação e sua conclusão')
+        asset_id = clip.video_id
+        occurrence = selected.occurrence_minute * 60
+        if clip.id != draft.base.id:
+            event = next((i for i in draft.insertions if i.clip_id == clip.id
+                          and round(i.minute * 60 * 24) == round(selected.occurrence_minute * 60 * 24)), None)
+            if not event:
+                raise HTTPException(422, 'O trecho não está agendado no horário escolhido')
+            asset_id = event.video_id or asset_id
+        asset = media.get(str(asset_id)) if asset_id else None
+        if not asset or asset.get('kind') != 'video' or asset.get('sha256') != selected.source_sha256:
+            raise HTTPException(409, 'Um arquivo fonte mudou; atualize o projeto antes de continuar')
+        source_start = round(occurrence * 24) / 24
+        matches = [s for s in planned if str(s.get('clip_id')) == str(clip.id)
+                   and s.get('asset_sha256') == asset['sha256']
+                   and float(s['start']) <= source_start + .001
+                   and float(s['end']) + .001 >= source_start + selected.duration_seconds]
+        if not matches:
+            raise HTTPException(409, 'O movimento não está comprovado no render aprovado do vídeo relacionado')
+        storage().head_object(Bucket=os.environ['S3_BUCKET'], Key=asset['key'])
+        expected.append({'clip_id': str(clip.id), 'asset_key': asset['key'],
+                         'asset_sha256': asset['sha256'], 'source_start_seconds': selected.source_start_seconds,
+                         'duration_seconds': selected.duration_seconds, 'occurrence_seconds': source_start,
+                         'beat': selected.beat})
+    ordered = sorted(zip(spec.segments, expected), key=lambda item: item[1]['occurrence_seconds'])
+    if [segment.clip_id for segment, _ in ordered] != [segment.clip_id for segment in spec.segments]:
+        raise HTTPException(422, 'Organize os movimentos do Short na ordem da timeline')
+    for index, (segment, source) in enumerate(ordered):
+        clip = get_clip(draft, segment.clip_id)
+        if clip.continues_from:
+            if index == 0 or str(ordered[index - 1][0].clip_id) != str(clip.continues_from):
+                raise HTTPException(422, 'Inclua a parte anterior desta ação contínua')
+            previous = ordered[index - 1][1]
+            if abs(previous['occurrence_seconds'] + previous['duration_seconds'] - source['occurrence_seconds']) > .05:
+                raise HTTPException(422, 'As partes da ação precisam ser consecutivas')
+        children = [c for c in draft.clips if c.continues_from == clip.id]
+        for child in children:
+            next_source = next((s for s in planned if str(s.get('clip_id')) == str(child.id)
+                                and abs(float(s['start']) - (source['occurrence_seconds'] + source['duration_seconds'])) <= .05), None)
+            if next_source and (index + 1 >= len(ordered) or str(ordered[index + 1][0].clip_id) != str(child.id)):
+                raise HTTPException(422, 'Inclua a conclusão da ação contínua')
+            if next_source and (abs(float(next_source['start']) - ordered[index + 1][1]['occurrence_seconds']) > .05
+                                or next_source.get('asset_sha256') != ordered[index + 1][1]['asset_sha256']):
+                raise HTTPException(422, 'As partes da ação precisam ser consecutivas e preservar a mesma fonte')
+    if abs(spec.audio_start_seconds - expected[0]['occurrence_seconds']) > .05:
+        raise HTTPException(422, 'Alinhe o início da música ao primeiro quadro da história original')
+    return expected
+
+
+@router.post('/projects/{pid}/shorts/render')
+def render_short(pid: uuid.UUID, body: ShortRender):
+    ready()
+    with db() as c:
+        row = project(c, pid, True)
+        prior = c.execute('SELECT * FROM factory_tasks WHERE id=%s', (body.request_id,)).fetchone()
+        if prior:
+            prior = task(c, body.request_id, pid)
+            if prior['payload'].get('operation') != 'short_render':
+                raise HTTPException(409, 'Pedido já utilizado por outra operação')
+            return public_task(prior)
+        if row['revision'] != body.revision:
+            raise HTTPException(409, 'O projeto mudou; recarregue antes de preparar o Short')
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'operation'='short_render' AND status IN ('QUEUED','RUNNING')", (KIND, str(pid))).fetchone():
+            raise HTTPException(409, 'Já há um Short sendo montado neste projeto')
+        if not worker_online(c):
+            raise HTTPException(503, 'O montador local está offline')
+        parent = c.execute('''SELECT y.id publication_id,y.video_id,y.title,a.id pilot_id,a.video_key
+          FROM youtube_publications y JOIN ambient_pilots a ON a.id=y.pilot_id
+          WHERE y.channel_id=%s AND y.video_id=%s AND y.state='uploaded' AND a.status='approved'
+            AND a.video_key LIKE %s ORDER BY y.updated_at DESC LIMIT 1''',
+          (row['channel_id'], body.spec.parent_video_id, f'visual-workshop/{pid}/renders/%')).fetchone()
+        if not parent:
+            raise HTTPException(409, 'Vincule o Short a um vídeo deste projeto que esteja publicado e aprovado')
+        try:
+            parent_task_id = uuid.UUID(parent['video_key'].split('/')[3])
+        except (IndexError, ValueError):
+            raise HTTPException(409, 'Não foi possível provar a origem do vídeo relacionado') from None
+        parent_render = c.execute("SELECT * FROM factory_tasks WHERE id=%s AND kind=%s", (parent_task_id, KIND)).fetchone()
+        if not parent_render or parent_render['status'] != 'COMPLETED' or parent_render['payload'].get('report', {}).get('sha256') != Path(parent['video_key']).stem:
+            raise HTTPException(409, 'O render de origem não tem recibo íntegro; o MP4 publicado pode ter sido purgado')
+        draft = Draft.model_validate(row['data']); media = assets(c, pid)
+        sources = _short_source_segments(c, pid, row, draft, body.spec, media, parent_render)
+        audio = soundtrack(c, row, draft)
+        parent_audio = parent_render['payload'].get('audio') or {}
+        if audio.get('key') != parent_audio.get('key') or audio.get('sha256') != parent_audio.get('sha256'):
+            raise HTTPException(409, 'A trilha aprovada do projeto não corresponde ao vídeo relacionado')
+        storage().head_object(Bucket=os.environ['S3_BUCKET'], Key=audio['key'])
+        payload = {'project_id': str(pid), 'operation': 'short_render', 'draft_sha256': digest(row['data']),
+                   'short_spec_sha256': body.spec.content_hash(), 'spec': body.spec.model_dump(mode='json'),
+                   'sources': sources, 'audio': audio, 'seconds': body.spec.seconds,
+                   'parent_publication_id': str(parent['publication_id']), 'parent_pilot_id': str(parent['pilot_id']),
+                   'parent_render_id': str(parent_task_id), 'approved': False}
+        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_ffmpeg_short_v1',%s,0,'QUEUED','Compondo história vertical com os movimentos e a música originais')",
+                  (body.request_id, KIND, json.dumps(payload)))
+        audit(c, 'WORKSHOP_SHORT_RENDER_QUEUED', str(body.request_id),
+              f"Parent YouTube video {body.spec.parent_video_id}; source-linked 9:16 derivation")
+        c.commit()
+    return {'id': str(body.request_id), 'status': 'QUEUED'}
+
+
+@router.get('/projects/{pid}/shorts/{tid}/video')
+def short_video(pid: uuid.UUID, tid: uuid.UUID, request: Request):
+    from .miniobs import media as stream
+    with db() as c:
+        project(c, pid); t = task(c, tid, pid)
+    if t['payload'].get('operation') != 'short_render' or t['status'] != 'COMPLETED' or not t['payload'].get('video_key'):
+        raise HTTPException(409, 'Short ainda indisponível para revisão')
+    return stream(request, t['payload']['video_key'], 'video/mp4')
+
+
+@router.post('/projects/{pid}/shorts/{tid}/review')
+def review_short(pid: uuid.UUID, tid: uuid.UUID, body: ShortReview):
+    with db() as c:
+        row = project(c, pid, True); t = task(c, tid, pid); payload = t['payload']
+        if payload.get('operation') != 'short_render' or t['status'] != 'COMPLETED':
+            raise HTTPException(409, 'Somente um Short concluído pode ser revisado')
+        if payload.get('report', {}).get('sha256') != body.sha256:
+            raise HTTPException(409, 'O arquivo mudou; revise a versão mais recente')
+        if payload.get('draft_sha256') != digest(row['data']):
+            raise HTTPException(409, 'A origem do projeto mudou; prepare uma nova versão do Short')
+        try:
+            spec = ShortSpec.model_validate(payload.get('spec'))
+        except Exception:
+            raise HTTPException(409, 'A especificação do Short não está íntegra; gere uma versão nova') from None
+        if spec.content_hash() != payload.get('short_spec_sha256'):
+            raise HTTPException(409, 'A história ou os metadados mudaram; gere uma versão nova')
+        asset = c.execute('SELECT data FROM visual_media WHERE id=%s AND project_id=%s FOR UPDATE',
+                          (payload.get('asset_id'), pid)).fetchone() if payload.get('asset_id') else None
+        if not asset or asset['data'].get('kind') != 'short' or asset['data'].get('sha256') != body.sha256:
+            raise HTTPException(409, 'O arquivo de revisão não corresponde ao asset derivado registrado')
+        if body.approve and not all((body.confirm_story, body.confirm_framing, body.confirm_captions,
+                                     body.confirm_audio, body.confirm_source_and_rights)):
+            raise HTTPException(422, 'Confirme história, enquadramento, legendas, áudio, fontes e direitos')
+        note = (body.note or body.reason).strip()
+        if not body.approve and len(note) < 5:
+            raise HTTPException(422, 'Descreva o que precisa ser ajustado')
+        target_state = 'approved' if body.approve else 'changes_requested'
+        if payload.get('review_state'):
+            if (payload.get('review_state') == target_state and payload.get('review_sha256') == body.sha256
+                    and payload.get('review_note', '') == note):
+                return {'approved': body.approve, 'state': payload['review_state']}
+            raise HTTPException(409, 'Esta versão já recebeu uma decisão; prepare outra versão para revisão')
+        payload.update(approved=body.approve, review_sha256=body.sha256,
+                       review_state=target_state, review_note=note)
+        data = asset['data'] | {'approved': body.approve,
+            'review_sha256': body.sha256 if body.approve else None,
+            'review_note': note, 'parent_video_id': payload['spec']['parent_video_id']}
+        c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',
+                  (json.dumps(data), payload['asset_id'], pid))
+        c.execute('UPDATE factory_tasks SET payload=%s,detail=%s,updated_at=now() WHERE id=%s',
+                  (json.dumps(payload), 'Short aprovado para avaliação/uso posterior' if body.approve else 'Short devolvido para ajustes', tid))
+        audit(c, 'WORKSHOP_SHORT_REVIEWED', str(tid), payload['review_state'] + ': ' + note)
+        c.commit()
+    return {'approved': body.approve, 'state': payload['review_state']}
 
 
 @router.post('/projects/{pid}/render')

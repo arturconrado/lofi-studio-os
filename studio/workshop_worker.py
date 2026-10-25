@@ -1,11 +1,13 @@
 """Local FFmpeg assembly of reviewed clips. Never loop insertions or omit music."""
 import json
 import os
+import uuid
 from pathlib import Path
 from .core import db, storage
 from .timeline_compositor import file_hash, measure
 from .timeline_worker import fetch
 from .workshop_api import KIND, ready
+from .workshop_shorts import ShortSpec, render_short
 
 
 def render_segments(segments, sources, audio, destination, seconds, preview_range=None):
@@ -60,12 +62,39 @@ def tick():
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837472)')
         if c.execute("SELECT 1 FROM export_jobs WHERE state='running'").fetchone() or c.execute(
-                "SELECT 1 FROM factory_tasks WHERE kind IN ('timeline_render_v1',%s) AND status='RUNNING' AND (kind='timeline_render_v1' OR payload->>'operation' IN ('render','preview'))", (KIND,)).fetchone(): return False
-        t = c.execute("UPDATE factory_tasks SET status='RUNNING',detail='Montando base, inserções e música' WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s AND payload->>'operation' IN ('render','preview') AND status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *", (KIND,)).fetchone(); c.commit()
+                "SELECT 1 FROM factory_tasks WHERE kind IN ('timeline_render_v1',%s) AND status='RUNNING' AND (kind='timeline_render_v1' OR payload->>'operation' IN ('render','preview','short_render'))", (KIND,)).fetchone(): return False
+        t = c.execute("UPDATE factory_tasks SET status='RUNNING',detail=CASE WHEN payload->>'operation'='short_render' THEN 'Compondo Short vertical' ELSE 'Montando base, inserções e música' END WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s AND payload->>'operation' IN ('render','preview','short_render') AND status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *", (KIND,)).fetchone(); c.commit()
     if not t: return False
     folder = CACHE / 'visual-workshop' / str(t['id']); folder.mkdir(parents=True, exist_ok=True)
     try:
-        p = t['payload']; sources = {}
+        p = t['payload']
+        if p.get('operation') == 'short_render':
+            files = {}
+            for source in p['sources']:
+                path = folder / f"{source['asset_sha256']}.mp4"
+                fetch(source['asset_key'], path, source['asset_sha256'], 64 * 1024**2)
+                files[source['clip_id']] = path
+            audio = folder / 'short-audio.mp3'
+            fetch(p['audio']['key'], audio, p['audio']['sha256'], 1024**3)
+            spec = ShortSpec.model_validate(p['spec'])
+            final = folder / 'short.mp4'
+            report = render_short(spec, files, audio, p['audio']['sha256'], final, folder)
+            key = f'visual-workshop/{p["project_id"]}/shorts/{t["id"]}/{report["sha256"]}.mp4'
+            storage().upload_file(str(final), os.environ['S3_BUCKET'], key, ExtraArgs={'ContentType': 'video/mp4'})
+            asset_id = uuid.uuid4()
+            asset_data = {'kind': 'short', 'key': key, 'sha256': report['sha256'], 'mime': 'video/mp4',
+                          'approved': False, 'parent_video_id': spec.parent_video_id,
+                          'short_task_id': str(t['id']), 'source_sha256s': [s['source_sha256'] for s in spec.segments],
+                          'report': report}
+            with db() as c:
+                c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',
+                          (asset_id, p['project_id'], json.dumps(asset_data)))
+                c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Short vertical pronto para revisão humana',updated_at=now() WHERE id=%s",
+                          (json.dumps({'report': report, 'video_key': key, 'asset_id': str(asset_id)}), t['id']))
+                c.commit()
+            return True
+
+        sources = {}
         needed = p['segments']
         if p.get('preview_range'):
             from .timeline_preview import clip
