@@ -1,5 +1,6 @@
 """Local FFmpeg assembly of reviewed clips. Never loop insertions or omit music."""
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -8,6 +9,8 @@ from .timeline_compositor import file_hash, measure
 from .timeline_worker import fetch
 from .workshop_api import KIND, ready
 from .workshop_shorts import ShortSpec, render_short
+
+logger = logging.getLogger(__name__)
 
 
 def render_segments(segments, sources, audio, destination, seconds, preview_range=None):
@@ -111,6 +114,7 @@ def tick():
             c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Vídeo completo pronto para revisão',updated_at=now() WHERE id=%s",
                       (json.dumps({'report': report, 'video_key': key}), t['id'])); c.commit()
     except Exception as e:
+        logger.exception('Visual Workshop task failed id=%s operation=%s', t['id'], t['payload'].get('operation'))
         with db() as c:
             c.execute("UPDATE factory_tasks SET status='FAILED',detail=%s,updated_at=now() WHERE id=%s",
                       ('Montagem interrompida (' + type(e).__name__ + '). Confira as fontes e o espaço disponível.', t['id'])); c.commit()
