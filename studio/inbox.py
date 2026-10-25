@@ -207,7 +207,7 @@ def failure_items(c,channel_id):
 
 
 def collect(c,channel_id=None):
-    items=failure_items(c,channel_id)+short_items(c,channel_id)+block_items(c,channel_id)+timeline_items(c)+clip_items(c,channel_id)+recipe_items(c,channel_id)+pilot_items(c,channel_id)+loose_tracks(c,channel_id)+publish_items(c,channel_id)
+    items=failure_items(c,channel_id)+short_items(c,channel_id)+block_items(c,channel_id)+timeline_items(c)+clip_items(c,channel_id)+recipe_items(c)+pilot_items(c,channel_id)+loose_tracks(c,channel_id)+publish_items(c,channel_id)
     items.sort(key=lambda i:(i['priority'],str(i.get('created_at') or '')))
     return items
 
