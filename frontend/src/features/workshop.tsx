@@ -13,7 +13,8 @@ type Media = { id: string; url: string; sha256: string; kind: string; approved: 
 type Variant = { key: string; minutes: number[]; event_ids: string[]; image_id: string | null; video_id: string | null; image_approved: boolean; video_ready: boolean; video_approved: boolean; seams_approved: boolean; source_ready: boolean };
 type Detail = { id: string; revision: number; data: Draft; media: Record<string, Media>;
   states: Record<string, { video_ready: boolean; image_approved: boolean; video_approved: boolean; seams_approved?: boolean; variants?: Variant[] }>;
-  jobs: { id: string; status: string; detail: string; operation: string; clip_id?: string; variant_key?: string | null; url?: string; asset_url?: string; asset_id?: string; created_at?: string; report?: { sha256: string }; current?: boolean; preview_range?: [number,number]; approved: boolean }[];
+  jobs: { id: string; status: string; detail: string; operation: string; clip_id?: string; variant_key?: string | null; url?: string; asset_url?: string; asset_id?: string; short_title?: string; created_at?: string; report?: { sha256: string; seconds?: number; width?: number; height?: number }; current?: boolean; preview_range?: [number,number]; approved: boolean }[];
+  parent_videos?: { video_id: string; title: string; description: string; pilot_id: string }[];
   planning_errors?: string[];
   music: { id: string; seconds: number }[]; library: { id: string; name: string }[] };
 const prefix = '/api/creator/workshop';
@@ -50,16 +51,46 @@ export function Workshop({ id }: { id?: string }) {
   const capabilities = useResource<{ durations: number[]; model: string }>(prefix + '/capabilities');
   const [message, setMessage] = useState('');
   const [reviewed, setReviewed] = useState<Record<string, boolean>>({});
+  const [shortTitle, setShortTitle] = useState('Rainy Café Coding Focus | A Break with the Sleepiest Cat');
+  const [shortStoryTitle, setShortStoryTitle] = useState('Uma pausa para o colega mais sonolento');
+  const [shortStory, setShortStory] = useState('Numa cafeteria chuvosa à noite, uma programadora pausa a sessão de código para acariciar seu gato sonolento; depois, volta ao teclado enquanto ele se ajeita na almofada.');
+  const [shortDescription, setShortDescription] = useState('Rainy café coding focus, with a tiny break for the sleepiest coworker. Then settle into the full Lo-Fi Jazzhop session: https://youtu.be/8WPZo1LrRbc');
+  const [shortCaptions, setShortCaptions] = useState([
+    'One more line of code…',
+    'The sleepiest coworker needed a break.',
+    'A little kindness later…',
+    'Back to the next line. Settle into the full session.'
+  ]);
   const d = resource.data;
   const ordered = [...draft.insertions].sort((a,b)=>a.minute-b.minute);
   const scheduledIds = new Set(ordered.map(i=>i.clip_id));
-  const activeRender = d?.jobs.some(j=>j.operation==='render' && ['QUEUED','RUNNING'].includes(j.status));
+  const activeRender = d?.jobs.some(j=>['render','short_render'].includes(j.operation) && ['QUEUED','RUNNING'].includes(j.status));
   const automatic = draft.automatic_motion === true;
   const allApproved = [draft.base,...draft.clips.filter(c=>scheduledIds.has(c.id))].every(c=>automatic ? d?.states[c.id]?.video_ready : d?.states[c.id]?.video_approved && d?.states[c.id]?.seams_approved !== false);
   const scheduleIssue = ordered.some((i,n)=>{const c=draft.clips.find(c=>c.id===i.clip_id); const prev=ordered[n-1];const pc=draft.clips.find(c=>c.id===prev?.clip_id);return !c || i.minute*60+(c?.seconds||0)>draft.minutes*60 || (prev && i.minute*60<prev.minute*60+(pc?.seconds||0));});
+  const shortSource = (() => {
+    const root = draft.clips.find(c => !c.continues_from && c.name.toLowerCase().includes('pausa para acariciar o gato'));
+    const continuation = root && draft.clips.find(c => c.continues_from === root.id);
+    const event = root && ordered.find(i => i.clip_id === root.id);
+    const next = continuation && event && ordered.find(i => i.clip_id === continuation.id && Math.abs(i.minute - event.minute - (root!.seconds / 60)) < 1 / 2880);
+    const baseMedia = draft.base.video_id && d?.media[draft.base.video_id];
+    const rootMedia = root?.video_id && d?.media[root.video_id];
+    const nextMedia = continuation?.video_id && d?.media[continuation.video_id];
+    if (!root || !continuation || !event || !next || !baseMedia || !rootMedia || !nextMedia || !d?.parent_videos?.length) return null;
+    const openingSeconds = Math.min(8, draft.base.seconds);
+    const openingMinute = event.minute - openingSeconds / 60;
+    if (openingMinute < 0) return null;
+    return { parent: d.parent_videos[0], audioStart: openingMinute * 60, segments: [
+      { clip: draft.base, minute: openingMinute, media: baseMedia, duration: openingSeconds, beat: 'opening' },
+      { clip: root, minute: event.minute, media: rootMedia, duration: root.seconds, beat: 'turn' },
+      { clip: continuation, minute: next.minute, media: nextMedia, duration: continuation.seconds, beat: 'resolution' },
+    ] };
+  })();
+  const shortDuration = shortSource?.segments.reduce((sum, item) => sum + item.duration, 0) || 24;
+  const shortCaptionCuts = [0, .23, .48, .71, 1].map(r => Math.round(shortDuration * r * 10) / 10);
   const visualLocked = !!d && Object.values(d.states).some(s => s.image_approved) && !editVisual;
   const pending = (clipId: string, kind: string) => d?.jobs.find(j => j.clip_id === clipId && j.operation === kind && ['SUBMITTING', 'RUNNING', 'UNCERTAIN', 'QUEUED'].includes(j.status));
-  const jobLabel = (status: string) => ({ SUBMITTING: 'Enviando pedido', RUNNING: 'Gerando', QUEUED: 'Na fila', UNCERTAIN: 'Verificando envio — não gere novamente', COMPLETED: 'Pronto para revisão', FAILED: 'Falhou', INTERRUPTED: 'Interrompido' }[status] || status);
+  const jobLabel = (status: string) => ({ SUBMITTING: 'Enviando pedido', RUNNING: 'Montando', QUEUED: 'Na fila', UNCERTAIN: 'Verificando envio — não gere novamente', COMPLETED: 'Pronto para revisão', FAILED: 'Falhou', INTERRUPTED: 'Interrompido' }[status] || status);
   useEffect(() => {
     if (!id) return;
     const timer = window.setInterval(async () => {
@@ -132,6 +163,19 @@ export function Workshop({ id }: { id?: string }) {
     try { const result = await fn(); if (id) await resource.reload(); setMessage(success); return result; }
     catch (e: any) { setMessage(e.message || 'Não foi possível concluir'); }
     finally { running.current=false; setBusy(false); }
+  };
+  const createShort = () => {
+    if (!id || !d || !shortSource) return;
+    const segments = shortSource.segments.map(s => ({ clip_id: s.clip.id, source_sha256: s.media.sha256,
+      occurrence_minute: s.minute, source_start_seconds: 0, duration_seconds: s.duration, beat: s.beat }));
+    const captions = [
+      ...shortCaptions.map((text, index) => ({ start_seconds: shortCaptionCuts[index], end_seconds: shortCaptionCuts[index + 1], text, position: 'top' as const })),
+    ];
+    return run(() => post(`${prefix}/projects/${id}/shorts/render`, { request_id: uuid(), revision: d.revision,
+      spec: { title: shortTitle, description: shortDescription, story_title: shortStoryTitle,
+        story_summary: shortStory, parent_video_id: shortSource.parent.video_id,
+        audio_start_seconds: shortSource.audioStart, segments, captions } }),
+      'Short enviado ao montador local. Ele aparecerá na Caixa de Revisão quando estiver pronto.');
   };
   const save = () => run(async () => {
     if (id && d) { await put(`${prefix}/projects/${id}`, { revision: editRevision.current ?? d.revision, data: draft, edit_visual: editVisual }); dirtyRef.current = false; editRevision.current = null; setDirty(false); setEditVisual(false); }
@@ -220,7 +264,8 @@ export function Workshop({ id }: { id?: string }) {
   const focusClip = (clip: Clip) => { const node=document.getElementById('clip-'+clip.id); const parent=node?.closest('details'); if(parent) parent.open=true; node?.scrollIntoView({behavior:'smooth',block:'start'}); };
   const completeVideo = d?.jobs.find(j=>j.operation==='render' && j.status==='COMPLETED' && j.current !== false);
   const missingVariant = nextClip && d?.states[nextClip.id]?.variants?.some(v=>!v.video_ready);
-  const nextLabel = !id || dirty ? 'Salvar' : !d?.states[draft.base.id]?.image_approved ? 'Preparar imagem inicial' : nextClip ? !automatic && nextClip.video_id && !missingVariant ? 'Revisar '+nextClip.name : 'Gerar vídeo de '+nextClip.name : activeRender ? 'Montagem em andamento' : completeVideo ? completeVideo.approved ? 'Vídeo completo aprovado' : 'Revisar vídeo completo' : 'Montar vídeo';
+  const generatingNext = !!(nextClip && pending(nextClip.id, 'video')) || !!pending(draft.base.id, 'image');
+  const nextLabel = !id || dirty ? 'Salvar' : generatingNext ? 'Gerando' : !d?.states[draft.base.id]?.image_approved ? 'Preparar imagem inicial' : nextClip ? !automatic && nextClip.video_id && !missingVariant ? 'Revisar '+nextClip.name : 'Gerar vídeo de '+nextClip.name : activeRender ? 'Montagem em andamento' : completeVideo ? completeVideo.approved ? 'Vídeo completo aprovado' : 'Revisar vídeo completo' : 'Montar vídeo';
   const nextAction = () => {
     if(!id || dirty) return save();
     if(!d?.states[draft.base.id]?.image_approved) return draft.base.image_id ? focusClip(draft.base) : generate(draft.base,'image');
@@ -239,6 +284,18 @@ export function Workshop({ id }: { id?: string }) {
     {d?.planning_errors?.map(error=><p role="alert" class="notice warn">{error}. Ajuste os horários das partes; os materiais estão preservados.</p>)}
     {scheduleIssue && <p role="alert" class="notice warn">Há sobreposição ou uma inserção termina depois do vídeo. Ajuste a agenda antes de gerar.</p>}
     {dirty && id && <div class="notice warn">Há alterações não salvas. Salve antes de gerar, revisar ou montar.</div>}
+    {d && shortSource && <section class="card stack">
+      <h3>Short narrativo do vídeo publicado</h3>
+      <p>Usa o movimento-base para abrir, a pausa para acariciar o gato e a continuação que retoma a digitação. Os trechos são preservados em ordem, com música do mesmo ponto da timeline e composição vertical com fundo sincronizado. Duração prevista: {shortDuration} segundos.</p>
+      <p class="faint">Fontes: base {formatTime(shortSource.segments[0].minute)}–{formatTime(shortSource.segments[0].minute + shortSource.segments[0].duration / 60)} · pausa {formatTime(shortSource.segments[1].minute)}–{formatTime(shortSource.segments[1].minute + shortSource.segments[1].duration / 60)} · resolução {formatTime(shortSource.segments[2].minute)}–{formatTime(shortSource.segments[2].minute + shortSource.segments[2].duration / 60)}. Vídeo longo: <a href={`https://youtu.be/${shortSource.parent.video_id}`} target="_blank" rel="noreferrer">{shortSource.parent.title}</a></p>
+      <Field label="Título para avaliação"><input class="input" maxLength={100} value={shortTitle} onInput={e => setShortTitle(e.currentTarget.value)} /></Field>
+      <Field label="Nome da história"><input class="input" maxLength={120} value={shortStoryTitle} onInput={e => setShortStoryTitle(e.currentTarget.value)} /></Field>
+      <Field label="Resumo narrativo"><textarea class="textarea" value={shortStory} onInput={e => setShortStory(e.currentTarget.value)} /></Field>
+      {shortCaptions.map((caption, index) => <Field label={`Legenda ${index + 1} · ${shortCaptionCuts[index]}–${shortCaptionCuts[index + 1]}s`}><input class="input" maxLength={90} value={caption} onInput={e => setShortCaptions(shortCaptions.map((text,n) => n === index ? e.currentTarget.value : text))} /></Field>)}
+      <Field label="Descrição"><textarea class="textarea" value={shortDescription} onInput={e => setShortDescription(e.currentTarget.value)} /></Field>
+      <p class="faint">A renderização é local e sem custo de geração. O arquivo não será publicado nem aprovará o vídeo longo. A aprovação humana será própria deste Short.</p>
+      <button class="btn primary" disabled={busy || dirty || !shortTitle.trim() || !shortStory.trim() || shortCaptions.some(c => !c.trim()) || d.jobs.some(j => j.operation === 'short_render' && ['QUEUED','RUNNING'].includes(j.status))} onClick={createShort}>Montar Short para revisão humana</button>
+    </section>}
     {!id && <button class="btn ghost" onClick={()=>{if(confirm('Limpar apenas este formulário não salvo? Os projetos e materiais salvos serão mantidos.')){setDraft(initialDraft());dirtyRef.current=false;setDirty(false);}}}>Limpar formulário</button>}
     {!id && listing.data?.projects.length ? <section class="card"><h3>Projetos salvos</h3>{listing.data.projects.map(p => <p><a href={href('/criar-video/' + p.id)}>{p.name}</a></p>)}</section> : null}
     <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0 }} class="stack">
@@ -293,9 +350,9 @@ export function Workshop({ id }: { id?: string }) {
       </div>)}
     </details>}
     {d && <section class="card stack"><div class="row"><h3 class="grow">Gerações e montagens</h3><button class="btn" disabled={busy || dirty} onClick={() => run(async () => { for (const j of d.jobs.filter(j => ['QUEUED','RUNNING'].includes(j.status) && j.operation === 'video')) await post(`${prefix}/projects/${id}/jobs/${j.id}/refresh`); })}>Atualizar andamento</button></div>
-      {d.jobs.map(j => <div class="card stack" key={j.id} id={`job-${j.id}`}><b>{j.operation === 'preview' ? 'Prévia das emendas' : j.operation === 'render' ? 'Vídeo completo' : j.operation === 'image' ? 'Imagem' : 'Animação'} · {jobLabel(j.status)}</b><p>{j.detail}</p>{j.preview_range && <p>{draft.clips.find(c=>c.id===j.clip_id)?.name || draft.base.name} · {formatTime(j.preview_range[0]/60)} a {formatTime((j.preview_range[0]+j.preview_range[1])/60)}{j.current === false && " · Agenda alterada: prepare outra prévia"}</p>}{j.asset_url && <a class="btn" href={j.asset_url} target="_blank">Abrir material concluído</a>}
+      {d.jobs.map(j => <div class="card stack" key={j.id} id={`job-${j.id}`}><b>{j.operation === 'preview' ? 'Prévia das emendas' : j.operation === 'render' ? 'Vídeo completo' : j.operation === 'short_render' ? 'Short narrativo' : j.operation === 'image' ? 'Imagem' : 'Animação'} · {jobLabel(j.status)}</b><p>{j.detail}</p>{j.preview_range && <p>{draft.clips.find(c=>c.id===j.clip_id)?.name || draft.base.name} · {formatTime(j.preview_range[0]/60)} a {formatTime((j.preview_range[0]+j.preview_range[1])/60)}{j.current === false && " · Agenda alterada: prepare outra prévia"}</p>}{j.asset_url && <a class="btn" href={j.asset_url} target="_blank">Abrir material concluído</a>}
         {j.operation === 'render' && ['FAILED','INTERRUPTED'].includes(j.status) && <button class="btn" disabled={busy || dirty} onClick={() => run(() => post(`${prefix}/projects/${id}/jobs/${j.id}/retry-render`, {}), 'Montagem retomada com os mesmos clipes. Nenhuma geração paga.')}>Retomar montagem</button>}
-        {j.url && <><video src={j.url} controls preload="metadata" style={{ width: '100%' }} /><a class="btn" href={j.url} download>Baixar vídeo</a>{j.operation === 'render' && <><Pill tone={j.approved ? 'ok' : 'warn'}>{j.approved ? 'Revisão final aprovada' : 'Revisão final pendente'}</Pill>
+        {j.url && <><video src={j.url} controls preload="metadata" style={{ width: j.operation === 'short_render' ? 'min(100%, 420px)' : '100%', maxHeight: j.operation === 'short_render' ? '75vh' : undefined }} /><a class="btn" href={j.url} download>Baixar vídeo</a>{j.operation === 'short_render' && <><Pill tone={j.approved ? 'ok' : 'warn'}>{j.approved ? 'Short aprovado na revisão' : 'Avaliação humana pendente'}</Pill>{!j.approved && <a class="btn primary" href={href('/revisao?item=' + encodeURIComponent('workshop_short_review:' + j.id))}>Abrir na Caixa de Revisão</a>}</>}{j.operation === 'render' && <><Pill tone={j.approved ? 'ok' : 'warn'}>{j.approved ? 'Revisão final aprovada' : 'Revisão final pendente'}</Pill>
           <label><input type="checkbox" checked={!!reviewed[j.id]} onChange={e => setReviewed({ ...reviewed, [j.id]: e.currentTarget.checked })} /> Conferi a música, todos os horários e o retorno à base</label>
           <button class="btn primary" disabled={busy || dirty || !reviewed[j.id]} onClick={() => run(() => post(`${prefix}/projects/${id}/renders/${j.id}/review`, { sha256: j.report!.sha256, approve: true, confirm_identity: true, confirm_motion_and_return: true }), 'Vídeo completo aprovado.')}>Aprovar vídeo completo</button></>}</>}
       </div>)}
