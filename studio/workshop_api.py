@@ -722,6 +722,45 @@ def soundtrack(c, row, draft):
     raise HTTPException(409, 'A música é obrigatória: revise uma trilha do canal com duração suficiente. Nenhuma música será comprada automaticamente.')
 
 
+def parent_soundtrack(c, row, draft, audio_proof):
+    """Reuse only the exact soundtrack recorded by an approved, published parent render.
+
+    A later visual edit can invalidate the batch's current whole-program review while
+    leaving its audio unchanged. The approved parent render is the review evidence for
+    this derived Short, so require its audio identity to match the current ready batch.
+    """
+    if not isinstance(audio_proof, dict):
+        raise HTTPException(409, 'O vídeo relacionado não tem comprovação de trilha')
+    program_id = audio_proof.get('program_id')
+    key = audio_proof.get('key')
+    sha = audio_proof.get('sha256')
+    snapshot = audio_proof.get('snapshot')
+    if not all(isinstance(value, str) and value for value in (program_id, key, sha, snapshot)):
+        raise HTTPException(409, 'A comprovação de trilha do vídeo relacionado está incompleta')
+    source = c.execute('''SELECT id,audio_key,manifest_key FROM production_batches
+      WHERE id=%s AND channel_id=%s AND state='ready' AND seconds>=%s''',
+      (program_id, row['channel_id'], draft.minutes * 60)).fetchone()
+    if not source or source['audio_key'] != key or not source['manifest_key']:
+        raise HTTPException(409, 'A trilha aprovada não cobre este Short')
+    obj = storage().get_object(Bucket=os.environ['S3_BUCKET'], Key=source['manifest_key'])
+    try:
+        raw = obj['Body'].read(1024**2 + 1)
+    finally:
+        obj['Body'].close()
+    if len(raw) > 1024**2:
+        raise HTTPException(409, 'O manifesto da trilha do vídeo relacionado é inválido')
+    try:
+        manifest = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(409, 'O manifesto da trilha do vídeo relacionado é inválido') from None
+    if (not isinstance(manifest, dict) or manifest.get('batch') != program_id
+            or not isinstance(manifest.get('audio'), dict)
+            or manifest['audio'].get('sha256') != sha):
+        raise HTTPException(409, 'A trilha do vídeo relacionado mudou desde a aprovação')
+    storage().head_object(Bucket=os.environ['S3_BUCKET'], Key=key)
+    return {'program_id': program_id, 'key': key, 'sha256': sha, 'snapshot': snapshot}
+
+
 def _short_source_segments(c, pid, row, draft, spec, media, parent_render):
     planned = sorted(parent_render['payload'].get('segments') or [], key=lambda s: float(s['start']))
     expected = []
@@ -817,11 +856,8 @@ def render_short(pid: uuid.UUID, body: ShortRender):
             raise HTTPException(409, 'O render de origem não tem recibo íntegro; o MP4 publicado pode ter sido purgado')
         draft = Draft.model_validate(row['data']); media = assets(c, pid)
         sources = _short_source_segments(c, pid, row, draft, body.spec, media, parent_render)
-        audio = soundtrack(c, row, draft)
         parent_audio = parent_render['payload'].get('audio') or {}
-        if audio.get('key') != parent_audio.get('key') or audio.get('sha256') != parent_audio.get('sha256'):
-            raise HTTPException(409, 'A trilha aprovada do projeto não corresponde ao vídeo relacionado')
-        storage().head_object(Bucket=os.environ['S3_BUCKET'], Key=audio['key'])
+        audio = parent_soundtrack(c, row, draft, parent_audio)
         payload = {'project_id': str(pid), 'operation': 'short_render', 'draft_sha256': digest(row['data']),
                    'short_spec_sha256': body.spec.content_hash(), 'spec': body.spec.model_dump(mode='json'),
                    'sources': sources, 'audio': audio, 'seconds': body.spec.seconds,

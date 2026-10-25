@@ -1,10 +1,77 @@
 import hashlib
+import io
+import json
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
 from studio.workshop_shorts import ShortSpec, render_short
+
+
+def test_parent_render_proves_unchanged_soundtrack_after_visual_review_expires(monkeypatch):
+    from studio import workshop_api as api
+
+    audio_sha = 'b' * 64
+    audio_key = 'programs/CAFE4H-20261013/audio-program.mp3'
+    proof = {'program_id': 'CAFE4H-20261013', 'key': audio_key,
+             'sha256': audio_sha, 'snapshot': 'c' * 64}
+
+    class Result:
+        def fetchone(self):
+            return {'id': proof['program_id'], 'audio_key': audio_key, 'manifest_key': 'manifest.json'}
+
+    class Connection:
+        def execute(self, query, params):
+            assert params == (proof['program_id'], 'channel', 3720)
+            return Result()
+
+    class Body(io.BytesIO):
+        def close(self):
+            super().close()
+
+    class Storage:
+        def get_object(self, **kwargs):
+            assert kwargs['Key'] == 'manifest.json'
+            return {'Body': Body(json.dumps({'batch': proof['program_id'],
+                                             'audio': {'sha256': audio_sha}}).encode())}
+
+        def head_object(self, **kwargs):
+            assert kwargs['Key'] == audio_key
+            return {'ContentLength': 123}
+
+    monkeypatch.setenv('S3_BUCKET', 'test-bucket')
+    monkeypatch.setattr(api, 'storage', Storage)
+    result = api.parent_soundtrack(Connection(), {'channel_id': 'channel'},
+                                   SimpleNamespace(minutes=62), proof)
+    assert result == proof
+
+
+def test_parent_soundtrack_rejects_audio_changed_since_approved_render(monkeypatch):
+    from studio import workshop_api as api
+
+    proof = {'program_id': 'CAFE4H-20261013', 'key': 'audio.mp3',
+             'sha256': 'b' * 64, 'snapshot': 'c' * 64}
+
+    class Result:
+        def fetchone(self):
+            return {'id': proof['program_id'], 'audio_key': proof['key'], 'manifest_key': 'manifest.json'}
+
+    class Connection:
+        def execute(self, query, params):
+            return Result()
+
+    class Storage:
+        def get_object(self, **kwargs):
+            return {'Body': io.BytesIO(json.dumps({'batch': proof['program_id'],
+                                                   'audio': {'sha256': 'd' * 64}}).encode())}
+
+    monkeypatch.setenv('S3_BUCKET', 'test-bucket')
+    monkeypatch.setattr(api, 'storage', Storage)
+    with pytest.raises(api.HTTPException, match='mudou desde a aprovação'):
+        api.parent_soundtrack(Connection(), {'channel_id': 'channel'},
+                               SimpleNamespace(minutes=62), proof)
 
 
 def short_spec(clip_ids=None, durations=(2, 2, 2)):
