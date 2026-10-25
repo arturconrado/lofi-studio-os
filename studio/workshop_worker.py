@@ -87,7 +87,7 @@ def tick():
             asset_id = uuid.uuid4()
             asset_data = {'kind': 'short', 'key': key, 'sha256': report['sha256'], 'mime': 'video/mp4',
                           'approved': False, 'parent_video_id': spec.parent_video_id,
-                          'short_task_id': str(t['id']), 'source_sha256s': [s['source_sha256'] for s in spec.segments],
+                          'short_task_id': str(t['id']), 'source_sha256s': [s.source_sha256 for s in spec.segments],
                           'report': report}
             with db() as c:
                 c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',
