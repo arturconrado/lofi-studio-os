@@ -164,7 +164,7 @@ def render_short(spec, sources, audio, audio_sha256, destination, folder):
         length = segment.duration_seconds
         filters.extend([
             f'[{source_index}:v]trim=start={start}:duration={length},setpts=PTS-STARTPTS,fps=30,split=2[bg{i}][fg{i}]',
-            f'[bg{i}]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=28:12,eq=brightness=-0.16[back{i}]',
+            f'[bg{i}]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=10:4,eq=brightness=-0.16,scale=1080:1920[back{i}]',
             f'[fg{i}]scale=1080:1920:force_original_aspect_ratio=decrease[front{i}]',
             f'[back{i}][front{i}]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p[clip{i}]',
         ])
@@ -190,7 +190,7 @@ def render_short(spec, sources, audio, audio_sha256, destination, folder):
              '-preset', 'veryfast', '-crf', '19',
              '-pix_fmt', 'yuv420p', '-r', '30', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
              '-movflags', '+faststart', str(destination)]
-    subprocess.run(args, check=True, timeout=max(180, int(seconds * 15)),
+    subprocess.run(args, check=True, timeout=min(1800, max(900, int(seconds * 30))),
                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     actual, video_info = measure(destination, 'video')
     audio_seconds, _ = measure(destination, 'audio')
@@ -199,7 +199,8 @@ def render_short(spec, sources, audio, audio_sha256, destination, folder):
     if (int(video_info['width']), int(video_info['height'])) != (1080, 1920):
         raise ValueError('Perfil vertical incorreto')
     subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-i', str(destination), '-f', 'null', '-'],
-                   check=True, timeout=max(90, int(seconds * 6)), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                   check=True, timeout=min(600, max(300, int(seconds * 12))),
+                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     return {'sha256': file_hash(destination), 'seconds': actual, 'audio_seconds': audio_seconds,
             'width': 1080, 'height': 1920, 'fps': 30, 'profile': 'youtube_shorts_9x16',
             'composition': 'same-frame-blurred-background', 'captions': [c.model_dump(mode='json') for c in spec.captions],
