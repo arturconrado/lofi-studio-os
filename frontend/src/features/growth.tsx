@@ -3,7 +3,7 @@ import { api, post, put } from '../lib/api';
 import { channel } from '../lib/store';
 import { useResource } from '../lib/resource';
 import { attempt } from '../lib/toast';
-import { Empty, Field, Pill, Skeleton } from '../ds/ui';
+import { Empty, Field, Skeleton } from '../ds/ui';
 
 type Snapshot = { id: string; observed_date: string; window: string; video_url: string; video_age_days: number | null; content_format: string; intent: string; metrics: Record<string, any> };
 type Experiment = { id: string; hypothesis: string; variable: string; status: string; human_results: string };
