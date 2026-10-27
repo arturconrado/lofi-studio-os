@@ -205,17 +205,6 @@ def compile_spec(spec: ProductionSpec, music=None):
     if scene['overlay']:lighting['overlay']=scene['overlay']
     if object_keyframes:lighting['object_keyframes']=object_keyframes
     dumped={k:v for k,v in spec.model_dump().items() if not (k in RECIPE_NEUTRAL and v==RECIPE_NEUTRAL[k])}
-    # Keep the serialized contract stable for archived legacy specs; new specs
-    # use the shared global ledger and no longer advertise a separate pool.
-    cost_policy=({'program_budget_proposed_usd':spec.program_budget_usd,'program_budget_is_spending_authorization':False,
-                  'validation_total_cap_usd':2,'asset_cap_usd':spec.asset_budget_usd,
-                  'audio_and_visual_share_validation_cap':True,'provider_quote_required':True,
-                  'workspace_cache_lookup_required':True,'one_preview_before_batch':True,
-                  'automatic_paid_retry':False,'generation_started':False} if legacy else
-                 {'program_budget_proposed_usd':spec.program_budget_usd,'program_budget_is_spending_authorization':False,
-                  'global_ai_budget_enforced':True,'asset_cap_usd':spec.asset_budget_usd,
-                  'provider_quote_required':True,'workspace_cache_lookup_required':True,
-                  'one_preview_before_batch':True,'automatic_paid_retry':False,'generation_started':False})
     result={'render_policy':defaults(), 'spec':dumped, 'identity':identity, 'duration_seconds':spec.hours*3600,
             'cycle_seconds':3600, 'default_action':'typing_idle', 'events':events,
             'lighting':lighting,
@@ -223,7 +212,9 @@ def compile_spec(spec: ProductionSpec, music=None):
                      'no_track_repetition_to_claim_original_duration':True,'no_sudden_loudness_changes':True,
                      'human_listening_review_required':True,'measured_duration_required':True},
             'asset_tasks':tasks, 'local_layers':local_layers,
-            'cost_policy':cost_policy,
+            'cost_policy':{'program_budget_proposed_usd':spec.program_budget_usd,'program_budget_is_spending_authorization':False,'validation_total_cap_usd':2,'asset_cap_usd':spec.asset_budget_usd,'audio_and_visual_share_validation_cap':True,'provider_quote_required':True,
+                           'workspace_cache_lookup_required':True,'one_preview_before_batch':True,
+                           'automatic_paid_retry':False,'generation_started':False},
             'render_ready':False,'blockers':blockers,
             'assumptions':{'breathing_seconds':8,'cat_travel_seconds':7,'cat_exit_return_seconds':6,
                            'phone_put_down_seconds':3,'dawn_begins_minute':50,
