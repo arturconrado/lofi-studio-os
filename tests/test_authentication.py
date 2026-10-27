@@ -467,6 +467,8 @@ def test_free_storyboard_is_saved_scoped_and_never_queues_generation(client):
     old=client.get(f"/api/creator/plans/{saved['id']}/revisions/1").json()
     assert old['data']['production_spec']['shirt_color']!='pink'
     assert old['sha256'] and len(old['sha256'])==64
+    from studio.creator_plan_versions import content_hash
+    assert old['sha256']==content_hash(old['data'])
     missing_revision=dict(body);missing_revision.pop('draft_revision')
     assert client.post('/api/creator/storyboard/save',json=missing_revision).status_code==422
     stale=client.post('/api/creator/storyboard/save',json=body)

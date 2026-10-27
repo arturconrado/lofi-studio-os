@@ -9,7 +9,7 @@ type Point = [number, number];
 type Clip = { id: string; seconds: number; reviewed: boolean; sha256: string; preview_url: string };
 type Action = { action: string; minimum_seconds: number; direction: string; ready: boolean; clips: Clip[] };
 type Plan = {
-  plan_id: string; preflight: { ready: boolean; failures: string[] }; actions: Action[];
+  plan_id: string; revision: number; preflight: { ready: boolean; failures: string[] }; actions: Action[];
   audio_programs: { id: string; title: string; seconds: number; music_style?: string }[];
   audio: { source_programs?: string[]; seconds?: number; unique_measured_seconds?: number };
   scene_sources: { batch_id?: string; pilot_id?: string; id: string; title: string; image_url: string }[];
@@ -95,7 +95,7 @@ export function Assembly({ id }: { id: string }) {
   if (resource.error || !data) return <Empty title="Roteiro não encontrado"><p class="faint">{resource.error}</p><a class="btn" href={href('/produzir')}>Voltar a Produzir</a></Empty>;
 
   const selectIdentity = async (source: Plan['identity_sources'][number]) => {
-    const body = source.pilot_id ? { source_pilot_id: source.pilot_id } : { source_plan_id: source.plan_id };
+    const body = source.pilot_id ? { source_pilot_id: source.pilot_id, revision: data.revision } : { source_plan_id: source.plan_id, revision: data.revision };
     const result = await attempt(() => post(base + '/identity', body), 'Identidade e referência vinculadas ao roteiro');
     if (result) resource.reload();
   };
@@ -120,13 +120,13 @@ export function Assembly({ id }: { id: string }) {
 
   const saveAudio = async () => {
     setBusy(true);
-    const result = await attempt(() => post(base + '/soundtrack', { program_ids: selectedPrograms, confirm_style_and_listening: styleConfirmed }), 'Blocos de áudio vinculados à montagem');
+    const result = await attempt(() => post(base + '/soundtrack', { program_ids: selectedPrograms, confirm_style_and_listening: styleConfirmed, revision: data.revision }), 'Blocos de áudio vinculados à montagem');
     setBusy(false); if (result) resource.reload();
   };
 
   const saveRegions = async () => {
     setBusy(true);
-    const result = await attempt(() => post(base + '/regions', { sky, lights, confirm_regions: true }), 'Áreas da cena salvas para esta versão');
+    const result = await attempt(() => post(base + '/regions', { sky, lights, confirm_regions: true, revision: data.revision }), 'Áreas da cena salvas para esta versão');
     setBusy(false); if (result) resource.reload();
   };
 

@@ -1,4 +1,4 @@
-# SDD WP-01 — revisão versionada de roteiros salvos
+# SDD WP-01 — revisão versionada de roteiros e montagem
 
 Esta entrega implementa uma primeira parte do WP-01. Ela não declara o pacote completo nem altera o SDD original.
 
@@ -9,9 +9,10 @@ Esta entrega implementa uma primeira parte do WP-01. Ela não declara o pacote c
 ## Mudança nesta entrega
 
 - `creator_plans.revision` identifica a revisão atual.
-- `creator_plan_revisions` guarda snapshots de storyboard com SHA-256 do JSON canônico.
+- `creator_plan_revisions` guarda snapshots da proposta e das decisões de montagem com SHA-256 do JSON canônico.
 - Ao inicializar, os registros legados com conteúdo recebem um snapshot da versão atual. Isso não inventa histórico anterior nem aprova conteúdo antigo.
-- Salvar uma edição existente requer `draft_revision`. Uma revisão vencida retorna conflito para a interface recarregar; uma gravação válida cria a próxima revisão.
+- Salvar uma edição existente requer `draft_revision`. Alterar identidade, trilha, áreas da cena ou máscaras também exige a revisão exibida e cria uma nova revisão quando o conteúdo muda. Uma revisão vencida retorna conflito para a interface recarregar.
+- A tela de montagem lê a revisão junto com o estado do roteiro e envia esse número ao salvar essas decisões. Uploads e aprovações de arquivos continuam vinculados ao hash dos próprios artefatos e não criam revisão da proposta.
 - Endpoints de leitura listam revisões e recuperam um snapshot. A conexão e o schema do workspace continuam sendo os limites de acesso.
 - As rotas de storyboard retornam a revisão; a lista de roteiros salvos também a inclui.
 

@@ -29,10 +29,12 @@ def test_missing_inputs_do_not_queue_or_charge_and_require_csrf(client):
 
 def test_regions_survive_budget_save_and_never_approve_full_program(client):
     pid,headers,spec,cid=draft(client);base='/api/creator/assembly/plans/'+pid
-    regions={'sky':[[.6,0],[1,0],[1,.3],[.6,.3]],'lights':[[.6,.3],[1,.3],[1,.6],[.6,.6]],'cushion_box':[.1,.7,.2,.1],'confirm_regions':True}
-    assert client.post(base+'/regions',json=regions,headers=headers).status_code==200
+    regions={'revision':1,'sky':[[.6,0],[1,0],[1,.3],[.6,.3]],'lights':[[.6,.3],[1,.3],[1,.6],[.6,.6]],'cushion_box':[.1,.7,.2,.1],'confirm_regions':True}
+    saved_regions=client.post(base+'/regions',json=regions,headers=headers)
+    assert saved_regions.status_code==200 and saved_regions.json()['revision']==2
+    assert client.post(base+'/regions',json=regions,headers=headers).status_code==409
     spec['program_budget_usd']=14
-    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':pid,'draft_revision':1,'spec':spec},headers=headers).status_code==200
+    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':pid,'draft_revision':2,'spec':spec},headers=headers).status_code==200
     data=client.get(base).json();assert data['environment']['reviewed'] and not data['preflight']['ready']
     assert 'scene_regions_review_missing' not in data['preflight']['failures']
     regions['sky']=[[-1,0],[1,0],[1,.3]]
@@ -149,24 +151,27 @@ def test_approved_scene_regions_need_no_cushion_and_clip_masks_bind_to_clip(clie
     spec|={'cadence':'custom_markers','markers':[{'minute':15,'sequence':'breath_pet'}],'contextual_actions':['fireplace_glow_rises']}
     pid=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers).json()['id']
     base='/api/creator/assembly/plans/'+pid
-    regions={'sky':[[.6,0],[1,0],[1,.3],[.6,.3]],'fire':[[0,.2],[.2,.2],[.2,.5]],'confirm_regions':True}
+    regions={'revision':1,'sky':[[.6,0],[1,0],[1,.3],[.6,.3]],'fire':[[0,.2],[.2,.2],[.2,.5]],'confirm_regions':True}
     r=client.post(base+'/regions',json=regions,headers=headers);assert r.status_code==200,r.text
+    assert r.json()['revision']==2
+    assert client.post(base+'/regions',json=regions,headers=headers).status_code==409
     env=client.get(base).json()['environment'];assert env['cushion_box'] is None and env['fire']
     video=tmp_path/'pet.mp4'
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=1280x720:rate=24:duration=11','-c:v','libx264','-threads','1','-preset','ultrafast','-pix_fmt','yuv420p',str(video)],check=True)
     with video.open('rb') as handle:clip=client.post(base+'/clips/pet_cat',files={'file':('pet.mp4',handle,'video/mp4')},headers=headers).json()
     frame={'shirt':[[.1,.5],[.3,.5],[.3,.9]],'protected_girl':[[.4,.1],[.6,.1],[.6,.4]]}
-    masks={'sha256':clip['sha256'],'keyframes':[{'t':0,**frame},{'t':5,**frame}],'confirm_every_frame':True}
+    masks={'revision':2,'sha256':clip['sha256'],'keyframes':[{'t':0,**frame},{'t':5,**frame}],'confirm_every_frame':True}
     path=base+'/clips/'+clip['id']+'/masks'
     assert client.post(path,json=masks|{'confirm_every_frame':False},headers=headers).status_code==422
     uneven=masks|{'keyframes':[{'t':0,**frame},{'t':5,**frame|{'shirt':[[.1,.5],[.3,.5],[.3,.9],[.1,.9]]}}]}
     assert client.post(path,json=uneven,headers=headers).status_code==422
     assert client.post(path,json=masks|{'sha256':'f'*64},headers=headers).status_code==409
     assert client.post(path,json=masks|{'keyframes':[{'t':30,**frame}]},headers=headers).status_code==422
-    assert client.post(path,json=masks,headers=headers).status_code==200
+    saved_masks=client.post(path,json=masks,headers=headers);assert saved_masks.status_code==200,saved_masks.text
     saved=client.get(base).json()['environment']['clip_masks'][clip['sha256']]
     assert saved['reviewed'] and len(saved['keyframes'])==2
     # Re-saving fixed regions keeps per-clip masks.
+    regions['revision']=saved_masks.json()['revision']
     assert client.post(base+'/regions',json=regions,headers=headers).status_code==200
     assert clip['sha256'] in client.get(base).json()['environment']['clip_masks']
 

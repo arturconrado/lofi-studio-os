@@ -98,16 +98,22 @@ class IdentitySelection(BaseModel):
         return self
 
 
+class IdentityChange(IdentitySelection):
+    revision:int=Field(ge=1)
+
+
 @router.post('/plans/{pid}/identity')
-def select_identity(pid:uuid.UUID,body:IdentitySelection):
+def select_identity(pid:uuid.UUID,body:IdentityChange):
     with db() as c:
         row=get_plan(c,pid,True);sources=identity_sources(c,row)
         source_id='episode:'+str(body.source_pilot_id) if body.source_pilot_id else str(body.source_plan_id)
         source=next((s for s in sources if s['plan_id']==source_id),None)
         if not source:raise HTTPException(409,'Escolha uma referência aprovada neste canal')
         spec=dict(row['data']['production_spec']);spec.update(character_reference='reviewed:'+source['sha256']+':girl',cat_reference='reviewed:'+source['sha256']+':cat')
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_spec}',%s::jsonb) WHERE id=%s",(json.dumps(spec,ensure_ascii=False),pid));audit(c,'TIMELINE_IDENTITY_SELECTED',str(pid),source_id);c.commit()
-    return {'production_spec':spec,'paid_calls':0,'reviews_must_match_new_identity':True}
+        data=dict(row['data']);data['production_spec']=spec
+        from .creator_plan_versions import save_locked_revision
+        revision=save_locked_revision(c,row,data,body.revision);audit(c,'TIMELINE_IDENTITY_SELECTED',str(pid),source_id);c.commit()
+    return {'production_spec':spec,'revision':revision,'paid_calls':0,'reviews_must_match_new_identity':True}
 
 
 
@@ -221,7 +227,7 @@ def status(pid:uuid.UUID):
     if audio_binding.get('audio_sources'):audio_summary['source_programs']=[s['program_id'] for s in audio_binding['audio_sources']]
     from .scene_profiles import scene as scene_profile
     requirements=scene_profile(row['data']['production_spec']['scenario'])
-    return {'plan_id':pid,'input_sha256':inputs_hash(row,result),'preflight':result,'actions':actions,'audio_programs':programs,'scene_sources':scenes,
+    return {'plan_id':pid,'revision':row['revision'],'input_sha256':inputs_hash(row,result),'preflight':result,'actions':actions,'audio_programs':programs,'scene_sources':scenes,
             'scene_requires_lights_region':requirements['requires_lights_region'],'required_seconds':compiled['duration_seconds'],
             'required_music_style':row['data']['production_spec']['music_style'],
             'required_visual_variant':row['data']['production_spec'].get('visual_variant','canonical_illustrated'),
@@ -346,6 +352,7 @@ def review_clip(pid:uuid.UUID,cid:uuid.UUID,body:ClipReview):
 class Soundtrack(BaseModel):
     program_ids:list[str]=Field(min_length=1,max_length=8)
     confirm_style_and_listening:bool=False
+    revision:int=Field(ge=1)
 
 
 @router.post('/plans/{pid}/soundtrack')
@@ -383,8 +390,10 @@ def bind_soundtrack(pid:uuid.UUID,body:Soundtrack):
         value={'audio_sources':audio_sources,'sha256':sha,'human_review_sha256':sha,
                'seconds':seconds,'unique_measured_seconds':unique,'style_reviewed':True,'source_preserved':True,
                'spec_sha256':production_spec_hash(row['data']['production_spec'])}
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{assembly_audio}',%s::jsonb) WHERE id=%s",(json.dumps(value),pid));audit(c,'TIMELINE_SOUNDTRACK_SELECTED',str(pid),','.join(body.program_ids));c.commit()
-    return {'selected':True,'source_programs':body.program_ids,'seconds':seconds,'unique_measured_seconds':unique,'paid_calls':0}
+        data=dict(row['data']);data['assembly_audio']=value
+        from .creator_plan_versions import save_locked_revision
+        revision=save_locked_revision(c,row,data,body.revision);audit(c,'TIMELINE_SOUNDTRACK_SELECTED',str(pid),','.join(body.program_ids));c.commit()
+    return {'selected':True,'revision':revision,'source_programs':body.program_ids,'seconds':seconds,'unique_measured_seconds':unique,'paid_calls':0}
 
 
 Polygon=list[tuple[float,float]]
@@ -399,6 +408,7 @@ def check_polygon(polygon):
 
 
 class Regions(BaseModel):
+    revision:int=Field(ge=1)
     sky:Polygon=Field(min_length=3,max_length=30)
     lights:Polygon=Field(default_factory=list,max_length=30)
     cushion_box:tuple[float,float,float,float]|None=None
@@ -433,7 +443,7 @@ def save_regions(pid:uuid.UUID,body:Regions):
         if profile_['requires_lights_region'] and not body.lights:raise HTTPException(422,'Marque também a área das luzes')
         if 'cushion' in profile_['props'] and not body.cushion_box:raise HTTPException(422,'Marque a área do texto da almofada')
         if 'cushion' in profile_['props'] and body.recolor and not body.cushion_color:raise HTTPException(422,'Marque também a almofada para recolorir')
-        value=body.model_dump(exclude={'confirm_regions','confirm_recolor_frames'})|{'reviewed':True,'spec_sha256':production_spec_hash(spec),'scenario':spec['scenario']}
+        value=body.model_dump(exclude={'revision','confirm_regions','confirm_recolor_frames'})|{'reviewed':True,'spec_sha256':production_spec_hash(spec),'scenario':spec['scenario']}
         if 'cushion' not in profile_['props']:value['cushion_box']=None
         previous=row['data'].get('assembly_environment') or {}
         if previous.get('clip_masks'):value['clip_masks']=previous['clip_masks']
@@ -443,8 +453,10 @@ def save_regions(pid:uuid.UUID,body:Regions):
             if not result['assembly']['assets_ready']:raise HTTPException(409,'Confira todos os movimentos antes de aplicar máscaras fixas')
             value['recolor_asset_shas']=sorted({s['asset_sha256'] for s in result['assembly']['segments']})
             value['recolor_color']=spec['shirt_color']
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{assembly_environment}',%s::jsonb) WHERE id=%s",(json.dumps(value),pid));audit(c,'TIMELINE_REGIONS_REVIEWED',str(pid));c.commit()
-    return {'saved':True,'paid_calls':0}
+        data=dict(row['data']);data['assembly_environment']=value
+        from .creator_plan_versions import save_locked_revision
+        revision=save_locked_revision(c,row,data,body.revision);audit(c,'TIMELINE_REGIONS_REVIEWED',str(pid));c.commit()
+    return {'saved':True,'revision':revision,'paid_calls':0}
 
 
 class RenderRequest(BaseModel):
@@ -578,6 +590,7 @@ class MaskKeyframe(BaseModel):
 
 
 class ClipMasks(BaseModel):
+    revision:int=Field(ge=1)
     sha256:str=Field(pattern=r'^[a-f0-9]{64}$')
     keyframes:list[MaskKeyframe]=Field(min_length=1,max_length=60)
     confirm_every_frame:bool=False
@@ -606,5 +619,8 @@ def save_clip_masks(pid:uuid.UUID,cid:uuid.UUID,body:ClipMasks):
         if not environment or not environment.get('reviewed'):raise HTTPException(409,'Salve primeiro as áreas fixas da cena')
         masks=dict(environment.get('clip_masks') or {})
         masks[body.sha256]={'reviewed':True,'keyframes':[k.model_dump() for k in body.keyframes]}
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{assembly_environment,clip_masks}',%s::jsonb) WHERE id=%s",(json.dumps(masks),pid));audit(c,'TIMELINE_CLIP_MASKS_REVIEWED',str(pid),str(cid));c.commit()
-    return {'saved':True,'keyframes':len(body.keyframes),'paid_calls':0}
+        value=dict(environment);value['clip_masks']=masks
+        data=dict(row['data']);data['assembly_environment']=value
+        from .creator_plan_versions import save_locked_revision
+        revision=save_locked_revision(c,row,data,body.revision);audit(c,'TIMELINE_CLIP_MASKS_REVIEWED',str(pid),str(cid));c.commit()
+    return {'saved':True,'revision':revision,'keyframes':len(body.keyframes),'paid_calls':0}

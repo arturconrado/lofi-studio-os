@@ -33,6 +33,18 @@ def append(c,plan_id,revision,data):
               (plan_id,revision,content_hash(data),json.dumps(data,ensure_ascii=False)))
 
 
+def save_locked_revision(c,row,data,expected):
+    from fastapi import HTTPException
+    if row['revision']!=expected:
+        raise HTTPException(409,'O roteiro mudou em outra janela. Recarregue a revisão atual antes de salvar.')
+    if content_hash(data)==content_hash(row['data']):return row['revision']
+    revision=row['revision']+1
+    c.execute('UPDATE creator_plans SET data=%s,revision=%s WHERE id=%s',
+              (json.dumps(data,ensure_ascii=False),revision,row['id']))
+    append(c,row['id'],revision,data)
+    return revision
+
+
 def history(c,plan_id):
     return c.execute('''SELECT revision,sha256,created_at FROM creator_plan_revisions
       WHERE plan_id=%s ORDER BY revision DESC''',(plan_id,)).fetchall()
