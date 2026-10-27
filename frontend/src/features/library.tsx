@@ -54,7 +54,7 @@ function Publications({ cid }: { cid: string }) {
     setGrowthBusy(true); setGrowthNote('Reunindo observações do YouTube Studio e histórico comparável…');
     const requestId = uuid();
     const result = await attempt(() => post<any>(`/api/growth/${cid}/package-suggestion`, {
-      request_id: requestId, intent: source.intent || 'coding_focus', content_format: 'long_form',
+      request_id: requestId, publication_id: source.id, intent: source.intent || 'coding_focus', content_format: 'long_form',
       source_title: source.title, source_description: source.description || '', source_context: source.publication_metadata?.growth_context || {}, primary_phrase: source.primary_phrase || '', confirm_cost: true,
     }), 'Sugestão nativa pronta para revisar');
     if (result) {

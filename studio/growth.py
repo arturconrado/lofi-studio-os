@@ -219,6 +219,7 @@ def contextual_search_phrases(options,*,context,intent):
 class PackagingSuggestionRequest(BaseModel):
     model_config=ConfigDict(extra='forbid')
     request_id:uuid.UUID
+    publication_id:uuid.UUID|None=None
     intent:Literal['coding_focus','study_focus','reading_focus','sleep_relaxation']
     content_format:Literal['long_form','short','live_archive']='long_form'
     source_title:str=Field(min_length=1,max_length=300)
@@ -291,9 +292,24 @@ def package_suggestion(cid:uuid.UUID,body:PackagingSuggestionRequest):
     with db() as c:
         profile(c,cid)
         rows=c.execute('SELECT video_url,observed_date,"window",video_age_days,content_format,intent,metrics FROM analytics_snapshots WHERE channel_id=%s ORDER BY observed_date DESC LIMIT 1000',(cid,)).fetchall()
+        stored_context={}
+        if body.publication_id:
+            publication=c.execute('SELECT pilot_id,export_id FROM youtube_publications WHERE id=%s AND channel_id=%s',(body.publication_id,cid)).fetchone()
+            if not publication:raise HTTPException(404,'Publicação não encontrada neste canal.')
+            if publication.get('pilot_id'):
+                source=c.execute('SELECT plan FROM ambient_pilots WHERE id=%s AND channel_id=%s',(publication['pilot_id'],cid)).fetchone()
+                plan=(source or {}).get('plan') or {}
+                stored_context={key:str(plan.get(key) or '').strip()[:1000] for key in ('theme','music_description','music_brief') if plan.get(key)}
+            elif publication.get('export_id'):
+                source=c.execute('''SELECT m.theme,m.music_description FROM export_jobs e
+                    LEFT JOIN program_metadata m ON m.program_id=e.program_id
+                    WHERE e.id=%s''',(publication['export_id'],)).fetchone()
+                if source:
+                    stored_context={key:str(source.get(key) or '').strip()[:1000] for key in ('theme','music_description') if source.get(key)}
     relevant=[r for r in rows if (r.get('intent') or '').strip().casefold()==body.intent.casefold() and r.get('content_format','long_form')==body.content_format]
     options=ranked_search_phrases(relevant,limit=1000)
     source_context={key:value.strip() for key,value in body.source_context.items() if value.strip()}
+    source_context.update(stored_context)
     phrase_context=' '.join([body.source_title,*source_context.values(),*([body.source_description] if not source_context else [])])
     video_context=' '.join([body.source_title,body.source_description,*source_context.values()])
     contextual_options=contextual_search_phrases(options,context=phrase_context,intent=body.intent)
