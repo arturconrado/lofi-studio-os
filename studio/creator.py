@@ -15,7 +15,7 @@ def saved_plans(channel_id:uuid.UUID=uuid.UUID('00000000-0000-0000-0000-00000000
  with db() as c:
   from .channels import profile
   profile(c,channel_id)
-  rows=c.execute("SELECT p.id,p.theme,p.minutes,p.data AS plan,p.status,p.created_at,b.budget FROM creator_plans p LEFT JOIN production_batches b ON b.id=p.program_id WHERE p.channel_id=%s AND (p.status='draft' OR (p.status='failed' AND b.video_key IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.track_id LIKE b.id||'-%%'))) ORDER BY p.created_at DESC LIMIT 20",(channel_id,)).fetchall()
+  rows=c.execute("SELECT p.id,p.theme,p.minutes,p.data AS plan,p.status,p.revision,p.created_at,b.budget FROM creator_plans p LEFT JOIN production_batches b ON b.id=p.program_id WHERE p.channel_id=%s AND (p.status='draft' OR (p.status='failed' AND b.video_key IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.track_id LIKE b.id||'-%%'))) ORDER BY p.created_at DESC LIMIT 20",(channel_id,)).fetchall()
  from .production_harness import production_spec_hash
  for row in rows:
   if row['plan'].get('production_spec'):row['spec_sha256']=production_spec_hash(row['plan']['production_spec'])
@@ -24,6 +24,8 @@ def saved_plans(channel_id:uuid.UUID=uuid.UUID('00000000-0000-0000-0000-00000000
 def init(c):
  c.execute("CREATE TABLE IF NOT EXISTS creator_plans(id UUID PRIMARY KEY,request_id UUID UNIQUE NOT NULL,theme TEXT NOT NULL,minutes INTEGER NOT NULL,data JSONB,status TEXT NOT NULL,reserved NUMERIC NOT NULL DEFAULT .10,actual_cost NUMERIC,program_id TEXT UNIQUE,created_at TIMESTAMPTZ DEFAULT now())")
  c.execute('ALTER TABLE creator_plans ALTER COLUMN reserved SET DEFAULT .10')
+ from .creator_plan_versions import initialize as initialize_versions
+ initialize_versions(c)
  c.execute("CREATE TABLE IF NOT EXISTS program_metadata(program_id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT NOT NULL,theme TEXT NOT NULL,updated_at TIMESTAMPTZ DEFAULT now())")
  from .channels import init as init_channels
  init_channels(c)
@@ -112,7 +114,11 @@ def plan(body:PlanRequest):
   result['publication_metadata']={'native_growth':{'generated':True,'request_id':str(body.request_id),'primary_phrase_source':primary_phrase_source,
       'search_phrase_options':signals,'cost_usd':cost},'growth_context':{'theme':body.theme,'intent':body.intent,
       'music_style':result.get('music_description',''),'scene':result.get('visual_prompt','')}}
-  with db() as c:c.execute("UPDATE creator_plans SET data=%s,status='draft',actual_cost=%s,reserved=COALESCE(%s,reserved) WHERE id=%s",(json.dumps(result,ensure_ascii=False),cost,cost,pid));audit(c,'CREATIVE_PLAN_GENERATED',str(pid),MODEL);c.commit()
+  with db() as c:
+   c.execute("UPDATE creator_plans SET data=%s,status='draft',actual_cost=%s,reserved=COALESCE(%s,reserved) WHERE id=%s",(json.dumps(result,ensure_ascii=False),cost,cost,pid))
+   from .creator_plan_versions import append
+   append(c,pid,1,result)
+   audit(c,'CREATIVE_PLAN_GENERATED',str(pid),MODEL);c.commit()
   return {'id':pid,'plan':result,'minutes':body.minutes,'cost_usd':cost,'research_context':result['research_context']}
  except Exception as e:
   with db() as c:c.execute("UPDATE creator_plans SET status='failed' WHERE id=%s",(pid,));c.commit()
@@ -239,6 +245,7 @@ class StoryboardRequest(BaseModel):
  channel_id:uuid.UUID=uuid.UUID('00000000-0000-0000-0000-000000000001')
  spec:ProductionSpec
  draft_id:uuid.UUID|None=None
+ draft_revision:int|None=Field(default=None,ge=1)
  youtube_metadata:dict[str,Any]|None=None
 @router.post('/storyboard')
 def storyboard(body:StoryboardRequest):
@@ -286,7 +293,10 @@ def save_storyboard(body:StoryboardRequest):
   from .recipes import require
   require(c,body.channel_id,body.spec.recipe_sha256,body.spec)
   if body.draft_id:
-   prior=c.execute("SELECT id,data FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL FOR UPDATE",(body.draft_id,body.channel_id)).fetchone()
+   if body.draft_revision is None:raise HTTPException(422,'Informe a revisão atual do roteiro para salvá-lo com segurança.')
+   from .creator_plan_versions import require_current_revision,append
+   current_revision=require_current_revision(c,body.draft_id,body.draft_revision)
+   prior=c.execute("SELECT id,data FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL",(body.draft_id,body.channel_id)).fetchone()
    if not prior:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
    pid=body.draft_id
    result['production_assets']=prior['data'].get('production_assets',{})
@@ -295,12 +305,32 @@ def save_storyboard(body:StoryboardRequest):
      if key in prior['data']:result[key]=prior['data'][key]
    for key in ('assembly_audio','assembly_environment'):
     if key in prior['data']:result[key]=prior['data'][key]
-   c.execute('UPDATE creator_plans SET theme=%s,minutes=%s,data=%s WHERE id=%s',(body.spec.scenario,body.spec.hours*60,json.dumps(result,ensure_ascii=False),pid))
+   current_revision+=1
+   c.execute('UPDATE creator_plans SET theme=%s,minutes=%s,data=%s,revision=%s WHERE id=%s',(body.spec.scenario,body.spec.hours*60,json.dumps(result,ensure_ascii=False),current_revision,pid))
+   append(c,pid,current_revision,result)
   else:
    c.execute("INSERT INTO creator_plans(id,request_id,theme,minutes,data,status,reserved,channel_id) VALUES(%s,%s,%s,%s,%s,'draft',0,%s)",(pid,pid,body.spec.scenario,body.spec.hours*60,json.dumps(result,ensure_ascii=False),body.channel_id))
+   from .creator_plan_versions import append
+   current_revision=1
+   append(c,pid,current_revision,result)
   audit(c,'STORYBOARD_DRAFT_SAVED',str(pid),'No generation or provider calls');c.commit()
  compiled['assembly']=assembly_plan(compiled,list(result.get('production_assets',{}).values()))
- return {'id':pid,'plan':result,'minutes':body.spec.hours*60,'harness':compiled,'generation_started':False}
+ return {'id':pid,'revision':current_revision,'plan':result,'minutes':body.spec.hours*60,'harness':compiled,'generation_started':False}
+
+@router.get('/plans/{pid}/revisions')
+def plan_revisions(pid:uuid.UUID):
+ from .creator_plan_versions import history
+ with db() as c:
+  if not c.execute('SELECT 1 FROM creator_plans WHERE id=%s',(pid,)).fetchone():raise HTTPException(404,'Roteiro não encontrado')
+  return {'revisions':history(c,pid)}
+
+@router.get('/plans/{pid}/revisions/{revision}')
+def plan_revision(pid:uuid.UUID,revision:int):
+ from .creator_plan_versions import get
+ with db() as c:
+  row=get(c,pid,revision)
+  if not row:raise HTTPException(404,'Versão do roteiro não encontrada')
+  return row
 
 @router.get('/music-styles')
 def music_styles():

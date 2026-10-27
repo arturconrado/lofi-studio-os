@@ -456,13 +456,25 @@ def test_free_storyboard_is_saved_scoped_and_never_queues_generation(client):
     assert r.status_code==200,r.text
     saved=r.json()
     assert not saved['generation_started'] and not saved['harness']['render_ready']
-    body['draft_id']=saved['id'];body['spec']['shirt_color']='pink'
-    assert client.post('/api/creator/storyboard/save',json=body).json()['id']==saved['id']
+    assert saved['revision']==1
+    body['draft_id']=saved['id'];body['draft_revision']=saved['revision'];body['spec']['shirt_color']='pink'
+    updated=client.post('/api/creator/storyboard/save',json=body).json()
+    assert updated['id']==saved['id'] and updated['revision']==2
     rows=client.get('/api/creator/plans',params={'channel_id':cid}).json()['plans']
-    assert rows[0]['plan']['production_spec']['shirt_color']=='pink'
+    assert rows[0]['revision']==2 and rows[0]['plan']['production_spec']['shirt_color']=='pink'
+    revisions=client.get(f"/api/creator/plans/{saved['id']}/revisions").json()['revisions']
+    assert [row['revision'] for row in revisions]==[2,1]
+    old=client.get(f"/api/creator/plans/{saved['id']}/revisions/1").json()
+    assert old['data']['production_spec']['shirt_color']!='pink'
+    assert old['sha256'] and len(old['sha256'])==64
+    missing_revision=dict(body);missing_revision.pop('draft_revision')
+    assert client.post('/api/creator/storyboard/save',json=missing_revision).status_code==422
+    stale=client.post('/api/creator/storyboard/save',json=body)
+    assert stale.status_code==409
     assert client.post('/api/creator/produce',json={'plan_id':saved['id'],'plan':saved['plan'],'confirm_cost':True,'budget':12}).status_code==409
     client.cookies.clear();_,other=signup(client);client.headers['X-CSRF-Token']=other['csrf_token']
     assert client.post('/api/creator/storyboard/save',json=body).status_code==404
+    assert client.get(f"/api/creator/plans/{saved['id']}/revisions").status_code==404
 
 
 def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeypatch):

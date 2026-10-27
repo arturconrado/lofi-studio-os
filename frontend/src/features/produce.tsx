@@ -123,7 +123,7 @@ export function Produce() {
       setGrowthNote(`Ajuste o título para começar por “${growthPackage.primary_phrase}” e inclua a frase na abertura de uma descrição contextual com pelo menos 450 caracteres.`); return;
     }
     setPreparing(true);
-    const saved = await attempt(() => post<{ id: string }>('/api/creator/storyboard/save', {
+    const saved = await attempt(() => post<{ id: string; revision: number }>('/api/creator/storyboard/save', {
       channel_id: cid, spec: { ...quote.spec, hours },
       youtube_metadata: {
         title: growthPackage.title, description: growthPackage.description, intent: growthIntent,

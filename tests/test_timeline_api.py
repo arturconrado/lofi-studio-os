@@ -32,7 +32,7 @@ def test_regions_survive_budget_save_and_never_approve_full_program(client):
     regions={'sky':[[.6,0],[1,0],[1,.3],[.6,.3]],'lights':[[.6,.3],[1,.3],[1,.6],[.6,.6]],'cushion_box':[.1,.7,.2,.1],'confirm_regions':True}
     assert client.post(base+'/regions',json=regions,headers=headers).status_code==200
     spec['program_budget_usd']=14
-    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':pid,'spec':spec},headers=headers).status_code==200
+    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':pid,'draft_revision':1,'spec':spec},headers=headers).status_code==200
     data=client.get(base).json();assert data['environment']['reviewed'] and not data['preflight']['ready']
     assert 'scene_regions_review_missing' not in data['preflight']['failures']
     regions['sky']=[[-1,0],[1,0],[1,.3]]
@@ -73,7 +73,7 @@ def test_real_clip_upload_review_and_compatible_reuse_are_separate(client,monkey
     assert client.post(newbase+'/reuse',json={},headers=headers).json()['reused_clips']==0
     assert next(a for a in client.get(newbase).json()['actions'] if a['action']=='typing_idle')['ready']
     spec['shirt_color']='pink'
-    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':new,'spec':spec},headers=headers).status_code==200
+    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':new,'draft_revision':1,'spec':spec},headers=headers).status_code==200
     assert not next(a for a in client.get(newbase).json()['actions'] if a['action']=='typing_idle')['ready']
 
 
@@ -100,7 +100,7 @@ def test_local_queue_is_idempotent_version_bound_and_cannot_review_unrendered_jo
     jid=first.json()['id'];review={'sha256':'a'*64,'confirm_actions_identity_props':True,'confirm_transitions_time':True,'confirm_audio_style_rights':True}
     assert client.post('/api/creator/assembly/jobs/'+jid+'/review',json=review,headers=headers).status_code==409
     spec['shirt_color']='pink'
-    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':pid,'spec':spec},headers=headers).status_code==200
+    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':pid,'draft_revision':1,'spec':spec},headers=headers).status_code==200
     assert client.post(base+'/render',json=body,headers=headers).status_code==409
 
 
