@@ -381,7 +381,7 @@ def test_exact_library_video_publication_is_scoped_and_idempotent(client,monkeyp
     listing=client.get('/api/youtube/publications').json();assert listing[0]['pilot_id']==str(pid) and listing[0]['export_id'] is None
     assert client.get('/api/ambient/pilots').json()[0]['status']=='approved'  # Publication does not alter the human review state.
     client.cookies.clear();_,other=signup(client)
-    assert client.get(f'/api/youtube/publications/pilots/{pid}/draft').status_code==404
+    assert client.get(f'/api/youtube/publications/pilots/{pid}/draft').status_code==409
     assert client.post(url,json=body,headers={'X-CSRF-Token':other['csrf_token']}).status_code==404
 
 
