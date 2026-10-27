@@ -15,12 +15,15 @@ const GROUPS: Record<string, string[]> = {
   prontos: ['PRONTO_PARA_PUBLICAR', 'PUBLICADO', 'AO_VIVO'], encerrados: ['CANCELADO', 'ARQUIVADO'],
 };
 
-type Publication = { id: string; channel_id: string; title: string; description: string; intent?: string; primary_phrase?: string; keywords?: string[]; publication_metadata?: { seconds?: number }; pilot_id?: string | null; privacy: string; actual_privacy: string | null; state: string; video_id: string | null; detail: string; bytes_sent?: number; created_at: string };
+type Publication = { id: string; channel_id: string; title: string; description: string; intent?: string; primary_phrase?: string; keywords?: string[]; publication_metadata?: { seconds?: number }; pilot_id?: string | null; privacy: string; made_for_kids?: boolean; actual_privacy: string | null; state: string; video_id: string | null; detail: string; bytes_sent?: number; created_at: string };
+type PilotCandidate = { pilot_id: string; channel_id: string; title: string; seconds: number; thumbnail_url: string; video_url: string; approved_at: string | null; created_at: string };
 const PUB_STATE: Record<string, [string, string]> = { uploaded: ['ok', 'No YouTube'], ready: ['ok', 'Pronto para publicar'], queued: ['info', 'Na fila'], uploading: ['violet', 'Enviando'], held: ['', 'Pausado pela agenda'],
   interrupted: ['warn', 'Interrompido'], uncertain: ['warn', 'Incerto'], failed: ['bad', 'Falhou'], deleted: ['', 'Excluído'] };
 
 function Publications({ cid }: { cid: string }) {
   const pubs = useResource<Publication[]>('/api/youtube/publications', ['production.updated'], []);
+  const candidates = useResource<PilotCandidate[]>(`/api/youtube/publications/pilots/candidates?channel_id=${encodeURIComponent(cid)}`, ['production.updated'], [cid]);
+  const [preparing, setPreparing] = useState<string | null>(null);
   const [removing, setRemoving] = useState<Publication | null>(null);
   const [sure, setSure] = useState(false);
   const [editing, setEditing] = useState<Publication | null>(null);
@@ -39,6 +42,8 @@ function Publications({ cid }: { cid: string }) {
   const [readyMetadata, setReadyMetadata] = useState<any>(null);
   const [confirmPublication, setConfirmPublication] = useState(false);
   const [confirmRights, setConfirmRights] = useState(false);
+  const [readyPrivacy, setReadyPrivacy] = useState('private');
+  const [readyKids, setReadyKids] = useState<boolean | null>(null);
   const saveText = async () => {
     if (!editing) return;
     const ok = await attempt(() => post(`/api/youtube/publications/${editing.id}/metadata`, { title: editTitle, description: text, intent: editing.intent || 'coding_focus', primary_phrase: editPhrase, publication_metadata: editMetadata, confirm_update: true }), 'Título e descrição atualizados no YouTube');
@@ -60,10 +65,17 @@ function Publications({ cid }: { cid: string }) {
     }
     setGrowthBusy(false);
   };
-  const authorizeReady = async () => { if (!readyForReview) return; const ok = await attempt(() => post(`/api/youtube/publications/${readyForReview.id}/authorize-ready`, { confirm_review: true, confirm_rights: true, title: readyTitle, description: readyDescription, intent: readyForReview.intent || 'coding_focus', primary_phrase: readyPhrase, publication_metadata: readyMetadata }), 'Publicação autorizada para envio'); if (ok !== undefined) { setReadyForReview(null); setConfirmPublication(false); setConfirmRights(false); pubs.reload(); } };
+  const authorizeReady = async () => { if (!readyForReview || readyKids === null) return; const ok = await attempt(() => post(`/api/youtube/publications/${readyForReview.id}/authorize-ready`, { confirm_review: true, confirm_rights: true, privacy: readyPrivacy, made_for_kids: readyKids, title: readyTitle, description: readyDescription, intent: readyForReview.intent || 'coding_focus', primary_phrase: readyPhrase, publication_metadata: readyMetadata }), 'Publicação autorizada para envio'); if (ok !== undefined) { setReadyForReview(null); setConfirmPublication(false); setConfirmRights(false); setReadyKids(null); pubs.reload(); candidates.reload(); } };
+  const preparePilot = async (candidate: PilotCandidate) => {
+    setPreparing(candidate.pilot_id);
+    const result = await attempt(() => post(`/api/youtube/publications/pilots/${candidate.pilot_id}/prepare`, { request_id: uuid(), channel_id: cid }), 'Vídeo adicionado à fila de revisão para publicação. Nenhum envio foi iniciado.');
+    setPreparing(null);
+    if (result !== undefined) { pubs.reload(); candidates.reload(); }
+  };
   const retry = async (p: Publication) => { const ok = await attempt(() => post(`/api/youtube/publications/${p.id}/retry`, {}), 'Publicação recolocada na fila'); if (ok !== undefined) pubs.reload(); };
   const list = (pubs.data || []).filter(p => p.channel_id === cid);
-  if (!list.length) return null;
+  const candidateList = candidates.data || [];
+  if (!list.length && !candidateList.length) return null;
   const release = async (p: Publication) => {
     if (!confirm(`Liberar o envio de “${p.title}”?`)) return;
     try { await post(`/api/youtube/publications/${p.id}/release`, { confirm_release: true }); }
@@ -80,7 +92,18 @@ function Publications({ cid }: { cid: string }) {
     if (ok !== undefined) { setRemoving(null); setSure(false); pubs.reload(); }
   };
   return (
-    <section class="card">
+    <>
+    {candidateList.length > 0 && <section class="card">
+      <div class="card-head"><h3 class="grow">Vídeos aprovados para preparar publicação</h3></div>
+      <p class="faint">Prepare um vídeo aprovado para revisar título, descrição, visibilidade e direitos. Isso ainda não envia o arquivo ao YouTube.</p>
+      <div class="grid cols-2">{candidateList.map(candidate => <article class="card stack">
+        <img src={candidate.thumbnail_url} alt={`Miniatura de ${candidate.title}`} style={{ width: '100%', borderRadius: '10px' }} />
+        <div><b>{candidate.title}</b><p class="faint">Aprovado · {duration(candidate.seconds)} · pronto para gerar o pacote e revisar o envio</p></div>
+        <div class="row"><a class="btn ghost sm" href={candidate.video_url} target="_blank" rel="noreferrer">Assistir</a>
+          <button class="btn primary sm" disabled={preparing === candidate.pilot_id} onClick={() => preparePilot(candidate)}>{preparing === candidate.pilot_id ? 'Preparando…' : 'Preparar para publicar'}</button></div>
+      </article>)}</div>
+    </section>}
+    {list.length > 0 && <section class="card">
       <div class="card-head"><h3 class="grow">Publicações no YouTube</h3></div>
       <div style={{ overflowX: 'auto' }}>
         <table class="table"><thead><tr><th>Vídeo</th><th>Estado</th><th>Visibilidade</th><th>Enviado</th><th /></tr></thead>
@@ -90,7 +113,7 @@ function Publications({ cid }: { cid: string }) {
               <td><Pill tone={tone}>{label}</Pill>{p.detail && <div class="faint" style={{ fontSize: '12px', marginTop: '4px' }}>{p.detail}</div>}</td>
               <td>{p.actual_privacy || p.privacy}</td><td class="faint">{ago(p.created_at)}</td>
               <td style={{ textAlign: 'right' }}>
-                {p.state === 'ready' && <button class="btn primary sm" onClick={() => { setReadyForReview(p); setReadyTitle(p.title); setReadyDescription(p.description || ''); setReadyPhrase(p.primary_phrase || ''); setReadyMetadata(null); setGrowthCost(false); setGrowthNote(''); setConfirmPublication(false); setConfirmRights(false); }}>Revisar publicação</button>}
+                {p.state === 'ready' && <button class="btn primary sm" onClick={() => { setReadyForReview(p); setReadyTitle(p.title); setReadyDescription(p.description || ''); setReadyPhrase(p.primary_phrase || ''); setReadyPrivacy(p.privacy || 'private'); setReadyKids(typeof p.made_for_kids === 'boolean' ? p.made_for_kids : null); setReadyMetadata(null); setGrowthCost(false); setGrowthNote(''); setConfirmPublication(false); setConfirmRights(false); }}>Revisar publicação</button>}
                 {p.state === 'held' && <button class="btn sm" onClick={() => release(p)}>Liberar envio</button>}
                 {p.state === 'failed' && !p.video_id && !p.bytes_sent && <button class="btn sm" onClick={() => retry(p)}>Tentar novamente após reconectar</button>}
                 {p.state === 'uploaded' && <div class="row tight" style={{ justifyContent: 'flex-end' }}>
@@ -102,6 +125,8 @@ function Publications({ cid }: { cid: string }) {
       <Dialog open={!!readyForReview} onClose={() => setReadyForReview(null)} title="Publicação pronta para o YouTube">
         <p>{Math.floor((readyForReview?.publication_metadata?.seconds || 0) / 60)} min · Visibilidade: {readyForReview?.privacy}</p>
         {readyForReview?.pilot_id && <a class="btn" target="_blank" rel="noreferrer" href={`/api/ambient/pilots/${readyForReview.pilot_id}/video`}>Assistir ao vídeo completo</a>}
+        <label class="field"><span>Visibilidade</span><select class="select" value={readyPrivacy} onChange={e => setReadyPrivacy((e.target as HTMLSelectElement).value)}><option value="private">Privado</option><option value="unlisted">Não listado</option><option value="public">Público</option></select></label>
+        <label class="field"><span>Público infantil</span><select class="select" value={readyKids === null ? '' : String(readyKids)} onChange={e => setReadyKids((e.target as HTMLSelectElement).value === '' ? null : (e.target as HTMLSelectElement).value === 'true')}><option value="">Selecione</option><option value="false">Não foi criado para crianças</option><option value="true">Foi criado para crianças</option></select></label>
         <Check checked={growthCost} onChange={setGrowthCost}>Autorizo o custo máximo de US$ 0,02 para gerar a sugestão</Check>
         <button class="btn" disabled={growthBusy || !readyForReview} onClick={() => readyForReview && generateGrowthPackage(readyForReview, true)}>{growthBusy ? 'Gerando…' : 'Gerar título e descrição com Growth'}</button>
         {growthNote && <p class="faint" role="status">{growthNote}</p>}
@@ -110,7 +135,7 @@ function Publications({ cid }: { cid: string }) {
         <h4>Palavras-chave</h4><p>{readyForReview?.keywords?.join(', ')}</p>
         <Check checked={confirmPublication} onChange={setConfirmPublication}>Conferi o vídeo e os dados desta publicação</Check>
         <Check checked={confirmRights} onChange={setConfirmRights}>Confirmo os direitos para publicar este vídeo e esta música</Check>
-        <div class="row"><button class="btn primary" disabled={!readyMetadata?.native_growth?.generated || !confirmPublication || !confirmRights} onClick={authorizeReady}>Publicar no YouTube</button><button class="btn ghost" onClick={() => setReadyForReview(null)}>Fechar</button></div>
+        <div class="row"><button class="btn primary" disabled={!readyMetadata?.native_growth?.generated || !confirmPublication || !confirmRights || readyKids === null} onClick={authorizeReady}>Publicar no YouTube</button><button class="btn ghost" onClick={() => setReadyForReview(null)}>Fechar</button></div>
       </Dialog>
       <Dialog open={!!editing} onClose={() => setEditing(null)} title={`Título e descrição · ${editing?.title || ''}`}>
         <p class="faint" style={{ fontSize: '13px' }}>Gere uma sugestão contextual com os termos observados no YouTube Studio e revise o resultado antes de atualizar o vídeo.</p>
@@ -128,7 +153,8 @@ function Publications({ cid }: { cid: string }) {
         <Check checked={sure} onChange={setSure}>Entendo que a exclusão no YouTube é definitiva</Check>
         <div class="row"><button class="btn danger" disabled={!sure} onClick={remove}>Excluir definitivamente</button><button class="btn ghost" onClick={() => setRemoving(null)}>Cancelar</button></div>
       </Dialog>
-    </section>
+    </section>}
+    </>
   );
 }
 
