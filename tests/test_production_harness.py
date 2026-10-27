@@ -57,7 +57,7 @@ def test_validation_budget_and_style_catalog():
     import pytest
     from pydantic import ValidationError
     from studio.music_styles import catalog
-    with pytest.raises(ValidationError):ProductionSpec(asset_budget_usd=2.01)
+    with pytest.raises(ValidationError):ProductionSpec(asset_budget_usd=1000.01)
     c=catalog()
     assert not c['ranking_available']
     assert len(c['styles'])==10

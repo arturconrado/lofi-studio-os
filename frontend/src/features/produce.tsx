@@ -180,7 +180,7 @@ export function Produce() {
           <Field label="Intenção principal"><select class="select" value={growthIntent} onChange={e => { setGrowthIntent((e.target as HTMLSelectElement).value); setGrowthPackage(null); }}>
             <option value="coding_focus">Coding e foco</option><option value="study_focus">Estudo</option><option value="reading_focus">Leitura</option><option value="sleep_relaxation">Relaxamento</option>
           </select></Field>
-          <Check checked={growthCostConfirmed} onChange={setGrowthCostConfirmed}>Autorizo até US$0,02 para gerar o pacote de título e descrição.</Check>
+          <Check checked={growthCostConfirmed} onChange={setGrowthCostConfirmed}>Autorizo até US$0,10 para gerar o pacote de título e descrição.</Check>
           <button class="btn secondary" disabled={!growthCostConfirmed || growthBusy || !quote} onClick={generateGrowthPackage}>{growthBusy ? 'Gerando…' : 'Gerar pelo motor Growth'}</button>
         </div>
         {growthNote && <p class="faint" role="status">{growthNote}</p>}

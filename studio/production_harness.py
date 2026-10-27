@@ -40,7 +40,7 @@ class ProductionSpec(BaseModel):
     character_reference: str = Field(default='', max_length=200)
     cat_reference: str = Field(default='', max_length=200)
     program_budget_usd: float = Field(default=0, ge=0, le=40)
-    asset_budget_usd: float = Field(default=0, ge=0, le=2)
+    asset_budget_usd: float = Field(default=0, ge=0, le=1000)
     markers: list[Marker] = Field(default_factory=list, max_length=12)
     weather: Literal['scene_default', 'clear', 'rain', 'snow', 'fog'] = 'scene_default'
     time_of_day: Literal['scene_default', 'static', 'sunset_to_night', 'night_stars', 'night_to_dawn', 'day_to_dusk'] = 'scene_default'
@@ -212,7 +212,7 @@ def compile_spec(spec: ProductionSpec, music=None):
                      'no_track_repetition_to_claim_original_duration':True,'no_sudden_loudness_changes':True,
                      'human_listening_review_required':True,'measured_duration_required':True},
             'asset_tasks':tasks, 'local_layers':local_layers,
-            'cost_policy':{'program_budget_proposed_usd':spec.program_budget_usd,'program_budget_is_spending_authorization':False,'validation_total_cap_usd':2,'asset_cap_usd':spec.asset_budget_usd,'audio_and_visual_share_validation_cap':True,'provider_quote_required':True,
+            'cost_policy':{'program_budget_proposed_usd':spec.program_budget_usd,'program_budget_is_spending_authorization':False,'global_ai_budget_enforced':True,'asset_cap_usd':spec.asset_budget_usd,'provider_quote_required':True,
                            'workspace_cache_lookup_required':True,'one_preview_before_batch':True,
                            'automatic_paid_retry':False,'generation_started':False},
             'render_ready':False,'blockers':blockers,
