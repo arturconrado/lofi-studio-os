@@ -64,6 +64,9 @@ def test_validation_budget_and_style_catalog():
     assert 'pulse-wave' in audio_prompt('8bit_lofi','')
     assert 'nylon-string' in audio_prompt('bossa_lofi','')
     assert compile_spec(ProductionSpec())['cost_policy']['audio_and_visual_share_validation_cap']
+    current=compile_spec(ProductionSpec(scenario='autumn_bookshop'))['cost_policy']
+    assert current['global_ai_budget_enforced'] is True
+    assert 'validation_total_cap_usd' not in current
 
 
 def test_motion_quote_reserves_worst_sku_and_rejects_ambiguous_units():
@@ -109,11 +112,11 @@ def test_hour_compositor_covers_real_time_and_rejects_short_reference_as_action(
 
 def test_program_budget_is_persisted_planning_not_spending_authorization():
     from studio.production_harness import production_spec_hash
-    spec=ProductionSpec(hours=4,program_budget_usd=15)
+    spec=ProductionSpec(hours=4,program_budget_usd=15,scenario='autumn_bookshop')
     p=compile_spec(spec)
     assert p['cost_policy']['program_budget_proposed_usd']==15
     assert p['cost_policy']['program_budget_is_spending_authorization'] is False
-    assert p['cost_policy']['validation_total_cap_usd']==2
+    assert p['cost_policy']['global_ai_budget_enforced'] is True
     assert not p['render_ready']
     assert production_spec_hash(spec)==production_spec_hash(ProductionSpec(hours=4,program_budget_usd=0))
 
