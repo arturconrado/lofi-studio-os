@@ -82,6 +82,34 @@ def production_spec_hash(spec):
     return hashlib.sha256(json.dumps(normalized,sort_keys=True).encode()).hexdigest()
 
 
+def content_context(spec):
+    """Describe the harness-authored audiovisual content for downstream metadata.
+
+    This is derived only from the approved production specification and scene
+    registry; it does not claim that rendered frames or audio were inspected.
+    """
+    spec=spec if isinstance(spec,ProductionSpec) else ProductionSpec.model_validate(spec)
+    scene=resolve(spec)
+    scene_label=SCENES[spec.scenario]['label']
+    actions=[]
+    plan=sorted((m.minute,m.sequence) for m in spec.markers) if spec.markers else PRESETS[spec.cadence]
+    for _,sequence in plan:
+        for action,_,_ in SEQUENCES[sequence]['steps']:
+            if action not in actions:actions.append(action)
+    context={
+        'source':'approved_production_harness_spec',
+        'scene':scene_label,
+        'scene_direction':spec.scene_brief,
+        'weather':scene['weather'],
+        'time_of_day':scene['period'],
+        'music_style':spec.music_style,
+        'music_direction':spec.music_brief,
+        'visual_style':spec.visual_variant,
+        'story_beats':[DESCRIPTIONS[action] for action in actions if action in DESCRIPTIONS],
+    }
+    return json.dumps(context,ensure_ascii=False,separators=(',',':'))[:2500]
+
+
 def occasional_events(spec, hour, busy, props):
     """Seeded, reproducible low-frequency variations in idle gaps only."""
     rng=random.Random(f'{spec.variation_seed}:{hour}');pool=sorted(a for a,(_,_,req) in OCCASIONAL.items() if set(req)<=set(props))

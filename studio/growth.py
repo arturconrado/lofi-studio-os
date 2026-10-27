@@ -222,6 +222,7 @@ class PackagingSuggestionRequest(BaseModel):
     request_id:uuid.UUID
     publication_id:uuid.UUID|None=None
     source_pilot_id:uuid.UUID|None=None
+    source_export_id:uuid.UUID|None=None
     intent:Literal['coding_focus','study_focus','reading_focus','sleep_relaxation']
     content_format:Literal['long_form','short','live_archive']='long_form'
     source_title:str=Field(min_length=1,max_length=300)
@@ -304,7 +305,29 @@ def package_suggestion(cid:uuid.UUID,body:PackagingSuggestionRequest):
             pilot=c.execute('SELECT plan FROM ambient_pilots WHERE id=%s AND channel_id=%s',(body.source_pilot_id,cid)).fetchone()
             if not pilot:raise HTTPException(404,'Vídeo de origem não encontrado neste canal.')
             plan=pilot.get('plan') or {}
-            stored_context.update({key:str(plan.get(key) or '').strip()[:1000] for key in ('theme','music_description','music_brief') if plan.get(key)})
+            stored_context.update({key:str(plan.get(key) or '').strip()[:1000] for key in ('theme','music_description','music_brief','visual_prompt','story') if plan.get(key)})
+            if plan.get('production_spec'):
+                from .production_harness import content_context
+                stored_context['production_harness_context']=content_context(plan['production_spec'])
+        if body.source_export_id:
+            source=c.execute('''SELECT e.program_id,b.channel_id,m.theme,m.music_description,m.publication_metadata
+                FROM export_jobs e JOIN production_batches b ON b.id=e.program_id
+                LEFT JOIN program_metadata m ON m.program_id=e.program_id
+                WHERE e.id=%s''',(body.source_export_id,)).fetchone()
+            if not source or str(source['channel_id'])!=str(cid):raise HTTPException(404,'Exportação de origem não encontrada neste canal.')
+            stored_context.update({key:str(source.get(key) or '').strip()[:1000] for key in ('theme','music_description') if source.get(key)})
+            saved_growth=(source.get('publication_metadata') or {}).get('growth_context') or {}
+            stored_context.update({str(key):str(value).strip()[:1000] for key,value in saved_growth.items() if value})
+            has_creator_plans=c.execute("SELECT to_regclass('public.creator_plans') available").fetchone()['available']
+            creator_plan=c.execute('SELECT data FROM creator_plans WHERE program_id=%s',(source['program_id'],)).fetchone() if has_creator_plans else None
+            plan=(creator_plan or {}).get('data') or {}
+            stored_context.update({key:str(plan.get(key) or '').strip()[:1000] for key in ('visual_prompt','music_brief','story') if plan.get(key)})
+            if plan.get('production_spec'):
+                from .production_harness import content_context
+                stored_context['production_harness_context']=content_context(plan['production_spec'])
+            has_program_scenes=c.execute("SELECT to_regclass('public.program_scenes') available").fetchone()['available']
+            scene_rows=c.execute('SELECT title FROM program_scenes WHERE batch_id=%s ORDER BY position',(source['program_id'],)).fetchall() if has_program_scenes else []
+            if scene_rows:stored_context['rendered_scene_titles']='; '.join(str(row['title']) for row in scene_rows[:12])[:500]
     relevant=[r for r in rows if (r.get('intent') or '').strip().casefold()==body.intent.casefold() and r.get('content_format','long_form')==body.content_format]
     options=ranked_search_phrases(relevant,limit=1000)
     source_context={key:value.strip() for key,value in body.source_context.items() if value.strip()}
