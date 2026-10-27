@@ -26,13 +26,18 @@ def metadata_guidelines(intent, phrase):
     """Prompt contract shared by new-plan generation, the harness, and Growth packaging."""
     return (
         'You write accurate YouTube metadata for the Lo-Fi Vibe Coding channel. '
-        'Write natural English for viewers. Return only the requested JSON fields. '
-        'The title must be under 100 characters and begin with the exact primary phrase, '
-        'then add a specific supported scene or listening benefit in natural wording. '
-        'The first sentence of the description must use that exact phrase naturally and fulfill the title promise. '
-        'Write 2–3 useful paragraphs, 450–900 characters total. Explain the actual listening purpose, '
-        'supported setting, musical character, and when this session fits into a work or study block. '
-        'Use the phrase naturally once or twice; avoid keyword stuffing, canned filler, and generic opening lines. '
+        'Write polished, natural English for viewers and proofread spelling, grammar, and punctuation. '
+        'Return only the requested JSON fields. The title must be under 100 characters and begin with the exact primary phrase. '
+        'After that phrase, add one concise, specific, source-supported scene or use case (aim for 2–6 words). '
+        'Use at most one title separator (such as | or —); never concatenate search phrases, repeat the same intent in different words, '
+        'or turn the title into a list of keywords. The complete title must read naturally aloud. '
+        'The first sentence of the description must use that exact primary phrase naturally, name the specific supported setting, '
+        'and fulfill the title promise. Write 2–3 useful paragraphs, 450–900 characters total: first explain the viewer use and scene; '
+        'then describe only the actual musical character and listening experience; finish with a simple viewer invitation when it fits. '
+        'Use the primary phrase naturally once or twice; avoid keyword stuffing, repeated claims, canned filler, and generic opening lines. '
+        'Preserve the video’s defining subject, named setting, and seasonal or holiday concept from the supplied source context. '
+        'A search phrase must clarify what viewers can find; it must never replace a distinctive episode concept such as Halloween Café. '
+        'Keep that concept explicit in the title and in the first description sentence whenever the source supports it. '
         'Use only facts from the supplied source context; never invent instruments, scenery, rights, performance results, '
         'availability, or exact duration. Never put an exact duration in the title before the final video duration is measured. '
         'Do not claim search volume, rankings, or reach, and do not mention tools or production methods. '
@@ -49,6 +54,15 @@ def validate_metadata(title, description, phrase, *, min_description=450, max_de
         raise ValueError('Escolha uma frase principal curta e específica para este vídeo.')
     if not title or len(title) > 100:
         raise ValueError('O título precisa ter até 100 caracteres.')
+    if sum(title.count(separator) for separator in ('|', '—', '–', ':')) > 1:
+        raise ValueError('O título deve apresentar uma única ideia, sem empilhar frases-chave ou separadores.')
+    remainder = title[len(phrase):].strip()
+    remainder = remainder.lstrip(' |—–:·-').strip()
+    remainder_words = re.findall(r"[\w’'-]+", remainder, flags=re.UNICODE)
+    if not remainder_words:
+        raise ValueError('Depois da frase principal, acrescente um cenário ou uso específico do vídeo.')
+    if len(remainder_words) > 7:
+        raise ValueError('O complemento do título está longo ou empilha palavras-chave; use um cenário ou benefício em poucas palavras.')
     if len(description) < min_description or len(description) > max_description:
         raise ValueError(f'A descrição precisa ter entre {min_description} e {max_description} caracteres e contexto específico do vídeo.')
     paragraphs = [part.strip() for part in re.split(r'\n\s*\n', description) if part.strip()]
