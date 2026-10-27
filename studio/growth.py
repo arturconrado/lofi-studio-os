@@ -442,7 +442,7 @@ def metadata_context(cid:uuid.UUID,intent:str='coding_focus',content_format:Lite
 
 @router.post('/{cid}/package-suggestion')
 def package_suggestion(cid:uuid.UUID,body:PackagingSuggestionRequest):
-    if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva máxima de US$0,02 para gerar a sugestão')
+    if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva de até US$0,10 para gerar a sugestão')
     with db() as c:
         profile(c,cid)
         rows=c.execute('SELECT video_url,observed_date,"window",video_age_days,content_format,intent,metrics FROM analytics_snapshots WHERE channel_id=%s ORDER BY observed_date DESC LIMIT 1000',(cid,)).fetchall()

@@ -196,13 +196,8 @@ def copy_for(data,scenario,hours,idea):
 
 
 def reserved_elsewhere(c):
-    from .creator import usage
-    booked=c.execute("""SELECT COALESCE(sum(GREATEST(b.budget-COALESCE((SELECT sum(GREATEST(j.estimated_cost,COALESCE(j.actual_cost,0)))
-      FROM jobs j WHERE j.track_id LIKE b.id||'-%'),0),0)),0) n
-      FROM creator_plans p JOIN production_batches b ON b.id=p.program_id WHERE p.status IN ('queued','processing')""").fetchone()['n']
-    future=c.execute('''SELECT COALESCE(sum(p.cost_ceiling_usd-COALESCE((SELECT sum(pb.budget) FROM production_blocks pb WHERE pb.production_id=p.id),0)),0) n
-      FROM productions p WHERE p.state IN ('active','paused')''').fetchone()['n']
-    return usage(c)+Decimal(booked)+Decimal(future)
+    from .financial import total_usage
+    return total_usage(c)
 
 
 def load(c,pid,lock=False):

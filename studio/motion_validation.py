@@ -12,7 +12,6 @@ from . import runtime
 from .production_harness import production_spec_hash
 router=APIRouter(prefix='/motion-validation')
 MODEL='google/veo-3.1-lite'
-from .form_assistant import CAP_KINDS
 KIND='motion_validation_20261014'
 PROMPT=('Locked camera. Preserve exactly the referenced fictional adult woman, her face, hair, clothes, cat markings, room and illustration style. '
         'Eight-second motion study: she stops typing, looks at her cat affectionately, and gently pets it with one hand; the cat visibly stretches toward her hand. '
@@ -68,8 +67,9 @@ def quote():
     try:cap=catalog_quote()
     except Exception:raise HTTPException(409,'Cotação indisponível. Nenhum envio pago foi feito.') from None
     with db() as c:
-        spent=c.execute('SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE kind = ANY(%s)',(list(CAP_KINDS),)).fetchone()['n']
-    return {'model':MODEL,'seconds':8,'resolution':'720p','reservation_usd':cap,'total_limit_usd':2,'reserved_total_usd':spent,'remaining_usd':max(0,Decimal('2')-spent),'prompt':PROMPT}
+        from .financial import total_usage
+        limit=Decimal(runtime.settings(c)['total_limit']);spent=total_usage(c)
+    return {'model':MODEL,'seconds':8,'resolution':'720p','reservation_usd':cap,'total_limit_usd':limit,'reserved_total_usd':spent,'remaining_usd':max(Decimal(0),limit-spent),'prompt':PROMPT}
 
 
 class Pilot(BaseModel):
@@ -78,7 +78,7 @@ class Pilot(BaseModel):
     channel_id:uuid.UUID
     batch_id:str=Field(max_length=40)
     scene_id:str=Field(max_length=100)
-    max_reservation_usd:Decimal=Field(gt=0,le=2)
+    max_reservation_usd:Decimal=Field(gt=0,le=1000)
     confirm_cost:bool=False
 
 
@@ -133,8 +133,6 @@ def submit(body:Pilot):
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
         old=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone()
         if old:return public(old)
-        spent=c.execute('SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE kind = ANY(%s)',(list(CAP_KINDS),)).fetchone()['n']
-        if spent+cap>Decimal('2'):raise HTTPException(409,'Teto total de US$2 atingido; nenhum envio feito')
         plan_spent=c.execute("SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE kind=%s AND payload->>'plan_id'=%s",(KIND,str(body.plan_id))).fetchone()['n']
         if plan_spent+cap>plan_cap:raise HTTPException(409,'Teto de assets do roteiro atingido')
         from .financial import check_available

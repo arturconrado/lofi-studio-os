@@ -13,9 +13,8 @@ MODEL='google/lyria-3-pro-preview'
 
 def config(c):return c.execute('SELECT * FROM factory_control WHERE id=1').fetchone()
 def usage(c):
-    return c.execute('''SELECT COALESCE(sum(cost),0) total FROM (
-      SELECT GREATEST(estimated_cost,COALESCE(actual_cost,0)) cost FROM jobs WHERE budget_reserved
-      UNION ALL SELECT reserved_cost FROM factory_tasks) x''').fetchone()['total']
+    from .financial import total_usage
+    return total_usage(c)
 def seconds(c):return float(c.execute("SELECT COALESCE(sum(a.duration_seconds),0) n FROM tracks t JOIN assets a ON a.id=t.approved_asset_id WHERE t.status='APPROVED' AND a.editorial_status='APPROVED' AND (a.technical_status='PASS' OR (a.technical_status='REVIEW' AND a.technical_review_note<>''))").fetchone()['n'])
 def target():return int(os.getenv('LOFI_AUDIO_TARGET_SECONDS','28800'))
 
@@ -45,7 +44,8 @@ def verify_model():
 class Setup(BaseModel):
     api_key:str|None=Field(default=None,max_length=300)
     rights_policy:str=Field(min_length=20,max_length=3000)
-    budget_usd:Decimal=Field(default=20,ge=.10,le=20)
+    budget_usd:Decimal=Field(default=20,ge=.10,le=1000)
+    confirm_spend:bool=False
     accept_automatic_approval:bool=False
     autostart_broadcast:bool=False
     private_event_confirmed:bool=False
@@ -54,6 +54,7 @@ class Setup(BaseModel):
 @router.put('/settings')
 def setup(body:Setup):
     if not body.accept_automatic_approval:raise HTTPException(422,'Confirme os controles técnicos; aprovação editorial exige audição')
+    if not body.confirm_spend:raise HTTPException(422,'Confirme explicitamente o limite global de gastos com IA')
     if body.autostart_broadcast:raise HTTPException(422,'Primeira etapa somente áudio; transmissão será configurada depois')
     token=body.api_key.strip() if body.api_key else runtime.key()
     if not token.startswith('sk-or-'):raise HTTPException(422,'Informe uma chave OpenRouter válida, iniciada por sk-or-')
@@ -70,7 +71,7 @@ def setup(body:Setup):
         ready();ensure_autopilot(c)
         if body.recipe_id:current(c,body.recipe_id)
         c.execute('INSERT INTO autopilot_recipe(id,recipe_id) VALUES(1,%s) ON CONFLICT(id) DO UPDATE SET recipe_id=EXCLUDED.recipe_id,updated_at=now()',(body.recipe_id,))
-        audit(c,'OPENROUTER_FACTORY_CONFIGURED','1',str(body.budget_usd));c.commit()
+        audit(c,'GLOBAL_AI_BUDGET_CONFIGURED','1',str(body.budget_usd));c.commit()
     return {'ok':True}
 
 @router.post('/start')

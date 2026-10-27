@@ -268,18 +268,23 @@ def get_settings():return runtime.public_settings()
 class SettingsBody(BaseModel):
     enabled:bool=False
     model:str='google/lyria-3-clip-preview'
-    daily_limit:Decimal=Field(ge=0,le=40)
-    total_limit:Decimal=Field(ge=0,le=40)
+    budget_limit_usd:Decimal|None=Field(default=None,ge=0,le=1000)
+    # Legacy aliases remain accepted during rollout; both are normalized to one cap.
+    daily_limit:Decimal|None=Field(default=None,ge=0,le=1000)
+    total_limit:Decimal|None=Field(default=None,ge=0,le=1000)
     api_key:str|None=Field(default=None,max_length=300)
     confirm_paid_pilot:bool=False
 
 @app.put('/api/settings')
 def save_settings(body:SettingsBody):
     if body.model not in runtime.MODELS:raise HTTPException(422,'Modelo não autorizado')
-    try:daily,total=runtime.limits(body.daily_limit,body.total_limit)
+    requested=body.budget_limit_usd if body.budget_limit_usd is not None else body.total_limit
+    if requested is None:requested=body.daily_limit
+    if requested is None:raise HTTPException(422,'Informe o limite global de gastos com IA')
+    try:daily,total=runtime.limits(requested,requested)
     except ValueError as e:raise HTTPException(422,str(e))
-    if body.enabled and (not body.confirm_paid_pilot or total==0 or daily==0):
-        raise HTTPException(422,'Autorize explicitamente o piloto pago e defina os limites')
+    if body.enabled and (not body.confirm_paid_pilot or total==0):
+        raise HTTPException(422,'Autorize explicitamente os gastos com IA e defina o limite global')
     encrypted=None
     if body.api_key:
         if not body.api_key.startswith('sk-or-'):raise HTTPException(422,'Formato de chave OpenRouter inválido')
@@ -288,31 +293,34 @@ def save_settings(body:SettingsBody):
         encrypted=Fernet(master.encode()).encrypt(body.api_key.encode()).decode()
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
-        from .autopilot import config as factory_config, usage as combined_usage
+        from .autopilot import config as factory_config
         if factory_config(c)['enabled']:raise HTTPException(409,'Pause a esteira antes de alterar controles de orçamento')
         current=runtime.settings(c)
-        if (daily>current['daily_limit'] or total>current['total_limit']) and not body.confirm_paid_pilot:raise HTTPException(422,'Confirme a autorização para elevar o limite de gastos')
-        if combined_usage(c)>total:raise HTTPException(422,'Limite menor que as reservas já realizadas')
+        if total>current['total_limit'] and not body.confirm_paid_pilot:raise HTTPException(422,'Confirme a autorização para elevar o limite global de gastos')
+        from .financial import total_usage
+        if total_usage(c)>total:raise HTTPException(422,'Limite menor que os gastos e compromissos já reservados')
         if body.enabled and not (encrypted or runtime.settings(c)['api_key_encrypted'] or (not __import__('studio.tenancy',fromlist=['active_workspace']).active_workspace() and os.getenv('OPENROUTER_API_KEY'))):
             raise HTTPException(409,'Informe a chave OpenRouter para habilitar a geração')
         c.execute('UPDATE studio_config SET enabled=%s,model=%s,daily_limit=%s,total_limit=%s WHERE id=1',(body.enabled,body.model,daily,total))
         if encrypted:c.execute('UPDATE studio_config SET api_key_encrypted=%s WHERE id=1',(encrypted,))
-        audit(c,'SETTINGS_UPDATED','studio',f'enabled={body.enabled}; daily={daily}; total={total}; model={body.model}');c.commit()
+        audit(c,'SETTINGS_UPDATED','studio',f'enabled={body.enabled}; global_budget={total}; model={body.model}');c.commit()
     return runtime.public_settings()
 
 @app.get('/api/budget')
 def budget():
     with db() as c:
         usage=c.execute("SELECT COALESCE(sum(GREATEST(estimated_cost,COALESCE(actual_cost,0))),0) reserved, COALESCE(sum(actual_cost),0) reported, count(*) FILTER(WHERE submitted_at IS NOT NULL AND actual_cost IS NULL) unconfirmed FROM jobs WHERE budget_reserved").fetchone()
-        from .autopilot import usage as combined_usage
-        usage['reserved']=combined_usage(c)
+        from .financial import total_usage
+        usage['reserved']=total_usage(c)
         if c.execute("SELECT to_regclass('public.creator_plans') t").fetchone()['t']:
             plans=c.execute('SELECT COALESCE(sum(GREATEST(reserved,COALESCE(actual_cost,0))),0) reserved,COALESCE(sum(actual_cost),0) reported,count(*) FILTER(WHERE actual_cost IS NULL) unconfirmed FROM creator_plans').fetchone()
-            for name in ('reserved','reported','unconfirmed'):usage[name]+=plans[name]
+            for name in ('reported','unconfirmed'):usage[name]+=plans[name]
         task_costs=c.execute("""SELECT COALESCE(sum(CASE WHEN jsonb_typeof(payload->'actual_cost_usd')='number' THEN (payload->>'actual_cost_usd')::numeric ELSE 0 END),0) reported,
           count(*) FILTER(WHERE status!='PLANNED' AND jsonb_typeof(payload->'actual_cost_usd') IS DISTINCT FROM 'number') unconfirmed FROM factory_tasks""").fetchone()
         usage['reported']+=task_costs['reported'];usage['unconfirmed']+=task_costs['unconfirmed']
-    return dict(usage)|runtime.public_settings()
+        settings=runtime.public_settings()
+        usage['available']=max(Decimal(0),Decimal(settings['total_limit'])-Decimal(usage['reserved']))
+    return dict(usage)|settings
 
 @app.get('/api/jobs')
 def jobs():
