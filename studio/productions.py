@@ -9,6 +9,7 @@ import json,os,time,uuid
 from decimal import Decimal,ROUND_DOWN
 from fastapi import APIRouter,HTTPException,Request
 from pydantic import BaseModel,Field
+from typing import Any
 from .core import db,audit,ensure_once
 from .channels import profile
 from . import runtime
@@ -33,6 +34,7 @@ def ensure(c):
       program_id TEXT UNIQUE,budget NUMERIC NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(production_id,hour_index))''')
     # Visual plan: which recipe movements were planned and whether this path renders them.
     c.execute('ALTER TABLE productions ADD COLUMN IF NOT EXISTS visual_plan JSONB')
+    c.execute("ALTER TABLE productions ADD COLUMN IF NOT EXISTS youtube_metadata JSONB NOT NULL DEFAULT '{}'::jsonb")
     # Upgrade databases created before 8-hour episodes were supported.
     c.execute("""DO $$ DECLARE x record; BEGIN
       FOR x IN SELECT conname FROM pg_constraint WHERE conrelid='productions'::regclass AND contype='c' AND pg_get_constraintdef(oid) ILIKE '%hours%'
@@ -124,6 +126,7 @@ class CreateRequest(QuoteRequest):
     confirm_ceiling:bool=False
     # Kept for compatibility with older clients; it never bypasses missing action assets.
     accept_without_motion:bool=False
+    youtube_metadata:dict[str,Any]|None=None
 
 class PermanentDeleteRequest(BaseModel):
     confirm_text:str=Field(max_length=100)
@@ -219,11 +222,17 @@ def block_plan(p,k):
     data=RecipeData.model_validate(p['recipe_snapshot']);music=dump_music(data)
     copy=copy_for(data,p['scenario'],1,p['idea'])
     suffix=f' · Part {k+1}' if p['hours']>1 else ''
-    return {'title':(copy['title'][:100-len(suffix)]+suffix),'description':copy['description'] or 'Original instrumental music.',
+    growth=p.get('youtube_metadata') or {}
+    title=growth.get('title') or copy['title']
+    description=growth.get('description') or copy['description'] or 'Original instrumental music.'
+    if suffix:title=title[:100-len(suffix)]+suffix
+    return {'title':title,'description':description,
             'theme':(p['idea'] or data.copy_.style_title)[:2000],'music_description':'Original instrumental '+data.copy_.style_title+'.',
             'alternative_titles':copy['alternatives'],'keywords':copy['keywords'],'music_brief':(p['idea'] or data.copy_.style_title)[:2000],
         'visual_prompt':'Create a new original scene guided by the approved visual reference. Never copy or reuse the reference video as output.',
             'mix_crossfade_seconds':music['crossfade_seconds'],'ambient_bed':music['ambient_bed'],'ambient_gain_db':music['ambient_gain_db'],
+            'intent':growth.get('intent','coding_focus'),'primary_phrase':growth.get('primary_phrase',''),
+            'publication_metadata':growth.get('publication_metadata',{}),
             'visual_reference':p['reference'],'production_id':str(p['id']),'hour_index':k,
             'recipe':{'recipe_id':str(p['recipe_id']),'sha256':p['recipe_sha256'],'scenario':p['scenario'],'hours':p['hours'],
                       'spec':p['spec'],'data':p['recipe_snapshot'],'music':music,'visual':p['recipe_snapshot']['visual'],'copy':p['recipe_snapshot']['copy']}}
@@ -296,10 +305,13 @@ def loop(interval=10):
 
 def view(c,p):
     out={k:p[k] for k in ('id','channel_id','recipe_id','recipe_sha256','idea','hours','scenario','state','created_at','updated_at')}
+    out['youtube_metadata']=p.get('youtube_metadata') or {}
     out['recipe_name']=p['recipe_snapshot'].get('copy',{}).get('style_title')
     out['reference']={'pilot_id':p['reference']['pilot_id'],'title':p['reference']['title']}
     from .recipes import RecipeData
     out['copy']=copy_for(RecipeData.model_validate(p['recipe_snapshot']),p['scenario'],p['hours'],p['idea'])
+    if p.get('youtube_metadata'):
+        out['copy']={**out['copy'],'title':p['youtube_metadata']['title'],'description':p['youtube_metadata']['description']}
     revision=c.execute('SELECT revision FROM recipe_revisions WHERE sha256=%s',(p['recipe_sha256'],)).fetchone()
     out['recipe_version']={'revision':revision['revision'] if revision else None,'sha256':p['recipe_sha256']}
     # Productions made before visual plans were stored are described from their persisted spec.
@@ -327,6 +339,14 @@ def create(body:CreateRequest,request:Request):
         out,row,data,spec,reference=plan_quote(c,body)
         blockers=generation_blockers(out)
         if blockers:raise HTTPException(409,' '.join(blockers))
+        youtube_metadata=body.youtube_metadata or {}
+        if not youtube_metadata:raise HTTPException(422,'Gere e revise o pacote de título e descrição pelo Growth antes de iniciar a produção.')
+        from .youtube_metadata import validate_metadata
+        try:normalized=validate_metadata(youtube_metadata.get('title'),youtube_metadata.get('description'),youtube_metadata.get('primary_phrase'),min_description=450,max_description=5000)
+        except ValueError as error:raise HTTPException(422,str(error)) from None
+        receipt=youtube_metadata.get('native_growth') or {}
+        if not receipt.get('generated') or not receipt.get('request_id'):raise HTTPException(422,'Gere e revise o pacote pelo Growth antes de iniciar a produção.')
+        youtube_metadata={**youtube_metadata,**normalized,'publication_metadata':{'native_growth':receipt,'growth_context':youtube_metadata.get('growth_context',{})}}
         estimate=Decimal(str(out['estimate_usd']));ceiling=Decimal(body.ceiling_usd).quantize(Decimal('.01'))
         if ceiling<estimate:raise HTTPException(422,f'O teto precisa cobrir a estimativa de US${estimate:.2f}')
         if ceiling/body.hours>BLOCK_CAP:raise HTTPException(422,'Cada hora aceita no máximo US$12')
@@ -337,10 +357,10 @@ def create(body:CreateRequest,request:Request):
         authorization={'by':str(identity.get('user_id') or identity.get('email') or 'admin'),'at':time.time(),'ceiling_usd':str(ceiling),
                        'estimate_usd':str(estimate),'recipe_sha256':row['sha256'],'spec_sha256':out['spec_sha256'],'hours':body.hours,
                        'accepted_without_motion':False}
-        c.execute('''INSERT INTO productions(id,request_id,channel_id,recipe_id,recipe_sha256,recipe_snapshot,idea,hours,scenario,spec,spec_sha256,reference,cost_ceiling_usd,cost_authorization,visual_plan)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+        c.execute('''INSERT INTO productions(id,request_id,channel_id,recipe_id,recipe_sha256,recipe_snapshot,idea,hours,scenario,spec,spec_sha256,reference,cost_ceiling_usd,cost_authorization,visual_plan,youtube_metadata)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
           (pid,body.request_id,body.channel_id,row['id'],row['sha256'],json.dumps(dump(data)),body.idea.strip(),body.hours,out['scenario'],
-           json.dumps(spec.model_dump()),out['spec_sha256'],json.dumps(reference),ceiling,json.dumps(authorization),json.dumps(out['visual'])))
+           json.dumps(spec.model_dump()),out['spec_sha256'],json.dumps(reference),ceiling,json.dumps(authorization),json.dumps(out['visual']),json.dumps(youtube_metadata,ensure_ascii=False)))
         audit(c,'PRODUCTION_AUTHORIZED',str(pid),f'ceiling USD{ceiling}; {body.hours}h; recipe {row["sha256"][:12]}')
         p=load(c,pid,True);advance(c,p);c.commit()
         return view(c,load(c,pid))
@@ -488,10 +508,10 @@ def permanent_delete(pid:uuid.UUID,body:PermanentDeleteRequest):
             c.execute("UPDATE tracks SET title='[conteúdo removido]',collection='[conteúdo removido]',prompt='[conteúdo removido]',status='DELETED' WHERE id=ANY(%s)",(track_ids,))
             c.execute("UPDATE jobs SET detail='',prompt_snapshot=NULL WHERE track_id=ANY(%s)",(track_ids,))
         if c.execute("SELECT to_regclass('program_metadata') t").fetchone()['t']:
-            c.execute("UPDATE program_metadata SET title='[conteúdo removido]',description='',theme='',music_description='',alternatives='[]'::jsonb,keywords='[]'::jsonb WHERE program_id=ANY(%s)",(programs,))
+            c.execute("UPDATE program_metadata SET title='[conteúdo removido]',description='',theme='',music_description='',alternatives='[]'::jsonb,keywords='[]'::jsonb,primary_phrase='',publication_metadata='{}'::jsonb WHERE program_id=ANY(%s)",(programs,))
         c.execute("UPDATE production_batches SET state='deleted',detail='Mídias e conteúdo removidos definitivamente',audio_key=NULL,video_key=NULL,manifest_key=NULL,visual_cycle_key=NULL WHERE id=ANY(%s)",(programs,))
         c.execute("UPDATE creator_plans SET status='deleted',theme='[conteúdo removido]',data='{}'::jsonb WHERE program_id=ANY(%s)",(programs,))
-        c.execute("UPDATE productions SET state='deleted',scenario='deleted',idea='',cursor_detail='Conteúdo removido definitivamente',error=NULL,spec='{}'::jsonb,spec_sha256='deleted',recipe_snapshot='{}'::jsonb,reference='{}'::jsonb,updated_at=now() WHERE id=%s",(pid,))
+        c.execute("UPDATE productions SET state='deleted',scenario='deleted',idea='',cursor_detail='Conteúdo removido definitivamente',error=NULL,spec='{}'::jsonb,spec_sha256='deleted',recipe_snapshot='{}'::jsonb,reference='{}'::jsonb,youtube_metadata='{}'::jsonb,updated_at=now() WHERE id=%s",(pid,))
         # Keep source/reference media outside the generated object namespaces.
         generated=owned_generated_keys(media_keys,programs,track_rows)
         if generated:

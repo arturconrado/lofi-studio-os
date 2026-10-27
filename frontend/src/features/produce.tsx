@@ -29,6 +29,7 @@ export function RecipeCard({ r, pressed, onClick, isDefault }: { r: Recipe; pres
 type Quote = { recipe: { name: string; sha256: string }; scenario: string; scene_label: string; reference: { title: string }; estimate_usd: number; estimate_per_block_usd: number;
   suggested_ceiling_usd: number; remaining_usd: number; paid_enabled: boolean; audio_prompt: string; copy: { title: string; description: string }; visual: VisualPlan;
   spec: Record<string, unknown>; whole_episode_export_available: boolean; episode_export_blocker: string | null };
+type GrowthPackage = { title:string; description:string; primary_phrase:string; primary_phrase_source:string; search_phrase_options:any[]; historical_context:any; request_id:string; cost_usd?:number };
 
 export function Produce() {
   const cid = channel.value?.id;
@@ -45,6 +46,11 @@ export function Produce() {
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [preparing, setPreparing] = useState(false);
+  const [growthIntent, setGrowthIntent] = useState('coding_focus');
+  const [growthCostConfirmed, setGrowthCostConfirmed] = useState(false);
+  const [growthBusy, setGrowthBusy] = useState(false);
+  const [growthNote, setGrowthNote] = useState('');
+  const [growthPackage, setGrowthPackage] = useState<GrowthPackage|null>(null);
   const requestId = useRef(uuid());
 
   const allowed = bound.data?.recipes || [];
@@ -62,6 +68,7 @@ export function Produce() {
   useEffect(() => {
     if (!cid || !recipe || !scenario) return;
     setConfirmed(false);
+    setGrowthPackage(null); setGrowthNote('');
     const t = setTimeout(async () => {
       try {
         const q = await post<Quote>('/api/creator/productions/quote', { channel_id: cid, recipe_id: recipe.id, hours, idea, scenario });
@@ -72,19 +79,61 @@ export function Produce() {
   }, [cid, recipe?.id, hours, idea, scenario]);
 
   const submit = async () => {
-    if (!quote || !ceiling) return;
+    if (!quote || !ceiling || !growthPackage) return;
     setBusy(true);
-    const p = await attempt(() => post('/api/creator/productions', { request_id: requestId.current, channel_id: cid, recipe_id: recipe!.id, hours, idea, scenario, ceiling_usd: ceiling, confirm_ceiling: true }), 'Produção autorizada. Acompanhe por aqui.');
+    const p = await attempt(() => post('/api/creator/productions', { request_id: requestId.current, channel_id: cid, recipe_id: recipe!.id, hours, idea, scenario, ceiling_usd: ceiling, confirm_ceiling: true,
+      youtube_metadata: { title: growthPackage.title, description: growthPackage.description, primary_phrase: growthPackage.primary_phrase, intent: growthIntent,
+        native_growth: { generated: true, request_id: growthPackage.request_id, primary_phrase_source: growthPackage.primary_phrase_source,
+          search_phrase_options: growthPackage.search_phrase_options, historical_context: growthPackage.historical_context, cost_usd: growthPackage.cost_usd ?? null, generated_at: new Date().toISOString() },
+        growth_context: { idea, scenario, recipe: recipe?.name || '', duration_hours: String(hours), visual_scene: scenario || '', musical_direction: quote.audio_prompt } },
+    }), 'Produção autorizada. Acompanhe por aqui.');
     setBusy(false);
     if (p) { requestId.current = uuid(); navigate('/projetos/' + p.id); }
   };
 
+  const generateGrowthPackage = async () => {
+    if (!quote || !cid || !recipe || !growthCostConfirmed) return;
+    const sceneInfo = (catalog.data?.scenes || []).find((s:any) => s.id === scenario);
+    const requestId = uuid();
+    setGrowthBusy(true); setGrowthNote('Consultando os sinais disponíveis no YouTube Studio e montando a embalagem…');
+    try {
+      const generated = await post<GrowthPackage>(`/api/growth/${cid}/package-suggestion`, {
+        request_id: requestId, intent: growthIntent, content_format: 'long_form',
+        source_title: `${sceneInfo?.label || scenario} · ${recipe.name}`,
+        source_description: [idea, quote.copy.description].filter(Boolean).join('\n\n').slice(0, 5000),
+        source_context: {
+          theme: idea || sceneInfo?.label || scenario || '',
+          visual_scene: sceneInfo?.reference?.setting || sceneInfo?.label || scenario || '',
+          music_style: recipe.name,
+          musical_direction: recipe.data.music.bible || recipe.data.music.moods?.join(', ') || recipe.name,
+          instruments: (recipe.data.music.instruments || []).join(', '),
+          session_length: `${hours} hour long-form instrumental session`,
+        }, primary_phrase: '', confirm_cost: true,
+      });
+      setGrowthPackage({ ...generated, request_id: requestId }); setGrowthNote(`Pacote pronto para revisão · frase: ${generated.primary_phrase_source === 'observed_youtube_studio_contextual' ? 'sinal contextual do Studio' : generated.primary_phrase_source === 'user_selected' ? 'seleção contextual' : 'intenção editorial do canal'}${generated.cost_usd != null ? ` · custo US$ ${Number(generated.cost_usd).toFixed(4)}` : ''}.`);
+    } catch (e:any) { setGrowthNote(e.message || 'Não foi possível gerar o pacote. Confira o histórico antes de tentar de novo.'); }
+    finally { setGrowthCostConfirmed(false); setGrowthBusy(false); }
+  };
+
   const prepareTimeline = async () => {
-    if (!quote || !cid) return;
+    if (!quote || !cid || !growthPackage) return;
+    const phrase = growthPackage.primary_phrase.trim().toLocaleLowerCase();
+    const opening = growthPackage.description.trim().match(/^.*?[.!?](?:\s|$)/)?.[0] || growthPackage.description.trim();
+    if (!growthPackage.title.trim().toLocaleLowerCase().startsWith(phrase) || !opening.toLocaleLowerCase().includes(phrase) || growthPackage.description.trim().length < 450) {
+      setGrowthNote(`Ajuste o título para começar por “${growthPackage.primary_phrase}” e inclua a frase na abertura de uma descrição contextual com pelo menos 450 caracteres.`); return;
+    }
     setPreparing(true);
     const saved = await attempt(() => post<{ id: string }>('/api/creator/storyboard/save', {
       channel_id: cid, spec: { ...quote.spec, hours },
-    }), 'Roteiro salvo sem iniciar geração ou cobrança');
+      youtube_metadata: {
+        title: growthPackage.title, description: growthPackage.description, intent: growthIntent,
+        primary_phrase: growthPackage.primary_phrase,
+        native_growth: { generated: true, request_id: growthPackage.request_id, primary_phrase_source: growthPackage.primary_phrase_source,
+          search_phrase_options: growthPackage.search_phrase_options, historical_context: growthPackage.historical_context,
+          cost_usd: growthPackage.cost_usd ?? null, generated_at: new Date().toISOString() },
+        growth_context: { idea, scenario, recipe: recipe?.name || '', duration_hours: String(hours), visual_scene: scenario || '', musical_direction: quote.audio_prompt },
+      },
+    }), 'Roteiro e pacote Growth salvos; nenhuma produção iniciada');
     setPreparing(false);
     if (saved) navigate('/montagem/' + saved.id);
   };
@@ -125,7 +174,26 @@ export function Produce() {
       </section>
 
       <section class="card stack">
-        <h3>4. Custo e confirmação</h3>
+        <h3>4. Título e descrição com Growth</h3>
+        <p class="faint">O mesmo motor usado na biblioteca monta o pacote a partir da intenção, da cena, da receita e dos termos contextualizados do YouTube Studio. Ele não promete distribuição nem publica o vídeo.</p>
+        <div class="row wrap">
+          <Field label="Intenção principal"><select class="select" value={growthIntent} onChange={e => { setGrowthIntent((e.target as HTMLSelectElement).value); setGrowthPackage(null); }}>
+            <option value="coding_focus">Coding e foco</option><option value="study_focus">Estudo</option><option value="reading_focus">Leitura</option><option value="sleep_relaxation">Relaxamento</option>
+          </select></Field>
+          <Check checked={growthCostConfirmed} onChange={setGrowthCostConfirmed}>Autorizo até US$0,02 para gerar o pacote de título e descrição.</Check>
+          <button class="btn secondary" disabled={!growthCostConfirmed || growthBusy || !quote} onClick={generateGrowthPackage}>{growthBusy ? 'Gerando…' : 'Gerar pelo motor Growth'}</button>
+        </div>
+        {growthNote && <p class="faint" role="status">{growthNote}</p>}
+        {growthPackage && <div class="stack">
+          <Field label="Frase principal"><input class="input" value={growthPackage.primary_phrase} readOnly /></Field>
+          <Field label="Título em inglês"><input class="input" maxLength={100} value={growthPackage.title} onInput={e => setGrowthPackage({ ...growthPackage, title: (e.target as HTMLInputElement).value })} /></Field>
+          <Field label="Descrição contextual em inglês"><textarea class="textarea" rows={8} maxLength={5000} value={growthPackage.description} onInput={e => setGrowthPackage({ ...growthPackage, description: (e.target as HTMLTextAreaElement).value })} /></Field>
+          <p class="faint">Revise o texto. Para salvar no harness, o título deve começar com a frase principal e a primeira frase da descrição deve usá-la naturalmente.</p>
+        </div>}
+      </section>
+
+      <section class="card stack">
+        <h3>5. Custo e confirmação</h3>
         {quoteError && <div class="notice bad">{quoteError}</div>}
         {!quote && !quoteError && <Skeleton lines={2} />}
         {quote && <>
@@ -144,10 +212,9 @@ export function Produce() {
           )}
           {!quote.whole_episode_export_available && <div class="notice warn">{quote.episode_export_blocker} Nenhum custo será reservado.</div>}
           <div class="row">
-            <button class="btn" disabled={preparing || busy} onClick={prepareTimeline}>{preparing ? 'Salvando roteiro…' : 'Preparar roteiro e montagem — sem cobrança'}</button>
+            <button class="btn" disabled={!growthPackage || preparing || busy} onClick={prepareTimeline}>{preparing ? 'Salvando roteiro…' : 'Preparar roteiro e montagem — sem cobrança de produção'}</button>
             <span class="faint" style={{ fontSize: '13px' }}>Você poderá vincular clipes e blocos de música já existentes e revisar o MP4 completo.</span>
           </div>
-          <div class="copy-preview"><b>{quote.copy.title}</b>{'\n\n'}{quote.copy.description}</div>
           <details><summary class="faint" style={{ cursor: 'pointer', fontSize: '13px' }}>Direção musical enviada ao gerador</summary><pre class="copy-preview mono" style={{ marginTop: '8px' }}>{quote.audio_prompt}</pre></details>
           <div class="row">
             <Field label="Teto desta produção (US$)" hint={`Máximo US$12 por hora. Cada faixa ainda reserva seu próprio custo.`}>
@@ -160,7 +227,7 @@ export function Produce() {
           {quote.visual.renderer_ready && quote.whole_episode_export_available && <Check checked={confirmed} onChange={setConfirmed}>Autorizo até {usd(ceiling)} para {hours}h de música original com a receita “{quote.recipe.name}”. Sem novas tentativas pagas automáticas.</Check>}
           {!quote.visual.renderer_ready && <div class="notice warn">A geração paga está bloqueada até a montagem audiovisual desta jornada estar conectada. Preparar o roteiro acima não reserva custo.</div>}
           <div class="row">
-            <button class="btn primary lg" disabled={!confirmed || !quote.whole_episode_export_available || !quote.visual.renderer_ready || !quote.visual.applied || busy || !quote.paid_enabled || overBudget || underEstimate || !settings.value} onClick={submit}><IconSpark /> {busy ? 'Autorizando…' : 'Produzir'}</button>
+            <button class="btn primary lg" disabled={!growthPackage || !confirmed || !quote.whole_episode_export_available || !quote.visual.renderer_ready || !quote.visual.applied || busy || !quote.paid_enabled || overBudget || underEstimate || !settings.value} onClick={submit}><IconSpark /> {busy ? 'Autorizando…' : 'Produzir'}</button>
             <span class="faint" style={{ fontSize: '13px' }}>A revisão só será liberada depois de o MP4 completo ficar pronto.</span>
           </div>
         </>}
