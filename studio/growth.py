@@ -176,13 +176,15 @@ def compare_reference_observations(rows):
         if len(observations)<2:continue
         older,newer=observations[-2:];days=(newer['observed_date']-older['observed_date']).days;delta=newer['public_views']-older['public_views']
         if days<=0 or delta<0:continue
-        rates.append({'reference_url':channel_url,'reference_name':newer.get('reference_name',''),'video_url':video_url,'video_title':newer.get('video_title',''),'views_per_day_approx':delta/days,'days_between_observations':days,'public_views_delta':delta,'outlier_ratio_within_channel':None})
+        rates.append({'reference_url':channel_url,'reference_name':newer.get('reference_name',''),'video_url':video_url,'video_title':newer.get('video_title',''),'content_format':newer.get('content_format','long_form'),'intent':newer.get('intent',''),'views_per_day_approx':delta/days,'days_between_observations':days,'public_views_delta':delta,'outlier_ratio_within_channel':None})
     by_channel=defaultdict(list)
-    for item in rates:by_channel[item['reference_url']].append(item)
+    for item in rates:by_channel[(item['reference_url'],item['content_format'],item['intent'])].append(item)
     for items in by_channel.values():
         baseline=statistics.median(item['views_per_day_approx'] for item in items)
         if len(items)>=3 and baseline>0:
-            for item in items:item['outlier_ratio_within_channel']=item['views_per_day_approx']/baseline
+            for item in items:
+                item['outlier_ratio_within_channel']=item['views_per_day_approx']/baseline
+                item['comparable_reference_videos']=len(items)
     return {'comparisons':rates,'note':'Velocidade aproximada por capturas públicas; não é VPH oficial e não revela CTR, impressões ou retenção dos outros canais.'}
 
 def ranked_search_phrases(rows,limit=12):
@@ -325,7 +327,7 @@ def save_channel_observation(cid:uuid.UUID,body:ChannelGrowthObservation):
     return {'id':oid,'source':'manual_youtube_studio','interpretation_note':CAUTION}
 
 
-def _growth_opportunities(channel_row,video_rows,previous_row=None):
+def _growth_opportunities(channel_row,video_rows,previous_row=None,reference_rows=None):
     actions=[]
     current=(channel_row or {}).get('metrics') or {}
     if isinstance(current,str):current=json.loads(current)
@@ -386,6 +388,15 @@ def _growth_opportunities(channel_row,video_rows,previous_row=None):
                 actions.append({'priority':'medium','kind':'trend_fit','title':'Sinal de busca do Studio alinhado ao catálogo','evidence':f'“{idea}” foi registrado em Tendências/Pesquisa e tem termos em comum com “{title}”. Isso é compatibilidade editorial, não volume de busca.','next_action':'Avalie se esse tema merece prioridade em uma próxima pauta. Confirme a aderência ao conteúdo e compare impressões, CTR por origem, tempo assistido e inscritos após uma janela equivalente.','source_video_url':row.get('video_url')})
             else:
                 actions.append({'priority':'low','kind':'trend_review','title':'Revise os sinais de busca registrados no Studio','evidence':'Há termos registrados, mas os títulos/temas dos vídeos ainda não permitem uma correspondência clara.','next_action':'Registre título e tema nos snapshots por vídeo; descarte qualquer termo que não corresponda ao conteúdo do canal.'})
+    # External outliers are only useful as references when compared to the source
+    # channel's own observed pace; never treat them as channel demand forecasts.
+    reference_rates=compare_reference_observations(reference_rows or [])['comparisons']
+    candidates=[item for item in reference_rates if item.get('outlier_ratio_within_channel') is not None]
+    if candidates:
+        candidate=max(candidates,key=lambda item:item['outlier_ratio_within_channel'])
+        ratio=candidate['outlier_ratio_within_channel']
+        if ratio>=1.5:
+            actions.append({'priority':'medium' if ratio>=2 else 'low','kind':'reference_outlier','title':'Investigue um outlier de referência','evidence':f"“{candidate['video_title'] or candidate['video_url']}” acumulou cerca de {candidate['views_per_day_approx']:.1f} visualizações públicas/dia entre capturas, {ratio:.1f}× a mediana de {candidate['comparable_reference_videos']} vídeos do mesmo canal, formato e intenção ({candidate['days_between_observations']} dias de intervalo). Isso não revela impressões, CTR, retenção nem demanda do nosso canal.",'next_action':'Registre o mecanismo (intenção, cenário, duração ou estrutura de título) como hipótese original. Compare com a identidade do canal e valide somente por impressões, CTR por origem e tempo assistido no YouTube Studio.','source_video_url':candidate['video_url']})
     # Choose a channel-owned title/thumbnail test only against an internal cohort.
     cohort=[];seen=set()
     for row in video_rows:
@@ -415,6 +426,8 @@ def growth_opportunities(cid:uuid.UUID):
         if latest:
             previous=c.execute('SELECT observed_date,"window",metrics FROM channel_growth_observations WHERE channel_id=%s AND "window"=%s AND observed_date<%s ORDER BY observed_date DESC,created_at DESC LIMIT 1',(cid,latest['window'],latest['observed_date'])).fetchone()
         rows=c.execute('SELECT video_url,observed_date,"window",video_age_days,content_format,intent,metrics FROM analytics_snapshots WHERE channel_id=%s ORDER BY observed_date DESC,created_at DESC LIMIT 1000',(cid,)).fetchall()
+        reference_rows=c.execute('''SELECT reference_name,reference_url,reference_type,video_url,video_title,published_date,observed_date,public_views,content_format,intent
+                                    FROM reference_observations WHERE channel_id=%s ORDER BY reference_url,video_url,observed_date''',(cid,)).fetchall()
     for row in rows:
         if isinstance(row.get('metrics'),str):row['metrics']=json.loads(row['metrics'])
     # Use only the newest record per video/window so repeated captures do not inflate the cohort.
@@ -424,7 +437,7 @@ def growth_opportunities(cid:uuid.UUID):
         if key in keys:continue
         keys.add(key);unique.append(row)
     return {'as_of':latest.get('observed_date') if latest else None,'window':latest.get('window') if latest else None,
-            'actions':_growth_opportunities(latest,unique,previous),'source':'manual_youtube_studio','automated_actions':False,
+            'actions':_growth_opportunities(latest,unique,previous,reference_rows),'source':'manual_youtube_studio_and_public_reference_captures','automated_actions':False,
             'interpretation_note':CAUTION}
 
 
