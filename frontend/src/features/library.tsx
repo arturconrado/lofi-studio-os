@@ -50,7 +50,7 @@ function Publications({ cid }: { cid: string }) {
     if (ok !== undefined) { setEditing(null); pubs.reload(); }
   };
   const generateGrowthPackage = async (source: Publication, ready = false) => {
-    if (!growthCost) { setGrowthNote('Marque a autorização de custo máximo de US$ 0,02 antes de gerar.'); return; }
+    if (!growthCost) { setGrowthNote('Marque a autorização de custo máximo de US$ 0,10 antes de gerar.'); return; }
     setGrowthBusy(true); setGrowthNote('Reunindo observações do YouTube Studio e histórico comparável…');
     const requestId = uuid();
     const result = await attempt(() => post<any>(`/api/growth/${cid}/package-suggestion`, {
@@ -127,7 +127,7 @@ function Publications({ cid }: { cid: string }) {
         {readyForReview?.pilot_id && <a class="btn" target="_blank" rel="noreferrer" href={`/api/ambient/pilots/${readyForReview.pilot_id}/video`}>Assistir ao vídeo completo</a>}
         <label class="field"><span>Visibilidade</span><select class="select" value={readyPrivacy} onChange={e => setReadyPrivacy((e.target as HTMLSelectElement).value)}><option value="private">Privado</option><option value="unlisted">Não listado</option><option value="public">Público</option></select></label>
         <label class="field"><span>Público infantil</span><select class="select" value={readyKids === null ? '' : String(readyKids)} onChange={e => setReadyKids((e.target as HTMLSelectElement).value === '' ? null : (e.target as HTMLSelectElement).value === 'true')}><option value="">Selecione</option><option value="false">Não foi criado para crianças</option><option value="true">Foi criado para crianças</option></select></label>
-        <Check checked={growthCost} onChange={setGrowthCost}>Autorizo o custo máximo de US$ 0,02 para gerar a sugestão</Check>
+        <Check checked={growthCost} onChange={setGrowthCost}>Autorizo o custo máximo de US$ 0,10 para gerar a sugestão</Check>
         <button class="btn" disabled={growthBusy || !readyForReview} onClick={() => readyForReview && generateGrowthPackage(readyForReview, true)}>{growthBusy ? 'Gerando…' : 'Gerar título e descrição com Growth'}</button>
         {growthNote && <p class="faint" role="status">{growthNote}</p>}
         <label class="field"><span>Título</span><input class="input" maxLength={100} value={readyTitle} onInput={e => setReadyTitle((e.target as HTMLInputElement).value)} /></label>
@@ -139,7 +139,7 @@ function Publications({ cid }: { cid: string }) {
       </Dialog>
       <Dialog open={!!editing} onClose={() => setEditing(null)} title={`Título e descrição · ${editing?.title || ''}`}>
         <p class="faint" style={{ fontSize: '13px' }}>Gere uma sugestão contextual com os termos observados no YouTube Studio e revise o resultado antes de atualizar o vídeo.</p>
-        <Check checked={growthCost} onChange={setGrowthCost}>Autorizo o custo máximo de US$ 0,02 para gerar a sugestão</Check>
+        <Check checked={growthCost} onChange={setGrowthCost}>Autorizo o custo máximo de US$ 0,10 para gerar a sugestão</Check>
         <button class="btn" disabled={growthBusy || !editing} onClick={() => editing && generateGrowthPackage(editing)}>{growthBusy ? 'Gerando…' : 'Gerar título e descrição com Growth'}</button>
         {growthNote && <p class="faint" role="status">{growthNote}</p>}
         <label class="field"><span>Título</span><input class="input" maxLength={100} value={editTitle} onInput={e => setEditTitle((e.target as HTMLInputElement).value)} /></label>

@@ -12,11 +12,11 @@ export function Settings() {
   const [form, setForm] = useState<any>(null);
   const [key, setKey] = useState('');
   const [confirmPaid, setConfirmPaid] = useState(false);
-  useEffect(() => { if (s.data) setForm({ ...s.data }); }, [s.data]);
+  useEffect(() => { if (s.data) setForm({ ...s.data, budget_limit_usd: s.data.budget_limit_usd ?? s.data.total_limit }); }, [s.data]);
   if (!form) return <Skeleton lines={6} />;
   const b = settings.value;
   const save = async () => {
-    const r = await attempt(() => put('/api/settings', { enabled: form.enabled, model: form.model, daily_limit: Number(form.daily_limit), total_limit: Number(form.total_limit), api_key: key || null, confirm_paid_pilot: confirmPaid }), 'Ajustes salvos');
+    const r = await attempt(() => put('/api/settings', { enabled: form.enabled, model: form.model, budget_limit_usd: Number(form.budget_limit_usd), api_key: key || null, confirm_paid_pilot: confirmPaid }), 'Ajustes salvos');
     if (r) { setKey(''); setConfirmPaid(false); s.reload(); loadSettings(); }
   };
   return (
@@ -30,12 +30,10 @@ export function Settings() {
       <section class="card stack">
         <div class="row"><h3 style={{ flex: 1 }}>Geração paga</h3>{form.key_configured ? <Pill tone="ok">Chave salva</Pill> : <Pill tone="warn">Sem chave</Pill>}</div>
         <Field label="Chave OpenRouter" hint="Começa com sk-or-. Fica criptografada; preencha só para trocar."><input class="input" type="password" autoComplete="off" value={key} onInput={e => setKey((e.target as HTMLInputElement).value)} /></Field>
-        <div class="grid cols-2">
-          <Field label="Limite diário (US$)"><input class="input" type="number" min={0} max={40} step={0.01} value={form.daily_limit} onInput={e => setForm({ ...form, daily_limit: (e.target as HTMLInputElement).value })} /></Field>
-          <Field label="Limite acumulado (US$)"><input class="input" type="number" min={0} max={40} step={0.01} value={form.total_limit} onInput={e => setForm({ ...form, total_limit: (e.target as HTMLInputElement).value })} /></Field>
-        </div>
+        <Field label="Limite global de gastos com IA (US$)" hint="Um único saldo para sugestões, imagens, áudio, vídeo e produções. Máximo configurável: US$ 1.000. Aumentar o limite só autoriza novas reservas; não inicia uma geração."><input class="input" type="number" min={0} max={1000} step={1} value={form.budget_limit_usd} onInput={e => setForm({ ...form, budget_limit_usd: (e.target as HTMLInputElement).value })} /></Field>
+        {b && <p class="faint">Disponível: {usd(Math.max(0, Number(form.budget_limit_usd || 0) - Number(b.reserved || 0)))} de {usd(form.budget_limit_usd || 0)} · reservado ou comprometido: {usd(b.reserved)}</p>}
         <Check checked={form.enabled} onChange={v => setForm({ ...form, enabled: v })}>Geração paga ativada</Check>
-        <Check checked={confirmPaid} onChange={setConfirmPaid}>Autorizo gastos até estes limites (necessário para ativar ou aumentar)</Check>
+        <Check checked={confirmPaid} onChange={setConfirmPaid}>Autorizo gastos dentro do limite global (necessário para ativar ou aumentar)</Check>
         <button class="btn primary" style={{ alignSelf: 'flex-start' }} disabled={!canAdmin.value} onClick={save}>Salvar</button>
         {!canAdmin.value && <p class="faint">Somente proprietários e administradores alteram limites.</p>}
       </section>

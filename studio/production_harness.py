@@ -40,7 +40,7 @@ class ProductionSpec(BaseModel):
     character_reference: str = Field(default='', max_length=200)
     cat_reference: str = Field(default='', max_length=200)
     program_budget_usd: float = Field(default=0, ge=0, le=40)
-    asset_budget_usd: float = Field(default=0, ge=0, le=2)
+    asset_budget_usd: float = Field(default=0, ge=0, le=1000)
     markers: list[Marker] = Field(default_factory=list, max_length=12)
     weather: Literal['scene_default', 'clear', 'rain', 'snow', 'fog'] = 'scene_default'
     time_of_day: Literal['scene_default', 'static', 'sunset_to_night', 'night_stars', 'night_to_dawn', 'day_to_dusk'] = 'scene_default'

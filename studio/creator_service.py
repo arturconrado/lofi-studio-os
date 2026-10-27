@@ -27,8 +27,6 @@ def visual(bid,plan,folder):
    c.execute('SELECT pg_advisory_xact_lock(192837467)')
    from .financial import check_available
    check_available(c,Decimal('.15'))
-   from .creator import usage
-   if usage(c)+Decimal('.15')>runtime.settings(c)['total_limit']:raise ValueError('Limite acumulado insuficiente para o visual')
    c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,'creator_image',%s,%s,.15,'RUNNING')",(task,IMAGE_MODEL,json.dumps({'batch':bid})));c.commit()
   # One original image, exact provider, no fallback or paid retry.
   r=client.post('https://openrouter.ai/api/v1/images',headers={'Authorization':'Bearer '+runtime.key(),'X-Title':'Lo-Fi Creator Portal'},json={'model':IMAGE_MODEL,'prompt':plan['visual_prompt']+' '+((plan.get('recipe') or {}).get('visual') or {}).get('image_prompt_suffix','Original painterly lo-fi illustration, 16:9, fictional adult person, no text or watermark.')+' Window right 61%-98%, top 4%-59%. Mug at 25% width,65% height. Static composition for gentle local animation.','resolution':'2K','aspect_ratio':'16:9','n':1,'provider':{'only':['seed'],'allow_fallbacks':False}});r.raise_for_status();response=r.json()

@@ -104,7 +104,7 @@ def clean(raw):
 
 @router.post('')
 def propose(body:ProposalRequest):
-    if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva máxima de US$0,02 para as sugestões')
+    if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva de até US$0,10 para as sugestões')
     from .form_assistant import bounded_json_call
     user=json.dumps({'brief':body.brief,'creativity':body.creativity,'context':context(body.spec)},ensure_ascii=False)
     items,reused,cost=bounded_json_call(body.request_id,body.channel_id,KIND,{'draft_id':str(body.draft_id) if body.draft_id else None},

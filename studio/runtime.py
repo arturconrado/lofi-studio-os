@@ -17,9 +17,12 @@ def settings(conn=None):
 
 def limits(daily,total):
     daily,total=Decimal(str(daily)),Decimal(str(total))
-    if not daily.is_finite() or not total.is_finite() or daily<0 or total<0 or daily>total or total>40:
-        raise ValueError('Piloto: 0 ≤ limite diário ≤ limite total ≤ US$ 40')
-    return daily.quantize(Decimal('.01')),total.quantize(Decimal('.01'))
+    # `daily` remains accepted for old clients; one cumulative ceiling now governs
+    # every AI workflow. Keep the persisted legacy column synchronized.
+    if not daily.is_finite() or not total.is_finite() or daily<0 or total<0 or total>1000:
+        raise ValueError('Defina um limite acumulado entre US$ 0 e US$ 1.000')
+    total=total.quantize(Decimal('.01'))
+    return total,total
 
 def key():
     s=settings()
@@ -31,7 +34,7 @@ def key():
 
 def public_settings():
     s=settings()
-    return {k:s[k] for k in ('enabled','model','daily_limit','total_limit')} | {'key_configured':bool(s['api_key_encrypted'] or (not active_workspace() and os.getenv('OPENROUTER_API_KEY'))),'currency':'USD','max_pilot_usd':40}
+    return {k:s[k] for k in ('enabled','model','daily_limit','total_limit')} | {'budget_limit_usd':s['total_limit'],'key_configured':bool(s['api_key_encrypted'] or (not active_workspace() and os.getenv('OPENROUTER_API_KEY'))),'currency':'USD','max_pilot_usd':1000}
 
 def availability():
     with httpx.Client(timeout=20) as client:
@@ -46,12 +49,7 @@ def reserve(conn,model,automated=False):
     if not s['enabled']:raise ValueError('Geração desativada nas Configurações')
     price=Decimal(MODELS[model]['price'])
     if not automated and conn.execute('SELECT enabled FROM factory_control WHERE id=1').fetchone()['enabled']:raise ValueError('Pause a esteira automática antes de usar geração manual')
-    usage=conn.execute("SELECT COALESCE(sum(GREATEST(estimated_cost,COALESCE(actual_cost,0))),0) total, COALESCE(sum(GREATEST(estimated_cost,COALESCE(actual_cost,0))) FILTER (WHERE created_at >= date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),0) daily FROM jobs WHERE budget_reserved").fetchone()
-    usage['total']+=conn.execute('SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks').fetchone()['n']
-    usage['daily']+=conn.execute("SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE created_at >= date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'").fetchone()['n']
-    if conn.execute("SELECT to_regclass('public.creator_plans') t").fetchone()['t']:
-        usage['total']+=conn.execute('SELECT COALESCE(sum(GREATEST(reserved,COALESCE(actual_cost,0))),0) n FROM creator_plans').fetchone()['n']
-        usage['daily']+=conn.execute("SELECT COALESCE(sum(GREATEST(reserved,COALESCE(actual_cost,0))),0) n FROM creator_plans WHERE created_at >= date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'").fetchone()['n']
-    if usage['total']+price>s['total_limit'] or usage['daily']+price>s['daily_limit']:
-        raise ValueError('Limite de gastos atingido. Pedidos com custo incerto continuam reservados.')
+    from .financial import total_usage
+    if total_usage(conn)+price>s['total_limit']:
+        raise ValueError('Saldo global insuficiente. Reservas e pedidos sem custo confirmado continuam ocupando o limite.')
     return price

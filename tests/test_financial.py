@@ -5,18 +5,15 @@ from studio import financial,creator
 from studio.creator import PlanRequest
 from uuid import uuid4
 
-class Query:
-    def __init__(self,result):self.result=result
-    def fetchone(self):return self.result
-class Connection:
-    def execute(self,*args):return Query({'total':Decimal('2.0'),'daily':Decimal('1.0')})
+class Connection:pass
 
-def test_disabled_generation_and_daily_limit(monkeypatch):
+def test_disabled_generation_and_global_limit(monkeypatch):
     monkeypatch.setattr(financial.runtime,'settings',lambda c:{'enabled':False})
     with pytest.raises(HTTPException):financial.check_available(Connection(),'.02')
-    monkeypatch.setattr(financial.runtime,'settings',lambda c:{'enabled':True,'daily_limit':Decimal('1.01'),'total_limit':Decimal('40')})
+    monkeypatch.setattr(financial,'total_usage',lambda c:Decimal('1.0'))
+    monkeypatch.setattr(financial.runtime,'settings',lambda c:{'enabled':True,'total_limit':Decimal('1.01')})
     with pytest.raises(HTTPException):financial.check_available(Connection(),'.02')
-    monkeypatch.setattr(financial.runtime,'settings',lambda c:{'enabled':True,'daily_limit':Decimal('3'),'total_limit':Decimal('40')})
+    monkeypatch.setattr(financial.runtime,'settings',lambda c:{'enabled':True,'total_limit':Decimal('1.02')})
     financial.check_available(Connection(),'.02')
 
 def test_paid_plan_requires_explicit_confirmation(monkeypatch):
