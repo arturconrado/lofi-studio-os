@@ -1,12 +1,12 @@
 import os,json,uuid
 import pytest
 from test_authentication import client,signup
-from test_productions import studio,sql
+from test_productions import studio,sql,growth_metadata
 pytestmark=pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
 
 
 def produced_hour(client,owner,h,cid):
-    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True},headers=h).json()
+    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True,'youtube_metadata':growth_metadata()},headers=h).json()
     bid=sql(owner,'SELECT program_id FROM production_blocks WHERE production_id=%s',(p['id'],))[0]['program_id']
     for n in (1,2):
         tid,jid=f'{bid}-{n:03}',uuid.uuid4()
@@ -40,7 +40,7 @@ def test_inbox_gathers_gates_without_prechecked_confirmations(client,monkeypatch
 
 def test_inbox_lists_pauses_and_pixel_references(client,monkeypatch):
     owner,h,cid,recipes=studio(client,monkeypatch)
-    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True},headers=h).json()
+    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True,'youtube_metadata':growth_metadata()},headers=h).json()
     sql(owner,"UPDATE production_batches SET state='failed',detail='Provider request failed'")
     client.post(f"/api/creator/productions/{p['id']}/advance",headers=h)
     base=recipes['8bit-lofi']['data']
@@ -59,7 +59,7 @@ def test_events_feed_triggers_isolation_and_stream(client,monkeypatch):
     owner,h,cid,_=studio(client,monkeypatch)
     events.maintain(owner['workspace_id'])
     last,_=events.fetch(owner['workspace_id'],None)
-    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True},headers=h).json()
+    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True,'youtube_metadata':growth_metadata()},headers=h).json()
     events.maintain(owner['workspace_id'])  # tables created after the first pass get triggers now
     sql(owner,"UPDATE production_batches SET state='producing'")
     sql(owner,"UPDATE radio_channels SET state='live' WHERE id=%s",(cid,))

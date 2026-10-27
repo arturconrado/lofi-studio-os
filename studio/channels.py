@@ -25,6 +25,8 @@ def init(c):
  c.execute("ALTER TABLE program_metadata ADD COLUMN IF NOT EXISTS alternatives JSONB NOT NULL DEFAULT '[]'")
  c.execute("ALTER TABLE program_metadata ADD COLUMN IF NOT EXISTS keywords JSONB NOT NULL DEFAULT '[]'")
  c.execute("ALTER TABLE program_metadata ADD COLUMN IF NOT EXISTS intent TEXT NOT NULL DEFAULT 'coding_focus'")
+ c.execute("ALTER TABLE program_metadata ADD COLUMN IF NOT EXISTS primary_phrase TEXT NOT NULL DEFAULT ''")
+ c.execute("ALTER TABLE program_metadata ADD COLUMN IF NOT EXISTS publication_metadata JSONB NOT NULL DEFAULT '{}'::jsonb")
  c.execute("ALTER TABLE tracks ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''")
  c.execute("ALTER TABLE tracks ADD COLUMN IF NOT EXISTS channel_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'")
  c.execute("UPDATE tracks t SET channel_id=b.channel_id FROM production_batches b WHERE t.id LIKE b.id||'-%' AND t.channel_id<>b.channel_id")

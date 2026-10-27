@@ -47,12 +47,9 @@ def secure_session(url):
     return url
 
 def validate_growth_packaging(title,description,primary_phrase):
-    phrase=' '.join(primary_phrase.strip().split())
-    if len(phrase)<2 or len(phrase)>50:raise HTTPException(422,'Escolha uma frase principal curta e específica para este vídeo.')
-    if phrase.casefold() not in title.strip()[:60].casefold():raise HTTPException(422,'Inclua a frase principal no início do título, com leitura natural.')
-    opening=re.split(r'[.!?](?:\s|$)',description.strip(),maxsplit=1)[0]
-    if phrase.casefold() not in opening.casefold():raise HTTPException(422,'Use a mesma frase naturalmente na primeira frase da descrição.')
-    return phrase
+    from .youtube_metadata import validate_metadata
+    try:return validate_metadata(title,description,primary_phrase,min_description=0,max_description=5000)['primary_phrase']
+    except ValueError as error:raise HTTPException(422,str(error)) from None
 
 def validate_growth_receipt(c,channel_id,publication_metadata):
     native=(publication_metadata or {}).get('native_growth') or {}

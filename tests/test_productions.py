@@ -6,6 +6,12 @@ pytestmark=pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Di
 
 SNOWY='1192acca-4cea-5d5b-9cf2-0a436909fc0e'
 
+def growth_metadata():
+    return {'title':'lofi music for coding in a cozy focus session',
+            'description':'Lofi music for coding in a cozy focus session. This warm instrumental mix gives a quiet backdrop for a focused work block, programming, or study.\n\n'+('Settle into the scene, keep your notes close, and let the mellow lo-fi sound support a calm and steady pace while you work through the next task. ' * 5),
+            'primary_phrase':'lofi music for coding','intent':'coding_focus',
+            'native_growth':{'generated':True,'request_id':str(uuid.uuid4())},'growth_context':{}}
+
 
 def studio(client,monkeypatch,limit=100,enabled=True,renderer_ready=True):
     from studio import runtime
@@ -60,7 +66,7 @@ def test_quote_books_nothing_and_uses_recipe(client,monkeypatch):
 
 def test_one_confirmation_books_blocks_in_order(client,monkeypatch):
     owner,h,cid,recipes=studio(client,monkeypatch)
-    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':2,'idea':'pixel snow','ceiling_usd':5}
+    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':2,'idea':'pixel snow','ceiling_usd':5,'youtube_metadata':growth_metadata()}
     assert client.post('/api/creator/productions',json=body,headers=h).status_code==422
     first=client.post('/api/creator/productions',json=body|{'confirm_ceiling':True,'accept_without_motion':True},headers=h)
     assert first.status_code==200,first.text
@@ -83,7 +89,7 @@ def test_one_confirmation_books_blocks_in_order(client,monkeypatch):
 
 def test_failure_pauses_without_retry_and_resume_is_explicit(client,monkeypatch):
     owner,h,cid,_=studio(client,monkeypatch)
-    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True},headers=h).json()
+    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True,'youtube_metadata':growth_metadata()},headers=h).json()
     sql(owner,"UPDATE production_batches SET state='failed',detail='Provider request failed'")
     paused=client.post(f"/api/creator/productions/{p['id']}/advance",headers=h).json()
     assert paused['status']=='PAUSADO' and 'Provider request failed' in paused['error']['message'] and paused['next_action']['kind']=='resume'
@@ -94,13 +100,13 @@ def test_failure_pauses_without_retry_and_resume_is_explicit(client,monkeypatch)
 
 def test_review_status_and_ceiling_guards(client,monkeypatch):
     owner,h,cid,recipes=studio(client,monkeypatch,limit=4)
-    too_much=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':2,'ceiling_usd':5,'confirm_ceiling':True,'accept_without_motion':True},headers=h)
+    too_much=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':2,'ceiling_usd':5,'confirm_ceiling':True,'accept_without_motion':True,'youtube_metadata':growth_metadata()},headers=h)
     assert too_much.status_code==409
-    low=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':1,'confirm_ceiling':True,'accept_without_motion':True},headers=h)
+    low=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':1,'confirm_ceiling':True,'accept_without_motion':True,'youtube_metadata':growth_metadata()},headers=h)
     assert low.status_code==422
-    other=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True,'recipe_id':recipes['jazz-lofi']['id']},headers=h)
+    other=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True,'recipe_id':recipes['jazz-lofi']['id'],'youtube_metadata':growth_metadata()},headers=h)
     assert other.status_code==422
-    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True},headers=h).json()
+    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True,'youtube_metadata':growth_metadata()},headers=h).json()
     sql(owner,"UPDATE production_batches SET state='ready',audio_key='a',video_key='v',manifest_key='m'")
     completed_export(owner,p['blocks'][0]['program_id'])
     waiting=client.get(f"/api/creator/productions/{p['id']}").json()
@@ -111,7 +117,7 @@ def test_review_status_and_ceiling_guards(client,monkeypatch):
 
 def test_disabled_generation_blocks_authorization(client,monkeypatch):
     owner,h,cid,_=studio(client,monkeypatch,enabled=False)
-    r=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True},headers=h)
+    r=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True,'youtube_metadata':growth_metadata()},headers=h)
     assert r.status_code==409 and 'Ajustes' in r.text
 
 
@@ -119,7 +125,7 @@ def test_legacy_programs_listed_with_derived_stage(client,monkeypatch):
     owner,h,cid,_=studio(client,monkeypatch)
     sql(owner,"INSERT INTO production_batches(id,state,target_seconds,budget,channel_id,audio_key,video_key,manifest_key) VALUES('LOFI-OLD1','ready',3600,2,%s,'a','v','m')",(cid,))
     completed_export(owner,'LOFI-OLD1')
-    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True},headers=h).json()
+    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'accept_without_motion':True,'youtube_metadata':growth_metadata()},headers=h).json()
     programs=client.get('/api/creator/productions/legacy',params={'channel_id':cid}).json()['programs']
     assert [x['program_id'] for x in programs]==['LOFI-OLD1'] and programs[0]['stage']=='AGUARDANDO_REVISAO'
 
@@ -127,7 +133,7 @@ def test_legacy_programs_listed_with_derived_stage(client,monkeypatch):
 def test_permanent_delete_requires_exact_phrase_and_purges_only_owned_media(client,monkeypatch):
     from studio import core
     owner,h,cid,_=studio(client,monkeypatch)
-    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True},headers=h).json()
+    p=client.post('/api/creator/productions',json={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'youtube_metadata':growth_metadata()},headers=h).json()
     bid=p['blocks'][0]['program_id']
     keys=[f'programs/{bid}/audio.mp3',f'programs/{bid}/visual.mp4',f'programs/{bid}/manifest.json']
     sql(owner,"UPDATE productions SET state='done' WHERE id=%s",(p['id'],))
@@ -156,7 +162,7 @@ def test_scheduled_movements_or_missing_renderer_block_before_any_reservation(cl
     assert [(e['minute'],e['sequence']) for e in v['planned']]==[(15,'breath_pet'),(30,'window_glance'),(45,'breath_pet')]
     assert v['mode']=='timeline_pending' and not v['applied'] and v['executed']==[] and 'typing_idle' in v['missing_actions']
     assert not v['renderer_ready'] and q['whole_episode_export_available']
-    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True}
+    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'hours':1,'ceiling_usd':3,'confirm_ceiling':True,'youtube_metadata':growth_metadata()}
     refused=client.post('/api/creator/productions',json=body,headers=h)
     assert refused.status_code==409 and 'Nenhum custo foi reservado' in refused.text and not sql(owner,'SELECT 1 FROM productions')
     refused=client.post('/api/creator/productions',json=body|{'accept_without_motion':True},headers=h)
