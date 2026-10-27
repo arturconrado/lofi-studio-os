@@ -11,7 +11,7 @@ from .youtube import cipher,configured
 from .channels import profile
 router=APIRouter(prefix='/api/youtube/publications')
 UPLOAD_SCOPE='https://www.googleapis.com/auth/youtube.upload'
-FIELDS='id,channel_id,export_id,pilot_id,thumbnail_detail,title,description,intent,primary_phrase,keywords,publication_metadata,privacy,state,bytes_sent,total_bytes,video_id,actual_privacy,detail,created_at,updated_at'
+FIELDS='id,channel_id,export_id,pilot_id,thumbnail_detail,title,description,intent,primary_phrase,keywords,publication_metadata,privacy,made_for_kids,state,bytes_sent,total_bytes,video_id,actual_privacy,detail,created_at,updated_at'
 
 def ensure(c):
     c.execute('SELECT pg_advisory_xact_lock(192837480)')
@@ -133,6 +133,23 @@ def listing():
         ensure(c);rows=c.execute('SELECT '+FIELDS+' FROM youtube_publications ORDER BY created_at DESC LIMIT 100').fetchall();c.commit()
     return rows
 
+
+@router.get('/pilots/candidates')
+def pilot_candidates(channel_id:uuid.UUID):
+    """Approved, technically validated long videos that have not entered publication yet."""
+    with db() as c:
+        ensure(c);profile(c,channel_id)
+        rows=c.execute('''SELECT a.id,a.channel_id,a.title,a.report,a.plan,a.approved_at,a.created_at
+          FROM ambient_pilots a LEFT JOIN youtube_publications y ON y.pilot_id=a.id
+          WHERE a.channel_id=%s AND a.status='approved' AND y.id IS NULL
+          ORDER BY a.approved_at DESC NULLS LAST,a.created_at DESC LIMIT 100''',(channel_id,)).fetchall()
+        c.commit()
+    return [{'pilot_id':str(r['id']),'channel_id':str(r['channel_id']),'title':r['title'],
+             'seconds':float(r['report'].get('duration_seconds',0)),
+             'thumbnail_url':f"/api/ambient/pilots/{r['id']}/assets/thumbnail1",
+             'video_url':f"/api/ambient/pilots/{r['id']}/video",'approved_at':r['approved_at'],
+             'created_at':r['created_at']} for r in rows if ready_pilot(r)]
+
 @router.post('')
 def create(body:Publication):
     if not configured():raise HTTPException(503,'Configure a conexão Google.')
@@ -177,6 +194,8 @@ class ReadyAuthorization(BaseModel):
     confirm_review:bool=False
     confirm_rights:bool=False
     allow_repeat_visual:bool=False
+    privacy:Literal['public','private','unlisted']|None=None
+    made_for_kids:bool|None=None
     title:str=Field(min_length=1,max_length=100)
     description:str=Field(max_length=5000)
     intent:Literal['coding_focus','study_focus','reading_focus','sleep_relaxation']
@@ -206,8 +225,9 @@ def authorize_ready(jid:uuid.UUID,body:ReadyAuthorization):
         if not cred or not upload_allowed(json.loads(cipher().decrypt(cred['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio pelo Google no menu Canais.')
         metadata=(row.get('publication_metadata') or {})|body.publication_metadata
         c.execute("""UPDATE youtube_publications SET state='queued',youtube_channel_id=%s,title=%s,description=%s,intent=%s,
+          privacy=COALESCE(%s,privacy),made_for_kids=COALESCE(%s,made_for_kids),
           primary_phrase=%s,publication_metadata=%s::jsonb,detail='Pacote Growth revisado; publicação aguardando envio',updated_at=now() WHERE id=%s""",
-          (cred['youtube_channel_id'],body.title.strip(),body.description,body.intent,phrase,json.dumps(metadata),jid))
+          (cred['youtube_channel_id'],body.title.strip(),body.description,body.intent,body.privacy,body.made_for_kids,phrase,json.dumps(metadata),jid))
         audit(c,'PREPARED_PUBLICATION_AUTHORIZED',str(jid),json.dumps({'primary_phrase':phrase,'growth_metadata':growth_receipt}));c.commit()
     return {'id':jid,'state':'queued'}
 
@@ -534,13 +554,14 @@ def ready_pilot(row):
     seconds=float(report.get('duration_seconds',0))
     audio=float(report.get('audio_seconds',seconds))
     workshop=bool(report.get('workshop_project_id') and report.get('workshop_render_id') and report.get('seconds')==seconds and report.get('audio_seconds')==seconds)
-    duration_ok=seconds==3600 or (workshop and seconds>=60)
+    duration_ok=seconds>=3600 or (workshop and seconds>=60)
     return math.isfinite(seconds) and duration_ok and math.isfinite(audio) and abs(audio-seconds)<.15 and bool(report.get('technical_integrity') or report.get('decoded_without_errors')) and bool(report.get('full_decode_pass') or report.get('decoded_without_errors')) and re.fullmatch(r'[a-f0-9]{64}',report.get('artifact_sha256',{}).get('video','')) is not None
 
 @router.get('/pilots/{pid}/draft')
 def pilot_draft(pid:uuid.UUID):
     with db() as c:p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s',(pid,)).fetchone()
     if not p or not ready_pilot(p):raise HTTPException(409,'Este arquivo não é um vídeo completo de 1h validado tecnicamente.')
+    if p['status']!='approved':raise HTTPException(409,'Aprove o vídeo na revisão antes de preparar a publicação.')
     key=p['report'].get('delivery_assets',{}).get('description')
     from .copywriting import organic
     description='One hour of warm lofi jazz for coding, studying and quiet focus.\n\nWhat are you working on today? Tell us in the comments.\nIf these sessions help you, subscribe. New places to focus are on the way.'
@@ -557,7 +578,41 @@ def pilot_draft(pid:uuid.UUID):
     with db() as c:
         snapshots=c.execute('SELECT video_url,observed_date,"window",video_age_days,content_format,intent,metrics FROM analytics_snapshots WHERE channel_id=%s ORDER BY observed_date DESC LIMIT 1000',(p['channel_id'],)).fetchall()
     historical_context=historical_projection(snapshots,intent=intent,content_format='long_form',window='24h',age_days=1)
-    return {'pilot_id':pid,'channel_id':p['channel_id'],'title':p['title'],'description':description,'intent':intent,'observed_search_phrases':[x['phrase'] for x in phrases],'search_phrase_options':phrases,'suggested_primary_phrase':phrases[0]['phrase'] if phrases else '','historical_context':historical_context,'seconds':3600,'thumbnail_url':f'/api/ambient/pilots/{pid}/assets/thumbnail1','video_url':f'/api/ambient/pilots/{pid}/video'}
+    return {'pilot_id':pid,'channel_id':p['channel_id'],'title':p['title'],'description':description,'intent':intent,'observed_search_phrases':[x['phrase'] for x in phrases],'search_phrase_options':phrases,'suggested_primary_phrase':phrases[0]['phrase'] if phrases else '','historical_context':historical_context,'seconds':float(p['report'].get('duration_seconds',3600)),'thumbnail_url':f'/api/ambient/pilots/{pid}/assets/thumbnail1','video_url':f'/api/ambient/pilots/{pid}/video'}
+
+
+class PreparePilot(BaseModel):
+    request_id:uuid.UUID
+    channel_id:uuid.UUID
+
+
+@router.post('/pilots/{pid}/prepare')
+def prepare_pilot(pid:uuid.UUID,body:PreparePilot):
+    """Create a reviewable library entry; this does not authorize or start an upload."""
+    with db() as c:
+        ensure(c);profile(c,body.channel_id);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(pid),))
+        p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s FOR UPDATE',(pid,body.channel_id)).fetchone()
+        if not p:raise HTTPException(404,'Vídeo inexistente neste canal.')
+        if p['status']!='approved':raise HTTPException(409,'Aprove o vídeo na revisão antes de preparar a publicação.')
+        if not ready_pilot(p):raise HTTPException(409,'O vídeo precisa ter pelo menos uma hora e passar na validação técnica.')
+        existing=c.execute('SELECT '+FIELDS+' FROM youtube_publications WHERE pilot_id=%s',(pid,)).fetchone()
+        if existing:
+            c.commit();return existing
+        key=p['report'].get('delivery_assets',{}).get('description')
+        from .copywriting import organic
+        description='One hour of warm lofi jazz for coding, studying and quiet focus.\n\nWhat are you working on today? Tell us in the comments.\nIf these sessions help you, subscribe. New places to focus are on the way.'
+        if key:
+            obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=key)
+            try:description=organic(obj['Body'].read(20000).decode('utf-8'),p['title'])[:5000] or description
+            finally:obj['Body'].close()
+        intent=(p.get('plan') or {}).get('intent','coding_focus')
+        if intent not in ('coding_focus','study_focus','reading_focus','sleep_relaxation'):intent='coding_focus'
+        jid=uuid.uuid4()
+        c.execute('''INSERT INTO youtube_publications(id,request_id,channel_id,pilot_id,youtube_channel_id,title,description,intent,privacy,made_for_kids,state,detail,pilot_sha256,publication_metadata)
+          VALUES(%s,%s,%s,%s,'',%s,%s,%s,'private',false,'ready','Pronto para revisar o pacote e confirmar o envio',%s,%s::jsonb)''',
+          (jid,body.request_id,body.channel_id,pid,p['title'],description,intent,p['report']['artifact_sha256']['video'],json.dumps({'seconds':float(p['report'].get('duration_seconds',3600))})))
+        audit(c,'PILOT_PUBLICATION_PREPARED',str(jid),json.dumps({'pilot_id':str(pid),'upload_started':False}));c.commit()
+        return c.execute('SELECT '+FIELDS+' FROM youtube_publications WHERE id=%s',(jid,)).fetchone()
 
 class PilotPublication(BaseModel):
     request_id:uuid.UUID
@@ -581,6 +636,7 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
         ensure(c);profile(c,body.channel_id);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(pid),))
         p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(pid,body.channel_id)).fetchone()
         if not p:raise HTTPException(404,'Vídeo inexistente neste canal.')
+        if p['status']!='approved':raise HTTPException(409,'Aprove o vídeo na revisão antes de publicar.')
         growth_receipt=validate_growth_receipt(c,body.channel_id,body.publication_metadata)
         primary_phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase)
         pilot_intent=(p.get('plan') or {}).get('intent','coding_focus')
