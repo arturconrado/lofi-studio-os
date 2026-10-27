@@ -221,6 +221,7 @@ class PackagingSuggestionRequest(BaseModel):
     model_config=ConfigDict(extra='forbid')
     request_id:uuid.UUID
     publication_id:uuid.UUID|None=None
+    source_pilot_id:uuid.UUID|None=None
     intent:Literal['coding_focus','study_focus','reading_focus','sleep_relaxation']
     content_format:Literal['long_form','short','live_archive']='long_form'
     source_title:str=Field(min_length=1,max_length=300)
@@ -299,6 +300,11 @@ def package_suggestion(cid:uuid.UUID,body:PackagingSuggestionRequest):
                     saved_growth=(source.get('publication_metadata') or {}).get('growth_context') or {}
                     stored_context.update({str(key):str(value).strip()[:1000] for key,value in saved_growth.items() if value})
                     if source.get('primary_phrase'):stored_context['previous_primary_phrase']=str(source['primary_phrase'])[:50]
+        if body.source_pilot_id:
+            pilot=c.execute('SELECT plan FROM ambient_pilots WHERE id=%s AND channel_id=%s',(body.source_pilot_id,cid)).fetchone()
+            if not pilot:raise HTTPException(404,'Vídeo de origem não encontrado neste canal.')
+            plan=pilot.get('plan') or {}
+            stored_context.update({key:str(plan.get(key) or '').strip()[:1000] for key in ('theme','music_description','music_brief') if plan.get(key)})
     relevant=[r for r in rows if (r.get('intent') or '').strip().casefold()==body.intent.casefold() and r.get('content_format','long_form')==body.content_format]
     options=ranked_search_phrases(relevant,limit=1000)
     source_context={key:value.strip() for key,value in body.source_context.items() if value.strip()}
