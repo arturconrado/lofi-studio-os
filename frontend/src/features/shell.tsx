@@ -21,6 +21,7 @@ const SECONDARY = [
   { to: '/canais', label: 'Canais', icon: IconChannel },
   { to: '/ajustes', label: 'Ajustes', icon: IconSettings },
   { to: '/diagnostico', label: 'Diagnóstico', icon: IconPulse },
+  { to: '/analises', label: 'Análises', icon: IconPulse },
 ];
 
 const active = (to: string) => to === '/' ? path.value === '/' : path.value === to || path.value.startsWith(to + '/');
