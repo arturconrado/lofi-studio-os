@@ -6,7 +6,7 @@ Registro de recuperação dos arquivos de aplicação encontrados no container a
 - Label de revisão da imagem: `1789d4d4cf77917436aaf68a6636c8143fd91738`
 - Arquivos incluídos: `studio/`, `web/` e `requirements.txt` (128 arquivos)
 - Verificação: SHA-256 de cada arquivo comparado com o conteúdo ainda presente no container; 128 correspondências, sem ausências, extras ou divergências.
-- Comparação com `origin/main` (`4ecfca1ee2c37a1b2c298fbc3e84b0faa3a5e165`) e com o snapshot `studio-export-worker` de 2026-10-24: 82 arquivos correspondem a ambos, 5 correspondem somente à `main`, 11 somente ao snapshot arquivado e 11 não correspondem a nenhum dos dois.
+- Comparação com `origin/main` (`4ecfca1ee2c37a1b2c298fbc3e84b0faa3a5e165`) e com o snapshot `studio-export-worker` de 2026-10-24: entre 109 arquivos com caminho correspondente na `main`, 82 correspondem a ambos, 5 somente à `main`, 11 somente ao snapshot arquivado e 11 não correspondem a nenhum dos dois. Os outros 19 são bundles com hash no nome que não existem nesse caminho na `main`: 17 correspondem ao snapshot arquivado e 2 não correspondem a nenhum dos dois.
 
 O snapshot `studio-export-worker` é uma captura histórica de outro serviço/imagem compartilhada e não representa uma captura anterior direta do `youtube-publisher`. Os arquivos que não correspondem a essas referências estão preservados para análise; isso não determina se suas mudanças são necessárias ou se podem ser reconstruídas.
 
