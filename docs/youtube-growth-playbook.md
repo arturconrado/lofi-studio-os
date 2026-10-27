@@ -21,7 +21,7 @@ Example for a verified Halloween café scene (primary phrase: “Lo-fi music for
 
 ### Growth packaging suggestion
 
-In the publication review, Growth composes an editable title and description from the video's source metadata and harness context, selected intent, ranked Studio search phrases, and comparable channel history. Phrase ranking uses recurrence across snapshots and distinct videos; it is not a search-volume estimate. Historical comparisons are shown only when at least five matching videos exist. The creator enters or copies Studio observations into the portal; the portal does not automatically sync YouTube Analytics. Generating a package requires an explicit confirmation of a maximum US$0.02 cost. The result never publishes by itself and must be reviewed in the title and description fields.
+In the publication review, Growth composes an editable title and description from the video's source metadata and harness context, selected intent, ranked Studio search phrases, comparable channel history, and any qualified reference leads with matching format and intent. Reference leads can inform an editorial mechanism but cannot replace the source video's approved subject or setting; title copying and unsupported claims are disallowed. Phrase ranking uses recurrence across snapshots and distinct videos; it is not a search-volume estimate. Historical comparisons are shown only when at least five matching videos exist. The creator enters or copies Studio observations into the portal; the portal does not automatically sync YouTube Analytics. Generating a package requires an explicit confirmation of a maximum US$0.10 cost. The result never publishes by itself and must be reviewed in the title and description fields.
 
 ## After publishing
 
@@ -31,7 +31,7 @@ Review the upload at comparable ages. Compare only videos with the same intent, 
 
 ## Reference channels
 
-Capture public title, URL, publication date when known, view count, and observation date for selected reference videos. Revisit the same public video on a later date before interpreting velocity. Approximate public views per day is a difference between captures; it is not official views-per-hour, CTR, impressions, or retention. Compare a video's pace only against other captured videos from that same reference channel.
+Capture public title, URL, publication date when known, view count, and observation date for selected reference videos. Also classify format and primary viewer intent, and note the editorial mechanism worth studying (scene, duration, title structure). Revisit the same public video on a later date before interpreting velocity. Approximate public views per day is a difference between captures; it is not official views-per-hour, CTR, impressions, or retention. Compare a video's pace only against other captured videos from that same reference channel, format, and intent; require at least three videos with repeated captures before ranking an outlier. The Growth screen saves each dated capture, refreshes its comparisons, and surfaces qualified leads in the proactive overview. Use those leads to form original ideas that fit the approved content context, then evaluate them against our own YouTube Studio metrics.
 
 ## Proactive channel Growth
 
