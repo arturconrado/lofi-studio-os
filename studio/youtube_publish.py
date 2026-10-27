@@ -609,10 +609,12 @@ def prepare_pilot(pid:uuid.UUID,body:PreparePilot):
             finally:obj['Body'].close()
         intent=(p.get('plan') or {}).get('intent','coding_focus')
         if intent not in ('coding_focus','study_focus','reading_focus','sleep_relaxation'):intent='coding_focus'
+        plan=p.get('plan') or {}
+        growth_context={key:str(plan.get(key) or '').strip()[:1000] for key in ('theme','music_description','music_brief') if plan.get(key)}
         jid=uuid.uuid4()
         c.execute('''INSERT INTO youtube_publications(id,request_id,channel_id,pilot_id,youtube_channel_id,title,description,intent,privacy,made_for_kids,state,detail,pilot_sha256,publication_metadata)
           VALUES(%s,%s,%s,%s,'',%s,%s,%s,'private',false,'ready','Pronto para revisar o pacote e confirmar o envio',%s,%s::jsonb)''',
-          (jid,body.request_id,body.channel_id,pid,p['title'],description,intent,p['report']['artifact_sha256']['video'],json.dumps({'seconds':float(p['report'].get('duration_seconds',3600))})))
+          (jid,body.request_id,body.channel_id,pid,p['title'],description,intent,p['report']['artifact_sha256']['video'],json.dumps({'seconds':float(p['report'].get('duration_seconds',3600)),'growth_context':growth_context})))
         audit(c,'PILOT_PUBLICATION_PREPARED',str(jid),json.dumps({'pilot_id':str(pid),'upload_started':False}));c.commit()
         return c.execute('SELECT '+FIELDS+' FROM youtube_publications WHERE id=%s',(jid,)).fetchone()
 

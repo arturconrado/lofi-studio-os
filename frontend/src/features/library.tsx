@@ -15,7 +15,7 @@ const GROUPS: Record<string, string[]> = {
   prontos: ['PRONTO_PARA_PUBLICAR', 'PUBLICADO', 'AO_VIVO'], encerrados: ['CANCELADO', 'ARQUIVADO'],
 };
 
-type Publication = { id: string; channel_id: string; title: string; description: string; intent?: string; primary_phrase?: string; keywords?: string[]; publication_metadata?: { seconds?: number }; pilot_id?: string | null; privacy: string; made_for_kids?: boolean; actual_privacy: string | null; state: string; video_id: string | null; detail: string; bytes_sent?: number; created_at: string };
+type Publication = { id: string; channel_id: string; title: string; description: string; intent?: string; primary_phrase?: string; keywords?: string[]; publication_metadata?: { seconds?: number; growth_context?: Record<string, string> }; pilot_id?: string | null; privacy: string; made_for_kids?: boolean; actual_privacy: string | null; state: string; video_id: string | null; detail: string; bytes_sent?: number; created_at: string };
 type PilotCandidate = { pilot_id: string; channel_id: string; title: string; seconds: number; thumbnail_url: string; video_url: string; approved_at: string | null; created_at: string };
 const PUB_STATE: Record<string, [string, string]> = { uploaded: ['ok', 'No YouTube'], ready: ['ok', 'Pronto para publicar'], queued: ['info', 'Na fila'], uploading: ['violet', 'Enviando'], held: ['', 'Pausado pela agenda'],
   interrupted: ['warn', 'Interrompido'], uncertain: ['warn', 'Incerto'], failed: ['bad', 'Falhou'], deleted: ['', 'Excluído'] };
@@ -55,12 +55,12 @@ function Publications({ cid }: { cid: string }) {
     const requestId = uuid();
     const result = await attempt(() => post<any>(`/api/growth/${cid}/package-suggestion`, {
       request_id: requestId, intent: source.intent || 'coding_focus', content_format: 'long_form',
-      source_title: source.title, source_description: source.description || '', primary_phrase: source.primary_phrase || '', confirm_cost: true,
+      source_title: source.title, source_description: source.description || '', source_context: source.publication_metadata?.growth_context || {}, primary_phrase: source.primary_phrase || '', confirm_cost: true,
     }), 'Sugestão nativa pronta para revisar');
     if (result) {
       if (ready) { setReadyTitle(result.title); setReadyDescription(result.description); setReadyPhrase(result.primary_phrase); setReadyMetadata({ native_growth: { generated: true, request_id: requestId, primary_phrase_source: result.primary_phrase_source, search_phrase_options: result.search_phrase_options, historical_context: result.historical_context, cost_usd: result.cost_usd ?? null, generated_at: new Date().toISOString() } }); }
       else { setEditTitle(result.title); setText(result.description); setEditPhrase(result.primary_phrase); setEditMetadata({ native_growth: { generated: true, request_id: requestId, primary_phrase_source: result.primary_phrase_source, search_phrase_options: result.search_phrase_options, historical_context: result.historical_context, cost_usd: result.cost_usd ?? null, generated_at: new Date().toISOString() } }); setConfirmEdit(false); }
-      setGrowthNote(`Sugestão baseada em ${result.primary_phrase_source === 'observed_youtube_studio' ? 'observações do YouTube Studio' : result.primary_phrase_source === 'user_selected' ? 'sua frase escolhida' : 'contexto do vídeo'}${result.cost_usd != null ? ` · custo: US$ ${Number(result.cost_usd).toFixed(4)}` : ''}. Revise antes de salvar.`);
+      setGrowthNote(`Sugestão baseada em ${result.primary_phrase_source === 'observed_youtube_studio_contextual' ? 'termos do YouTube Studio compatíveis com o vídeo' : result.primary_phrase_source === 'user_selected' ? 'sua frase escolhida e compatível com o vídeo' : 'contexto do vídeo'}${result.cost_usd != null ? ` · custo: US$ ${Number(result.cost_usd).toFixed(4)}` : ''}. Revise antes de salvar.`);
       setGrowthCost(false);
     }
     setGrowthBusy(false);
