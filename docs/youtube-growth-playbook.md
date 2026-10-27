@@ -33,6 +33,12 @@ Review the upload at comparable ages. Compare only videos with the same intent, 
 
 Capture public title, URL, publication date when known, view count, and observation date for selected reference videos. Revisit the same public video on a later date before interpreting velocity. Approximate public views per day is a difference between captures; it is not official views-per-hour, CTR, impressions, or retention. Compare a video's pace only against other captured videos from that same reference channel.
 
+## Proactive channel Growth
+
+The Growth overview turns manually recorded YouTube Studio observations into a short, evidence-linked priority list. Record channel-level views, impressions, CTR, watch time, average view duration, net subscribers, monthly audience, new/casual/regular audience, traffic-source mix, end-screen click rate, and current Studio search/trend phrases with the date and 7/28/90-day window. Record per-video title and approved content theme with each metric snapshot so trend fit is checked against the actual catalog.
+
+Use the signal to propose the next measurable review: track net subscribers per 1,000 views across equivalent windows; compare traffic-source mix and CTR/watch duration by source; inspect end-screen continuity; convert discovery into returning viewers; and compare CTR only within at least three long-form videos with 28-day snapshots and 100+ impressions each. A trend phrase that overlaps a catalog title/theme is editorial fit only, not search volume or a forecast. Missing values stay unknown. The engine does not publish, alter packaging, edit settings, generate Shorts, or claim causality.
+
 ## Decisions
 
 - Low impressions with a relevant topic: review topic timing and whether the channel has enough comparable history before changing packaging.
