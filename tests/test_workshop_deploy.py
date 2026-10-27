@@ -23,3 +23,12 @@ PG=fixture
     result=subprocess.run(['bash','-c',stub+check],env=env,capture_output=True,text=True)
     assert (result.returncode==0) is success
     if success: assert Path(str(archive)+'.list').read_text()==output
+
+
+def test_youtube_publisher_deploy_is_versioned_and_upload_safe():
+    script=Path('ops/auto-deploy.sh').read_text()
+    assert 'SERVICES=(studio creator export-worker youtube-publisher)' in script
+    assert "FROM youtube_publications WHERE state='uploading'" in script
+    assert "'youtube-publisher'):d['services'][s]['image']" in script
+    assert 'studio.youtube_publish' in script
+    assert 'for s in "${SERVICES[@]}"; do' in script

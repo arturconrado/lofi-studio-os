@@ -2,16 +2,16 @@
 # Automatic production deploy, run on the VPS as the forced command of the GitHub deploy key.
 #
 # Input: SSH_ORIGINAL_COMMAND="deploy <sha>" and a tar of studio/, web/ and requirements.txt on stdin.
-# Updates only studio, creator and export-worker. Radio, channel-radio, the YouTube publisher and
-# the music worker stay manual. Exits 75 (try later) while work is in progress, and rolls back on
-# a failed health check.
+# Updates studio, creator, export-worker and youtube-publisher. Radio, channel-radio and the music
+# worker stay manual. Exits 75 (try later) while work is in progress, and rolls back on a failed
+# health check.
 set -euo pipefail
 
 ROOT=/opt/lofi-studio-os-releases
 COMPOSE_DIR=$ROOT/d877875
 COMPOSE=$COMPOSE_DIR/compose.production-final.private.json
 PROJECT=lofi-vibe-coding
-SERVICES=(studio creator export-worker)
+SERVICES=(studio creator export-worker youtube-publisher)
 BACKUPS=/srv/lofi-backups
 PG=clipbr-vps-postgres-1
 
@@ -33,6 +33,7 @@ busy=$(sql <<'EOF'
 SELECT (SELECT count(*) FROM production_batches WHERE state IN ('queued','producing','waiting'))
      + (SELECT count(*) FROM export_jobs WHERE state IN ('queued','running'))
      + (SELECT count(*) FROM factory_tasks WHERE status IN ('QUEUED','RUNNING','SUBMITTING'))
+     + (SELECT count(*) FROM youtube_publications WHERE state='uploading')
      + (SELECT count(*) FROM radio_channels WHERE desired='live')
      + (SELECT count(*) FROM broadcast_control WHERE desired='live');
 EOF
@@ -40,7 +41,14 @@ EOF
 [ "${busy:-1}" = "0" ] || fail "produção ocupada ($busy itens em andamento); tente mais tarde" 75
 
 current=$(docker inspect lofi-vibe-coding-studio-1 --format '{{.Config.Image}}')
-[ "$current" = "lofi-studio-os:production-$SHA" ] && { say "versão $SHA já está no ar"; exit 0; }
+all_current=1
+for s in "${SERVICES[@]}"; do
+  container="lofi-vibe-coding-$s-1"
+  image=$(docker inspect "$container" --format '{{.Config.Image}}' 2>/dev/null || true)
+  revision=$(docker inspect "$container" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)
+  { [ "$image" = "lofi-studio-os:production-$SHA" ] && [ "$revision" = "$FULL_SHA" ]; } || all_current=0
+done
+[ "$all_current" = 1 ] && { say "versão $SHA já está em todos os serviços gerenciados"; exit 0; }
 
 # 2. Unpack the release.
 R=$ROOT/$SHA
@@ -73,15 +81,15 @@ grep 'TABLE DATA' "$listing" > /dev/null || fail "backup sem dados de tabelas"
 say "backup listado e verificado: $dump"
 printf 'FROM %s\nLABEL org.opencontainers.image.revision="%s"\nUSER root\nCOPY studio /app/studio\nCOPY web /app/web\nUSER 10002\n' "$current" "$FULL_SHA" > "$R/Dockerfile.incremental"
 nice -n 10 docker build -q -f "$R/Dockerfile.incremental" -t "lofi-studio-os:production-$SHA" "$R" >/dev/null
-docker run --rm "lofi-studio-os:production-$SHA" python -c 'import studio.api,studio.exports,studio.creator_service' \
+docker run --rm "lofi-studio-os:production-$SHA" python -c 'import studio.api,studio.exports,studio.creator_service,studio.youtube_publish' \
   || fail "a imagem nova não importa os módulos; nada foi trocado"
 
-# 5. Swap the three services, keeping the previous compose for rollback.
+# 5. Swap the managed services, keeping the previous compose for rollback.
 cp -p "$COMPOSE" "$COMPOSE_DIR/compose.production-final.private.before-$SHA.private.json"
 python3 - "$COMPOSE" "$SHA" <<'EOF'
 import json,sys
 path,sha=sys.argv[1],sys.argv[2];d=json.load(open(path))
-for s in ('studio','creator','export-worker'):d['services'][s]['image']='lofi-studio-os:production-'+sha
+for s in ('studio','creator','export-worker','youtube-publisher'):d['services'][s]['image']='lofi-studio-os:production-'+sha
 json.dump(d,open(path,'w'),indent=2)
 EOF
 docker compose -p "$PROJECT" -f "$COMPOSE" up -d --no-deps "${SERVICES[@]}" >/dev/null 2>&1
@@ -122,7 +130,7 @@ done
 docker builder prune -f --filter until=72h >/dev/null 2>&1 || true
 find "$BACKUPS" -name 'lofi-db-*.dump' -mtime +21 -delete 2>/dev/null || true
 
-say "versão $SHA no ar (antes: ${current#lofi-studio-os:production-})"
+say "versão $SHA nos serviços gerenciados (antes: ${current#lofi-studio-os:production-})"
 [ -n "$behind" ] && say "AVISO: código dos transmissores mudou ($behind ); radio/channel-radio precisam de deploy manual"
 say "disco: $(df -h / | awk 'NR==2{print $5" usado, "$4" livres"}')"
 exit 0
