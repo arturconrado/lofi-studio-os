@@ -559,7 +559,9 @@ def ready_pilot(row):
 
 @router.get('/pilots/{pid}/draft')
 def pilot_draft(pid:uuid.UUID):
-    with db() as c:p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s',(pid,)).fetchone()
+    with db() as c:
+        p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s',(pid,)).fetchone()
+        if p:profile(c,p['channel_id'])
     if not p or not ready_pilot(p):raise HTTPException(409,'Este arquivo não é um vídeo completo de 1h validado tecnicamente.')
     if p['status']!='approved':raise HTTPException(409,'Aprove o vídeo na revisão antes de preparar a publicação.')
     key=p['report'].get('delivery_assets',{}).get('description')

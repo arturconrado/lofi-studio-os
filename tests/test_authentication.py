@@ -367,7 +367,7 @@ def test_exact_library_video_publication_is_scoped_and_idempotent(client,monkeyp
     try:
         with db() as c:
             report={'duration_seconds':3600,'technical_integrity':True,'full_decode_pass':True,'artifact_sha256':{'video':'a'*64}}
-            c.execute("INSERT INTO ambient_pilots(id,channel_id,title,video_key,silent_key,report,plan) VALUES(%s,%s,'Exact selected episode','episode/video.mp4','episode/silent.mp4',%s::jsonb,'{}')",(pid,cid,json.dumps(report)))
+            c.execute("INSERT INTO ambient_pilots(id,channel_id,title,video_key,silent_key,report,plan,status,approved_at) VALUES(%s,%s,'Exact selected episode','episode/video.mp4','episode/silent.mp4',%s::jsonb,'{}','approved',now())",(pid,cid,json.dumps(report)))
             token=yp.cipher().encrypt(json.dumps({'scope':yp.UPLOAD_SCOPE}).encode()).decode()
             c.execute("INSERT INTO channel_credentials(channel_id,youtube_channel_id,token_encrypted) VALUES(%s,%s,%s)",(cid,'CHANNEL-'+uuid.uuid4().hex,token));c.commit()
             c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,'growth_packaging_20261024','test',%s,0,'COMPLETED')",(growth_id,json.dumps({'channel_id':cid,'package':{'title':'Lo-fi music'}})));c.commit()
@@ -379,9 +379,9 @@ def test_exact_library_video_publication_is_scoped_and_idempotent(client,monkeyp
     first=client.post(url,json=body,headers=headers);assert first.status_code==200,first.text
     second=client.post(url,json=body,headers=headers);assert second.status_code==200 and second.json()['id']==first.json()['id']
     listing=client.get('/api/youtube/publications').json();assert listing[0]['pilot_id']==str(pid) and listing[0]['export_id'] is None
-    assert client.get('/api/ambient/pilots').json()[0]['status']=='review'  # Publication does not fabricate human review.
+    assert client.get('/api/ambient/pilots').json()[0]['status']=='approved'  # Publication does not alter the human review state.
     client.cookies.clear();_,other=signup(client)
-    assert client.get(f'/api/youtube/publications/pilots/{pid}/draft').status_code==409
+    assert client.get(f'/api/youtube/publications/pilots/{pid}/draft').status_code==404
     assert client.post(url,json=body,headers={'X-CSRF-Token':other['csrf_token']}).status_code==404
 
 
