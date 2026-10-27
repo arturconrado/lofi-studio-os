@@ -5,10 +5,18 @@ Use this workflow for every upload and when reviewing existing videos. The porta
 ## Before publishing
 
 - Define one primary viewer intent for the video: coding focus, study, reading, or relaxation.
-- Choose one accurate primary phrase that describes what the viewer will listen to. Use it early in the title and naturally in the first sentence of the description when it fits.
+- Choose one accurate primary phrase that describes what the viewer will listen to. Prefer a phrase observed in YouTube Studio for this intent and format; if none is available, use the channel-intent fallback. An observed query is wording evidence, not search-volume evidence.
+- Use the shared Growth and harness contract: title begins with the exact primary phrase, followed by one concise scene or use cue. Keep the title under 100 characters, use no more than one separator, and keep the text after the primary phrase to seven words or fewer. The complete title must read naturally aloud; reject keyword chains and repeated intent. Proofread and correct spelling before approval, and include duration only after the final video duration is measured.
+- Write the description in natural English, 450–900 characters, in 2–3 useful paragraphs. Its first sentence repeats the primary phrase naturally, names the specific supported scene, and fulfills the title promise. Follow with accurate music/listening details and a concise viewer invitation when appropriate. Add a tracklist only when verified timestamps and track names are available; do not pad with generic claims.
 - Make the specific scene, mood, or use case distinct. Avoid repeating the same generic title pattern across uploads.
 - Keep title, description, thumbnail, music, and visual aligned. Do not imply a live broadcast, 24/7 availability, exact duration, or benefits that are not true.
 - Treat search phrases as wording evidence only. They do not establish search volume or promise reach.
+
+Example for a verified Halloween café scene (primary phrase: “Lo-fi music for coding”):
+
+- Good title: `Lo-fi music for coding | Halloween Café Focus`
+- Reject: `Lo-fi music for coding | Hallowen Café Relaxing jazzhop for study and focus`
+- The description must mention the Halloween café in its opening and describe only musical details confirmed for that video.
 
 ### Growth packaging suggestion
 
