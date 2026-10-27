@@ -12,6 +12,7 @@ import { Channels } from './features/channels';
 import { Settings } from './features/settings';
 import { Diagnostics } from './features/diagnostics';
 import { Assembly } from './features/assembly';
+import { Growth } from './features/growth';
 import { Component } from 'preact';
 import type { ComponentChildren } from 'preact';
 import { Empty } from './ds/ui';
@@ -43,6 +44,7 @@ const ROUTES: [string, (p: Record<string, string>) => any][] = [
   ['/canais', () => <Channels />],
   ['/ajustes', () => <Settings />],
   ['/diagnostico', () => <Diagnostics />],
+  ['/analises', () => <Growth />],
 ];
 
 export function App() {

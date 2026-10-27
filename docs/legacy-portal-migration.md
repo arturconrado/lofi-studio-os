@@ -11,7 +11,7 @@ The legacy portal stays available until every creator workflow has a working equ
 | Biblioteca / catalog | Biblioteca | In progress | Include approved ambient videos and their publication workflow; verify programs, music, visuals, exports, and uploaded-video management. |
 | Lives / Mini OBS | Ao vivo | Parity review needed | Compare channel selection, signal setup, monitoring, playback, and recovery controls. |
 | Canais | Canais | Parity review needed | Compare channel CRUD, credentials, YouTube connection scopes, and per-channel isolation. |
-| Análises / Growth | No direct destination identified | Gap | Migrate monetization progress, Studio snapshots, experiments, projections, and reference comparisons. |
+| Análises / Growth | Análises | Implemented in this slice; parity review needed | Verify all fields, experiment editing, reference observations, and projection behavior against the legacy screen. |
 | Configurações | Ajustes | Parity review needed | Compare generation settings, cost ceilings, policies, and account controls. |
 | Composições / audio review | Revisão, Receitas | Parity review needed | Verify audio review, provenance, versions, approvals, and recovery paths. |
 | Programas e vídeos / autopilot | Produzir, Revisão, Biblioteca | Partial | Verify audio-batch automation, episode scheduling, pilot review, and approved-video publishing. |
@@ -23,8 +23,24 @@ The legacy portal stays available until every creator workflow has a working equ
 - The new Library discovers approved, technically valid ambient videos and gives them a publication record without starting an upload.
 - The operator can review the video, generate the Growth package, confirm rights, select visibility and audience designation, then explicitly authorize the YouTube upload.
 - Long videos of at least 60 minutes remain eligible when their audio/video durations and technical integrity checks pass. The actual duration is preserved in the publication record.
+- The new Análises screen now has the legacy workflows for manually recorded monetization progress, YouTube Studio metric snapshots, one-variable experiments, historical ranges, and public reference observations/comparisons. Values remain explicitly human-recorded; historical ranges are labeled as observational rather than algorithmic forecasts.
 - The legacy portal remains available during the migration. Do not remove its navigation until the remaining parity reviews are complete and their gaps are migrated.
+
+## Release checklist
+
+- [ ] Overview: compare active channel, current program, queue, health checks, and quick actions.
+- [ ] Creation: compare planning assistant, saved drafts, budgets, generation authorization, recovery, and separate Shorts/long-video paths.
+- [ ] Library: compare every content type, filters/search, metadata editing, export/download, YouTube publication states, deletion safeguards, and approved ambient-video handoff.
+- [ ] Lives: compare setup, preview, start/stop, monitoring, reconnection, scheduling, and failure recovery.
+- [ ] Channels: compare create/edit, YouTube OAuth scopes, stream credentials, defaults, and per-channel data boundaries.
+- [ ] Growth: compare monetization fields, snapshots, experiment create/update, projections, reference observations, and comparison output.
+- [ ] Settings: compare every generation limit, authorization, account, and safety control.
+- [ ] Audio/compositions: compare review, evidence, versions, rights, approvals, and retry paths.
+- [ ] Programs/autopilot: compare schedules, episode status, video review, files, and all transitions into publishing.
+- [ ] Jobs/audit and diagnostics: compare job types, costs, logs, retries, worker/service status, and recovery actions.
+- [ ] Verify each item in the new UI using representative records, including empty, pending, failed, and completed states; record evidence here.
+- [ ] Only after every item passes: remove legacy navigation and route, then verify no unique legacy API/UI action remains.
 
 ## Completion rule
 
-Mark an area migrated only after its new interface supports the same authorized actions and protections, its state is visible and recoverable, and the legacy route no longer provides unique functionality. Remove the legacy portal only after every row above has been verified and signed off.
+Mark an area migrated only after its new interface supports the same authorized actions and protections, its state is visible and recoverable, and the legacy route no longer provides unique functionality. This PR does not claim full migration: the legacy portal must remain until every release-checklist item is verified and signed off.
