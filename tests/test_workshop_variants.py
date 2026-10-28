@@ -200,6 +200,27 @@ def test_cancel_video_survives_worker_restart_and_reconciles_same_remote_job_and
     try:
         with db() as c:c.execute("UPDATE factory_tasks SET updated_at=now()-interval '31 seconds' WHERE id=%s",(running_id,));c.commit()
     finally:WORKSPACE.reset(marker)
+    # A provider poll can lose its connection after cancellation. The unresolved
+    # original ID and reservation must survive until a later process reconciles it.
+    from studio import workshop_provider as provider
+    class LostConnection:
+        def __init__(self,**kwargs):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def get(self,*args,**kwargs):raise RuntimeError('simulated lost provider connection')
+    monkeypatch.setattr(provider.httpx,'Client',LostConnection)
+    monkeypatch.setattr(provider.runtime,'key',lambda:'test-token')
+    marker=WORKSPACE.set(workspace)
+    try:
+        with pytest.raises(RuntimeError,match='lost provider connection'):
+            provider.refresh(str(running_id))
+        with db() as c:
+            after_disconnect=c.execute('SELECT status,reserved_cost,actual_cost,payload FROM factory_tasks WHERE id=%s',(running_id,)).fetchone()
+            assert after_disconnect['status']=='RUNNING' and after_disconnect['reserved_cost']==Decimal('.08')
+            assert after_disconnect['actual_cost'] is None
+            assert after_disconnect['payload'].get('cancel_requested_at')
+            assert after_disconnect['payload']['provider_job_id']=='private-job-id'
+    finally:WORKSPACE.reset(marker)
     # A fresh worker process has no in-memory request state. It must discover the
     # durable cancellation and poll the original provider ID without resubmitting.
     script='''
@@ -556,6 +577,64 @@ def test_creative_attempt_limit_is_scoped_to_channel_even_when_clip_ids_repeat(c
     assert quoted.json()['attempt']['stage']=='initial'
 
 
+@DB
+def test_delivery_attempt_scope_freezes_paid_action_inventory(client):
+    """Adding another action after paid work requires a reviewed delivery scope."""
+    from studio import workshop_api as api
+    from studio.core import db
+    from studio.tenancy import WORKSPACE, schema_name
+    from psycopg import sql
+    draft,media=fixture();url,identity=seed_project(client,draft,media)
+    pid=url.rsplit('/',1)[-1];marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+            row=api.project(c,pid);api.ensure(c);clip=draft.base
+            decision=api.attempt_decision(c,draft,clip,'image','720p',[None],media,pid,row['channel_id'])
+            assert decision['allowed'] is True
+            assert decision['delivery_scope']=={'locked':False,'initial_used':0,'initial_limit':2,'correction_used':0,'correction_limit':2}
+            api.reserve_attempt(c,decision,'image',draft=draft,project_id=pid)
+            c.commit()
+
+        continuation=Clip(name='Continuation',motion='Return to the original pose',seconds=2,continues_from=draft.clips[0].id)
+        expanded=Draft.model_validate({**draft.model_dump(mode='json'),
+            'clips':[*draft.model_dump(mode='json')['clips'],continuation.model_dump(mode='json')]})
+        assert len(api.creative_unit_inventory(expanded))==2
+
+        new_action=Clip(name='New action',motion='Open a notebook',seconds=4)
+        expanded=Draft.model_validate({**expanded.model_dump(mode='json'),
+            'clips':[*expanded.model_dump(mode='json')['clips'],new_action.model_dump(mode='json')]})
+        with db() as c:
+            c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+            decision=api.attempt_decision(c,expanded,new_action,'image','720p',[None],media,pid,row['channel_id'])
+        assert decision['allowed'] is False
+        assert decision['delivery_scope']['locked'] is True
+        assert decision['delivery_scope']['initial_used']==1
+        assert 'Revise e confirme o escopo' in decision['message']
+
+        with db() as c:
+            c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+            decision=api.attempt_decision(c,expanded,new_action,'video','720p',[None],media,pid,row['channel_id'])
+        assert decision['allowed'] is False
+        assert decision['delivery_scope']['locked'] is True
+
+        with db() as c:
+            c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+            c.execute('UPDATE visual_projects SET data=%s,revision=revision+1 WHERE id=%s',
+                      (json.dumps(expanded.model_dump(mode='json')),pid));c.commit()
+        reviewed=client.post(f'{url}/attempt-scope/review',json={'request_id':str(uuid.uuid4()),'revision':2,
+            'reason':'Adicionar uma ação planejada após revisar a nova entrega narrativa.',
+            'confirm_current_actions':True})
+        assert reviewed.status_code==200,reviewed.text
+        assert reviewed.json()=={'reviewed':True,'reused':False,'unit_count':3,'paid_calls':0}
+        with db() as c:
+            c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+            decision=api.attempt_decision(c,expanded,new_action,'video','720p',[None],media,pid,row['channel_id'])
+        assert decision['allowed'] is True
+        assert decision['delivery_scope']['initial_limit']==3
+    finally:WORKSPACE.reset(marker)
+
+
 def mock_generation(monkeypatch):
     from studio import workshop_api as api,workshop_provider as provider,financial
     from studio.core import db
@@ -581,6 +660,45 @@ def mock_generation(monkeypatch):
     monkeypatch.setattr(provider.runtime,'settings',lambda c=None:{'enabled':True})
     monkeypatch.setattr(financial,'check_available',lambda c,cap:reservations.append(cap))
     return calls,reservations
+
+
+@DB
+def test_visual_project_budget_releases_known_reservation_surplus_but_keeps_unknown_cost(client,monkeypatch):
+    """A final charge frees unused reservation; an unresolved task still occupies its quote."""
+    from studio import workshop_provider,workshop_api
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    draft,media=fixture();url,identity=seed_project(client,draft,media)
+    project_id=url.rsplit('/',1)[-1]
+    calls,_=mock_generation(monkeypatch)
+    monkeypatch.setattr(workshop_provider,'quote',lambda kind,seconds:{'model':'test','usd':.05,'seconds':seconds,'last_frame_supported':False})
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            c.execute('CREATE TABLE IF NOT EXISTS visual_project_budgets(project_id UUID PRIMARY KEY,limit_usd NUMERIC NOT NULL)')
+            c.execute('INSERT INTO visual_project_budgets(project_id,limit_usd) VALUES(%s,.08)',(project_id,))
+            c.execute("""INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,actual_cost,status)
+                         VALUES(%s,%s,'test',%s::jsonb,.10,.03,'COMPLETED')""",
+                      (uuid.uuid4(),'prior',json.dumps({'project_id':project_id})))
+            c.commit()
+    finally:WORKSPACE.reset(marker)
+
+    response=client.post(url+f'/clips/{draft.base.id}/generate/image',json={
+        'request_id':str(uuid.uuid4()),'revision':1,'max_usd':.05,'confirm_cost':True})
+    assert response.status_code==200,response.text
+    assert len(calls)==1
+
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            # The first task has no reconciled charge, so its full reservation
+            # remains occupied alongside the previous task's known $0.03 cost.
+            c.execute("UPDATE factory_tasks SET status='UNCERTAIN',actual_cost=NULL,reserved_cost=.05 WHERE id=%s",
+                      (response.json()['id'],))
+            assert workshop_api.project_generation_usage(c,project_id)==Decimal('.08')
+            c.commit()
+    finally:WORKSPACE.reset(marker)
+    assert len(calls)==1
 
 
 @DB
