@@ -569,7 +569,7 @@ def test_paid_attempt_cycle_persists_across_reload_splits_and_project_duplicates
     from studio.authentication import COOKIE
     restart_payload={'database_url':os.environ['LOFI_TEST_DATABASE_URL'],'workspace_id':identity['workspace_id'],
         'cookie':client.cookies.get(COOKIE),'csrf':identity['csrf_token'],'project_url':url,
-        'clip_id':str(clip.id),'variant_key':first_key,'request_id':str(uuid.uuid4())}
+        'project_id':url.rsplit('/',1)[-1],'clip_id':str(clip.id),'request_id':str(uuid.uuid4())}
     restart_script='''
 import json,os,sys
 payload=json.loads(sys.argv[1])
@@ -578,6 +578,9 @@ os.environ['STUDIO_PUBLIC_ORIGIN']='https://testserver'
 from fastapi.testclient import TestClient
 from studio.api import app
 from studio import workshop_provider,workshop_api
+from studio.visual_workshop import Draft
+from studio.core import db
+from studio.tenancy import WORKSPACE
 workshop_provider.quote=lambda kind,seconds:{'model':'test','usd':.1,'seconds':seconds,'last_frame_supported':True}
 workshop_api.worker_online=lambda conn:True
 workshop_api.base_cut_images=lambda source,frames:{frame:b'fake image bytes' for frame in frames}
@@ -590,12 +593,27 @@ with TestClient(app,base_url='https://testserver') as fresh:
     fresh.cookies.set('lofi_session',payload['cookie'])
     project=fresh.get(payload['project_url'])
     assert project.status_code==200,project.text
-    quote=fresh.get(payload['project_url']+f"/clips/{payload['clip_id']}/quote/video?variant_key={payload['variant_key']}")
+    marker=WORKSPACE.set(payload['workspace_id'])
+    try:
+        with db() as conn:
+            row=conn.execute('SELECT data FROM visual_projects WHERE id=%s',(payload['project_id'],)).fetchone()
+            draft=Draft.model_validate(row['data'])
+            for clip in draft.clips:clip.video_id=None
+            for event in draft.insertions:event.video_id=None
+            conn.execute('UPDATE visual_projects SET data=%s,revision=revision+1 WHERE id=%s',
+                (json.dumps(draft.model_dump(mode='json')),payload['project_id']))
+            conn.execute("DELETE FROM visual_media WHERE project_id=%s AND data->>'kind'='video' AND id<>%s",
+                (payload['project_id'],str(draft.base.video_id)))
+            conn.commit()
+    finally:WORKSPACE.reset(marker)
+    project=fresh.get(payload['project_url'])
+    assert project.status_code==200,project.text
+    quote=fresh.get(payload['project_url']+f"/clips/{payload['clip_id']}/quote/video")
     assert quote.status_code==200,quote.text
     assert quote.json()['attempt']['allowed'] is False
     retry=fresh.post(payload['project_url']+f"/clips/{payload['clip_id']}/generate/video",json={
-        'request_id':payload['request_id'],'revision':project.json()['revision'],'max_usd':.1,
-        'confirm_cost':True,'variant_key':payload['variant_key']},headers={'X-CSRF-Token':payload['csrf']})
+        'request_id':payload['request_id'],'revision':project.json()['revision'],'max_usd':1.0,
+        'confirm_cost':True},headers={'X-CSRF-Token':payload['csrf']})
     assert retry.status_code==409,retry.text
     assert calls==[],calls
 '''
