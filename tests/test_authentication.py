@@ -604,11 +604,11 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     r=client.post('/api/creator/motion-validation',json=body,headers=headers)
     assert r.status_code==200,r.text
     assert r.json()['state']=='UNCERTAIN'
-    assert r.json()['plan_revision']==saved['revision']+1
+    assert r.json()['plan_revision']==saved['revision']+2
     history=client.get(f"/api/creator/plans/{saved['id']}/revisions").json()['revisions']
-    assert history[0]['revision']==saved['revision']+1
+    assert history[0]['revision']==saved['revision']+2
     snapshot=client.get(f"/api/creator/plans/{saved['id']}/revisions/{history[0]['revision']}").json()
-    assert snapshot['data']['production_assets'][tid]['state']=='SUBMITTING'
+    assert snapshot['data']['production_assets'][tid]['state']=='UNCERTAIN'
     assert snapshot['sha256']
     assert client.post('/api/creator/motion-validation',json=body,headers=headers).json()['state']=='UNCERTAIN'
     assert Client.sends==1

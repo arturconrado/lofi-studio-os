@@ -55,6 +55,16 @@ def public(row):
             'role':p.get('role'),'demo_only':True,'applied_to_live':False}
 
 
+def update_asset_state(c,plan_id,task_id,state):
+    row=c.execute("SELECT * FROM creator_plans WHERE id=%s AND status='draft' FOR UPDATE",(plan_id,)).fetchone()
+    if not row:return None
+    data=copy.deepcopy(row['data']);assets=dict(data.get('production_assets') or {});entry=assets.get(str(task_id))
+    if not entry:return row['revision']
+    if entry.get('state')==state:return row['revision']
+    entry['state']=state;assets[str(task_id)]=entry;data['production_assets']=assets
+    return save_locked_revision(c,row,data,row['revision'])
+
+
 @router.get('/sources')
 def sources(channel_id:uuid.UUID):
     with db() as c:
@@ -154,10 +164,12 @@ def submit(body:Pilot):
             r.raise_for_status();job=r.json()['id']
             if not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',job):raise ValueError('Invalid provider id')
         with db() as c:
-            c.execute("UPDATE factory_tasks SET status='RUNNING',payload=payload||%s::jsonb,detail='Gerando estudo de interação; oito segundos',updated_at=now() WHERE id=%s",(json.dumps({'provider_job_id':job}),body.request_id));c.commit()
+            revision=update_asset_state(c,body.plan_id,body.request_id,'RUNNING')
+            c.execute("UPDATE factory_tasks SET status='RUNNING',payload=payload||%s::jsonb,detail='Gerando estudo de interação; oito segundos',updated_at=now() WHERE id=%s",(json.dumps({'provider_job_id':job,'plan_revision':revision}),body.request_id));c.commit()
     except Exception:
         with db() as c:
-            c.execute("UPDATE factory_tasks SET status='UNCERTAIN',detail='Envio sem confirmação. Não repetir; reserva mantida para reconciliação.',updated_at=now() WHERE id=%s",(body.request_id,));c.commit()
+            revision=update_asset_state(c,body.plan_id,body.request_id,'UNCERTAIN')
+            c.execute("UPDATE factory_tasks SET status='UNCERTAIN',payload=payload||%s::jsonb,detail='Envio sem confirmação. Não repetir; reserva mantida para reconciliação.',updated_at=now() WHERE id=%s",(json.dumps({'plan_revision':revision}),body.request_id));c.commit()
     with db() as c:return public(get_task(c,body.request_id))
 
 
@@ -170,7 +182,8 @@ def refresh(tid:uuid.UUID):
         r=client.get('https://openrouter.ai/api/v1/videos/'+job,headers={'Authorization':'Bearer '+token});r.raise_for_status();state=r.json()
         if state['status']=='failed':
             with db() as c:
-                c.execute("UPDATE factory_tasks SET status='FAILED',detail='Provedor informou falha; sem nova tentativa automática',updated_at=now() WHERE id=%s",(tid,));c.commit();return public(get_task(c,tid))
+                revision=update_asset_state(c,row['payload']['plan_id'],tid,'FAILED')
+                c.execute("UPDATE factory_tasks SET status='FAILED',payload=payload||%s::jsonb,detail='Provedor informou falha; sem nova tentativa automática',updated_at=now() WHERE id=%s",(json.dumps({'plan_revision':revision}),tid));c.commit();return public(get_task(c,tid))
         if state['status']!='completed':return public(row)
         with tempfile.TemporaryDirectory(prefix='lofi-pilot-') as tmp:
             path=Path(tmp)/'pilot.mp4'
