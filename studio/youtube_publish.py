@@ -623,6 +623,14 @@ def run_one():
             progress(row['id'],state='uncertain' if starting else 'interrupted' if row['session_encrypted'] else 'failed',detail='Envio interrompido. Retome a sessão existente quando disponível; não crie outro envio. Confira autorização, cota e restrições no Google.')
         return True
 
+def deployment_ready():
+    """Read-only readiness probe for a deployed publisher container."""
+    with db() as c:
+        if not c.execute("SELECT to_regclass('youtube_publications') AS ready").fetchone()['ready']:
+            raise RuntimeError('youtube_publications schema is unavailable')
+        c.execute('SELECT id FROM youtube_publications LIMIT 0')
+    return True
+
 def main():
     from .tenancy import WORKSPACE
     while True:

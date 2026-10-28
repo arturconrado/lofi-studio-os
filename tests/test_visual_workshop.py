@@ -121,7 +121,7 @@ def test_http_draft_conflict_and_review_gate(client):
 
 
 @DB
-def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkeypatch):
+def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkeypatch,tmp_path):
     from studio import workshop_api as api, workshop_provider as provider, financial
     from studio.core import db
     from PIL import Image
@@ -138,8 +138,10 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
     monkeypatch.setattr(provider,'quote',lambda kind,seconds:{'model':'test','usd':.1,'seconds':seconds})
     monkeypatch.setattr(financial,'check_available',lambda c,cap:None)
     png=io.BytesIO();Image.new('RGB',(16,9),'blue').save(png,'PNG')
+    paid_submit_calls=[]
     def submit(tid):
         # Completion uses the same tenant-scoped transaction as the real provider.
+        paid_submit_calls.append(str(tid))
         with db() as c:
             t=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(tid,)).fetchone()
             provider.complete(c,t,png.getvalue() if t['payload']['operation']=='image' else b'test-video',
@@ -175,9 +177,53 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
     request={'request_id':str(uuid.uuid4()),'revision':state['revision']}
     response=cl.post(url+'/render',json=request);assert response.status_code==200,response.text
     assert cl.post(url+'/render',json=request).json()['id']==response.json()['id']
+    render_id=response.json()['id'];render_url=url+f'/jobs/{render_id}/retry-render'
+    from psycopg import sql
+    from studio.tenancy import WORKSPACE,schema_name
+    with db() as c:
+        c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+        original=c.execute('SELECT payload,reserved_cost FROM factory_tasks WHERE id=%s',(render_id,)).fetchone()
+        c.execute("UPDATE factory_tasks SET status='INTERRUPTED' WHERE id=%s",(render_id,));c.commit()
+    paid_calls_before_retry=len(paid_submit_calls)
+    assert paid_calls_before_retry==2
+    retry=cl.post(render_url);assert retry.status_code==200,retry.text
+    assert retry.json()=={'id':render_id,'status':'QUEUED'}
+    assert len(paid_submit_calls)==paid_calls_before_retry
+    with db() as c:
+        c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+        resumed=c.execute('SELECT status,payload,reserved_cost FROM factory_tasks WHERE id=%s',(render_id,)).fetchone()
+        assert resumed['status']=='QUEUED' and resumed['reserved_cost']==original['reserved_cost']==0
+        assert resumed['payload']==original['payload']
+        c.commit()
+    from studio import workshop_worker
+    class RenderStore:
+        def upload_file(self,path,bucket,key,**kwargs):
+            assert bucket=='test' and Path(path).read_bytes()==b'recovered-render'
+    monkeypatch.setattr('studio.radio.CACHE',tmp_path)
+    monkeypatch.setattr(workshop_worker,'ready',lambda:None)
+    monkeypatch.setattr(workshop_worker,'storage',lambda:RenderStore())
+    monkeypatch.setattr(workshop_worker,'fetch',lambda key,path,sha,limit:Path(path).write_bytes(b'cached-source'))
+    def resumed_render(segments,sources,audio,final,seconds,preview_range=None):
+        assert segments==original['payload']['segments'] and seconds==original['payload']['seconds']
+        assert len(sources)>=1 and Path(audio).exists()
+        Path(final).write_bytes(b'recovered-render')
+        return {'sha256':'f'*64,'seconds':seconds,'audio_seconds':seconds,'full_decode_pass':True}
+    monkeypatch.setattr(workshop_worker,'render_segments',resumed_render)
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:assert workshop_worker.tick() is True
+    finally:WORKSPACE.reset(marker)
+    with db() as c:
+        c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+        completed=c.execute('SELECT status,payload FROM factory_tasks WHERE id=%s',(render_id,)).fetchone()
+        assert completed['status']=='COMPLETED'
+        assert completed['payload']['video_key'].endswith('/'+'f'*64+'.mp4')
+        assert completed['payload']['segments']==original['payload']['segments']
+        c.execute("UPDATE factory_tasks SET status='INTERRUPTED' WHERE id=%s",(render_id,));c.commit()
     state=cl.get(url).json();state['data']['theme']='Different room'
     assert cl.put(url,json={'revision':state['revision'],'data':state['data'],'edit_visual':True}).status_code==200
     assert cl.post(url+'/render',json={'request_id':str(uuid.uuid4()),'revision':state['revision']+1}).status_code==409
+    assert cl.post(render_url).status_code==409
+    assert len(paid_submit_calls)==2
     cl.cookies.clear();cl.headers.pop('X-CSRF-Token',None)
     signup(cl)
     assert cl.get(url).status_code==404

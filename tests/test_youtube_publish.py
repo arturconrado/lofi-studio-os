@@ -76,6 +76,76 @@ def test_short_or_unvalidated_pilot_cannot_be_published():
     assert yp.ready_pilot({'report':{'duration_seconds':3600,'technical_integrity':True,'full_decode_pass':True,'artifact_sha256':{'video':'a'*64}}})
 
 
+def test_prepare_approved_pilot_is_idempotent_and_does_not_start_upload(monkeypatch):
+    """A retry recovers the same Library publication entry, still awaiting review."""
+    from contextlib import contextmanager
+
+    channel_id, pilot_id = uuid.uuid4(), uuid.uuid4()
+    pilot = {
+        'id': pilot_id, 'channel_id': channel_id, 'title': 'Rainy Coding Session',
+        'status': 'approved', 'approved_at': None, 'created_at': None,
+        'plan': {'intent': 'coding_focus', 'theme': 'Rainy night'},
+        'report': {
+            'duration_seconds': 3600, 'audio_seconds': 3600,
+            'technical_integrity': True, 'full_decode_pass': True,
+            'artifact_sha256': {'video': 'a' * 64},
+        },
+    }
+
+    class Rows:
+        def __init__(self, row=None): self.row = row
+        def fetchone(self): return self.row
+
+    class Connection:
+        def __init__(self): self.publication = None; self.inserts = 0
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def commit(self): pass
+        def execute(self, sql, args=()):
+            if 'pg_advisory_xact_lock' in sql: return Rows()
+            if 'FROM ambient_pilots WHERE id=%s AND channel_id=%s FOR UPDATE' in sql:
+                return Rows(pilot)
+            if 'FROM youtube_publications WHERE pilot_id=%s' in sql:
+                return Rows(self.publication)
+            if sql.startswith('INSERT INTO youtube_publications'):
+                self.inserts += 1
+                jid, request_id, cid, pid, title, description, intent, video_sha, metadata = args
+                self.publication = {
+                    'id': jid, 'request_id': request_id, 'channel_id': cid, 'pilot_id': pid,
+                    'youtube_channel_id': '', 'title': title, 'description': description,
+                    'intent': intent, 'primary_phrase': '', 'keywords': [],
+                    'publication_metadata': metadata, 'privacy': 'private', 'made_for_kids': False,
+                    'state': 'ready', 'video_id': None, 'actual_privacy': None,
+                    'detail': 'Pronto para revisar o pacote e confirmar o envio',
+                    'bytes_sent': 0, 'total_bytes': 0, 'created_at': None, 'updated_at': None,
+                }
+                assert video_sha == 'a' * 64
+                return Rows()
+            if 'FROM youtube_publications WHERE id=%s' in sql:
+                return Rows(self.publication)
+            raise AssertionError(f'Unexpected SQL in isolated retry test: {sql}')
+
+    conn = Connection()
+
+    @contextmanager
+    def isolated_db():
+        yield conn
+
+    monkeypatch.setattr(yp, 'db', isolated_db)
+    monkeypatch.setattr(yp, 'ensure', lambda c: None)
+    monkeypatch.setattr(yp, 'profile', lambda c, cid: None)
+    monkeypatch.setattr(yp, 'audit', lambda *args: None)
+
+    first = yp.prepare_pilot(pilot_id, yp.PreparePilot(request_id=uuid.uuid4(), channel_id=channel_id))
+    second = yp.prepare_pilot(pilot_id, yp.PreparePilot(request_id=uuid.uuid4(), channel_id=channel_id))
+
+    assert first['id'] == second['id']
+    assert first['state'] == second['state'] == 'ready'
+    assert conn.inserts == 1
+    assert first['bytes_sent'] == second['bytes_sent'] == 0
+    assert first['video_id'] is second['video_id'] is None
+
+
 def test_strict_provenance_applies_to_pilots_like_exports(monkeypatch):
     # Audit C05: the pilot route skipped LOFI_REQUIRE_PROVENANCE_FOR_PUBLISH.
     import pytest
