@@ -7,7 +7,25 @@ from decimal import Decimal
 import pytest
 from studio.visual_workshop import (Clip, Insertion, Draft, signature, digest, status, assemble,
     variant_plan, seam_binding, split_durations, split_proposal, apply_split, prompt, validate_continuations)
+from studio.workshop_api import public_task
 from test_visual_workshop import fixture
+
+
+def test_uncertain_public_task_explains_reconciliation_without_leaking_provider_secrets():
+    base={'id':uuid.uuid4(),'kind':'visual_workshop_v1','status':'UNCERTAIN','detail':'Envio sem confirmação',
+          'reserved_cost':Decimal('.08'),'created_at':None}
+    payload={'project_id':str(uuid.uuid4()),'operation':'video','callback_token':'secret-callback-token'}
+    callback=public_task({**base,'payload':payload})
+    assert callback['reconciliation_state']=='callback_pending'
+    assert 'callback_token' not in callback and 'secret-callback-token' not in json.dumps(callback)
+    payload.update(callback_token=None,provider_job_id=None)
+    legacy=public_task({**base,'payload':payload})
+    assert legacy['reconciliation_state']=='manual_reconciliation'
+    assert legacy['reserved_usd']==Decimal('.08')
+    payload.update(provider_job_id='private-provider-id')
+    polling=public_task({**base,'payload':payload})
+    assert polling['reconciliation_state']=='provider_polling'
+    assert 'private-provider-id' not in json.dumps(polling,default=str)
 
 
 def bind_variants(draft,media,clip,approved=True):

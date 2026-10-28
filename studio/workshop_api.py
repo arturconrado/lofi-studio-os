@@ -78,6 +78,12 @@ def public_task(t):
             'preview_range': p.get('preview_range'),
             'report': p.get('report'), 'approved': p.get('approved', False),
             'url': f'/api/creator/workshop/projects/{p["project_id"]}/renders/{t["id"]}' if p.get('video_key') else None}
+    if t['status'] == 'UNCERTAIN':
+        # Never expose callback tokens or provider IDs. Tell the user which safe
+        # reconciliation path is available for this persisted attempt.
+        out['reconciliation_state'] = ('provider_polling' if p.get('provider_job_id') else
+                                       'callback_pending' if p.get('callback_token') else
+                                       'manual_reconciliation')
     if p.get('operation') == 'short_render':
         out.update(short_title=p.get('spec', {}).get('title'), short_story=p.get('spec', {}).get('story_title'),
                    parent_video_id=p.get('spec', {}).get('parent_video_id'),
