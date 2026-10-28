@@ -78,6 +78,10 @@ def test_one_confirmation_books_blocks_in_order(client,monkeypatch):
     data=batch[0]['data']
     assert data['visual_reference']['pilot_id']==SNOWY and data['recipe']['music']['style_id']=='8bit_lofi'
     assert data['title'].endswith('· Part 1')
+    plan_version=sql(owner,'SELECT pl.id,pl.revision,pl.data,r.sha256,r.data snapshot FROM creator_plans pl JOIN creator_plan_revisions r ON r.plan_id=pl.id AND r.revision=pl.revision WHERE pl.program_id=%s',(batch[0]['id'],))[0]
+    from studio.creator_plan_versions import content_hash
+    assert plan_version['revision']==1 and plan_version['data']==plan_version['snapshot']
+    assert plan_version['sha256']==content_hash(plan_version['snapshot'])
     assert sql(owner,"SELECT 1 FROM audit WHERE action='PRODUCTION_AUTHORIZED'")
     # Next hour waits for the channel, then books with the rest of the ceiling.
     assert client.post(f"/api/creator/productions/{p['id']}/advance",headers=h).json()['progress']['blocks_created']==1
