@@ -132,3 +132,11 @@ O music-worker continua usando a tag de release `production-d877875`, mas seu r�
 Conclusão: revisão principal e imagens de publisher/rádio têm proveniência rastreável ao histórico versionado; o conteúdo examinado do music-worker também corresponde ao snapshot `d877875`, embora o rótulo OCI não dê essa proveniência. Mesmo para os serviços rastreáveis, correspondência de SHA, ancestralidade ou hash de arquivos selecionados não demonstra paridade funcional, validade de configuração, comportamento dos workers, nem aprovação de produção. Nenhum arquivo, imagem, serviço ou configuração da VPS foi alterado.
 
 **Gates que permanecem abertos:** corrigir o alias local continua pendente; as três operações pagas incertas não têm evidência de resultado remoto terminal e impedem concluir o backup/restauro isolado sem risco de interromper trabalho externo. O snapshot antigo segue apenas disponível, não restaurado. O PR #63 ainda precisa de uma rota de bootstrap compatível com a regra de mudanças via GitHub e com o comando fixo do host. Esta captura não fecha WP-00 nem TEST-27.
+
+## Sessão autenticada do Studio — 28/10/2026
+
+A sessão do usuário foi autenticada no navegador. A página `/studio/diagnostico` carregou sem redirecionar para login e exibiu o painel operacional. A leitura visual informou `database`, `redis`, `minio` e `worker` como online; rádio com orientação para consultar Mini OBS; e vídeo como não implementado. Esses rótulos são somente o estado apresentado pelo painel nesta sessão; não foram tratados como prova de saúde funcional nem de permissões por endpoint.
+
+Foi tentada a leitura do catálogo dinâmico em `/openapi.json` no navegador autenticado, mas o navegador bloqueou a navegação antes de retornar conteúdo. Portanto, não houve confirmação da resposta HTTP ou da lista de operações no runtime por essa via. A conta autenticada demonstra acesso à interface de Diagnóstico, mas não identifica e não substitui testes com `viewer`, `creator`, `operator`, `workspace_admin` e Basic admin. Nenhuma mutação foi executada.
+
+**Resultado:** a etapa pendente de login para inspecionar a interface foi resolvida. A matriz de permissões autenticada por papel e rota, o catálogo dinâmico do serviço implantado, a paridade de handlers e o TEST-37 continuam pendentes; WP-00 permanece aberto.
