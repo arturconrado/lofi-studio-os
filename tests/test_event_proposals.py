@@ -46,19 +46,24 @@ def test_proposals_mark_draft_and_apply_needs_human_review(client,monkeypatch):
     from studio import form_assistant
     _,owner=signup(client);headers={'X-CSRF-Token':owner['csrf_token']};cid=client.get('/api/channels').json()[0]['id']
     spec={'hours':1,'cadence':'quarter_hour_v2'}
-    draft=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers).json()['id']
+    saved=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers).json();draft=saved['id']
     def fake(request_id,channel_id,kind,meta,system,user,transform,result_key,label):
         assert kind=='event_proposals_20261015' and 'available_sequences' in user
         return transform({'proposals':[{'idea_id':'w','description':'Olhar a janela aos 50','kind':'marker','marker_minute':50,'sequence':'window_glance'},
                                        {'idea_id':'p','description':'Celular aos 30 de novo','kind':'marker','marker_minute':30,'sequence':'phone_check'}]}),False,.001
     monkeypatch.setattr(form_assistant,'bounded_json_call',fake)
-    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'spec':spec,'draft_id':draft}
+    body={'request_id':str(uuid.uuid4()),'channel_id':cid,'spec':spec,'draft_id':draft,'revision':saved['revision']}
     assert client.post('/api/creator/event-proposals',json=body,headers=headers).status_code==422
     r=client.post('/api/creator/event-proposals',json=body|{'confirm_cost':True},headers=headers);assert r.status_code==200,r.text
+    assert r.json()['revision']==saved['revision']+1
+    proposal_snapshot=client.get(f"/api/creator/plans/{draft}/revisions/{r.json()['revision']}").json()
+    assert proposal_snapshot['data']['event_proposals_pending'] is True
     proposals=r.json()['proposals'];assert all(p['validation']['requires_human_approval'] for p in proposals)
     assert client.get('/api/creator/assembly/plans/'+draft).json()['episode_state']['state']=='PROPOSED'
-    apply={'channel_id':cid,'spec':spec,'proposal':{k:v for k,v in proposals[0].items() if k!='validation'},'draft_id':draft}
+    apply={'channel_id':cid,'spec':spec,'proposal':{k:v for k,v in proposals[0].items() if k!='validation'},'draft_id':draft,'revision':r.json()['revision']}
     assert client.post('/api/creator/event-proposals/apply',json=apply,headers=headers).status_code==422
     applied=client.post('/api/creator/event-proposals/apply',json=apply|{'confirm_reviewed':True},headers=headers).json()
-    assert applied['saved'] is False and applied['spec']['cadence']=='custom_markers'
+    assert applied['saved'] is False and applied['spec']['cadence']=='custom_markers' and applied['revision']==r.json()['revision']+1
+    cleared=client.get(f"/api/creator/plans/{draft}/revisions/{applied['revision']}").json()
+    assert cleared['data']['event_proposals_pending'] is False
     assert client.get('/api/creator/assembly/plans/'+draft).json()['episode_state']['state']=='DRAFT'

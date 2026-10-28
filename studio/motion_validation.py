@@ -51,7 +51,8 @@ def public(row):
     return {'id':row['id'],'state':row['status'],'reserved_usd':row['reserved_cost'],
             'actual_cost_usd':p.get('actual_cost_usd'),'report':p.get('report'),
             'detail':row.get('detail'),'video_url':f"/api/creator/motion-validation/{row['id']}/video" if p.get('video_key') else None,
-            'reference_review':p.get('reference_review','pending'),'plan_id':p.get('plan_id'),'role':p.get('role'),'demo_only':True,'applied_to_live':False}
+            'reference_review':p.get('reference_review','pending'),'plan_id':p.get('plan_id'),'plan_revision':p.get('plan_revision'),
+            'role':p.get('role'),'demo_only':True,'applied_to_live':False}
 
 
 @router.get('/sources')
