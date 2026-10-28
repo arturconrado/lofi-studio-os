@@ -200,6 +200,27 @@ def test_cancel_video_survives_worker_restart_and_reconciles_same_remote_job_and
     try:
         with db() as c:c.execute("UPDATE factory_tasks SET updated_at=now()-interval '31 seconds' WHERE id=%s",(running_id,));c.commit()
     finally:WORKSPACE.reset(marker)
+    # A provider poll can lose its connection after cancellation. The unresolved
+    # original ID and reservation must survive until a later process reconciles it.
+    from studio import workshop_provider as provider
+    class LostConnection:
+        def __init__(self,**kwargs):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def get(self,*args,**kwargs):raise RuntimeError('simulated lost provider connection')
+    monkeypatch.setattr(provider.httpx,'Client',LostConnection)
+    monkeypatch.setattr(provider.runtime,'key',lambda:'test-token')
+    with pytest.raises(RuntimeError,match='lost provider connection'):
+        provider.refresh(str(running_id))
+    marker=WORKSPACE.set(workspace)
+    try:
+        with db() as c:
+            after_disconnect=c.execute('SELECT status,reserved_cost,actual_cost,payload FROM factory_tasks WHERE id=%s',(running_id,)).fetchone()
+            assert after_disconnect['status']=='RUNNING' and after_disconnect['reserved_cost']==Decimal('.08')
+            assert after_disconnect['actual_cost'] is None
+            assert after_disconnect['payload'].get('cancel_requested_at')
+            assert after_disconnect['payload']['provider_job_id']=='private-job-id'
+    finally:WORKSPACE.reset(marker)
     # A fresh worker process has no in-memory request state. It must discover the
     # durable cancellation and poll the original provider ID without resubmitting.
     script='''
