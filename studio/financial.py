@@ -10,15 +10,17 @@ def total_usage(c):
       FROM jobs WHERE budget_reserved""").fetchone()
     total=Decimal(row['n'] or 0)
     total+=Decimal(c.execute('SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks').fetchone()['n'] or 0)
-    has_plans=bool(c.execute("SELECT to_regclass('public.creator_plans') t").fetchone()['t'])
+    # Resolve tables through this connection's search_path so isolated workspace
+    # schemas are charged without reading another workspace or requiring public.
+    has_plans=bool(c.execute("SELECT to_regclass('creator_plans') t").fetchone()['t'])
     if has_plans:
         total+=Decimal(c.execute('SELECT COALESCE(sum(GREATEST(reserved,COALESCE(actual_cost,0))),0) n FROM creator_plans').fetchone()['n'] or 0)
-    if has_plans and c.execute("SELECT to_regclass('public.production_batches') t").fetchone()['t']:
+    if has_plans and c.execute("SELECT to_regclass('production_batches') t").fetchone()['t']:
         total+=Decimal(c.execute("""SELECT COALESCE(sum(GREATEST(b.budget-COALESCE((SELECT sum(GREATEST(j.estimated_cost,COALESCE(j.actual_cost,0)))
           FROM jobs j WHERE j.track_id LIKE b.id||'-%'),0),0)),0) n
           FROM production_batches b JOIN creator_plans p ON p.program_id=b.id WHERE p.status IN ('queued','processing')""").fetchone()['n'] or 0)
-    if (c.execute("SELECT to_regclass('public.productions') t").fetchone()['t']
-            and c.execute("SELECT to_regclass('public.production_blocks') t").fetchone()['t']):
+    if (c.execute("SELECT to_regclass('productions') t").fetchone()['t']
+            and c.execute("SELECT to_regclass('production_blocks') t").fetchone()['t']):
         total+=Decimal(c.execute("""SELECT COALESCE(sum(GREATEST(p.cost_ceiling_usd-COALESCE((SELECT sum(pb.budget)
           FROM production_blocks pb WHERE pb.production_id=p.id),0),0)),0) n
           FROM productions p WHERE p.state IN ('active','paused')""").fetchone()['n'] or 0)
