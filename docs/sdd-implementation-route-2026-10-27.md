@@ -227,3 +227,17 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 - O worker agora usa um compilador determinístico do pedido de cada faixa: tema aprovado, briefing musical, bíblia/estilo e instrumentos da receita, itens a evitar, BPM, tonalidade e variação são combinados. O texto resultante é o mesmo persistido no prompt do job e enviado ao provedor; testes não chamam o provedor.
 - Isto verifica a construção e persistência da direção, não uma saída musical real. TEST-16 ainda exige gerar uma composição nova usando referência autorizada e avaliar ritmo, instrumentos e atmosfera. TEST-17 ainda exige decodificação/integridade e audição do arquivo final vinculado ao hash. WP-05 permanece parcial e sem gasto pago nesta etapa.
 - #74 continua aberto e mergeável. Sem merge, deploy, escrita na VPS/`main`, publicação ou geração paga.
+
+## Revalidação WP-01 / integração com a base atual — 28/10/2026
+
+- PR #66 foi sincronizado com a base corrente do #71 (`366c94b27ed37cbe38a3caa06746e20e3d5e8b20`) após resolver conflito na referência do bundle da interface. O bundle final foi recompilado pela execução Linux e o passo temporário de upload de artefato foi removido do workflow.
+- Head #66 `ee599eb6dd22d6549c0e58148a6f655c71944c2b` passou no Checks run `40677730874`: 311 testes Python, 38 Vitest, typecheck/build, bundle e verificações de interface. O GitHub agora reporta `CLEAN`/`MERGEABLE`.
+- A revisão técnica cobre somente a fatia declarada de versionamento/proveniência de roteiros. WP-01 segue parcial e condicionado à saída de WP-00; permissões, vínculos completos de aprovações/artefatos e aceites remanescentes continuam abertos. CI verde e mergeabilidade não são aprovação formal, homologação nem conclusão do pacote.
+- #66 continua aberto, sem merge. Sem deploy, escrita na VPS/`main`, publicação ou geração paga.
+
+## Revalidação WP-01/WP-02 / isolamento e autorização — 28/10/2026
+
+- PR #72 foi sincronizado com o head documental `27bc127ea8a64225ba5c8a981c135012fc9fd307`; novo head `0a2031f23af5121ffe14581a65e041bc2cb48e95` passou no CI `Checks` run `40679017972`. A suíte do CI, verificação de interface, typecheck e build passaram. Testes locais direcionados: 25 aprovados e 43 ignorados por dependerem de ambiente externo.
+- A atualização integra os achados mais recentes de WP-02/WP-00 ao código de contexto de workspace e autorização de gasto; não amplia a cobertura de runtime nem altera as permissões do servidor.
+- WP-01/WP-02 continuam parciais: matriz de autorização por endpoint, TEST-37 em runtime e os aceites restantes dependem da auditoria WP-00. O alias SSH `lofi_vps` ainda não resolve para o hostname configurado, portanto nenhuma conexão foi iniciada.
+- PR #72 segue aberto e mergeável; sem aprovação, merge, deploy, escrita na VPS/`main`, publicação ou geração paga.
