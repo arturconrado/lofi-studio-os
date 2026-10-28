@@ -53,15 +53,20 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$HOST"
-          incoming="/tmp/lofi-auto-deploy-bootstrap-${RUN_ID}"
+          remote_dir=$(ssh -i ~/.ssh/bootstrap -o BatchMode=yes -o StrictHostKeyChecking=yes "root@${HOST}" \
+            "umask 077; mktemp -d /root/.lofi-deployer-bootstrap.XXXXXXXX")
+          [[ "$remote_dir" =~ ^/root/\.lofi-deployer-bootstrap\.[A-Za-z0-9]+$ ]]
+          incoming="${remote_dir}/auto-deploy.sh"
           scp -i ~/.ssh/bootstrap -o BatchMode=yes -o StrictHostKeyChecking=yes \
             ops/auto-deploy.sh "root@${HOST}:${incoming}"
           ssh -i ~/.ssh/bootstrap -o BatchMode=yes -o StrictHostKeyChecking=yes "root@${HOST}" \
-            "EXPECTED_OLD=${EXPECTED_OLD} RUN_ID=${RUN_ID} INCOMING=${incoming} bash -s" <<'REMOTE'
+            "EXPECTED_OLD=${EXPECTED_OLD} RUN_ID=${RUN_ID} INCOMING=${incoming} REMOTE_DIR=${remote_dir} bash -s" <<'REMOTE'
           set -euo pipefail
           target=/opt/lofi-studio-os-releases/bin/auto-deploy
           backup="${target}.pre-protocol2-${RUN_ID}"
           stage="${target}.stage-${RUN_ID}"
+          test "$REMOTE_DIR" = "$(dirname "$INCOMING")"
+          test "$INCOMING" = "${REMOTE_DIR}/auto-deploy.sh"
           installed=0
           restore_on_failure() {
             status=$?
@@ -70,6 +75,7 @@ jobs:
               echo "Bootstrap failed; previous deployer restored from $backup" >&2
             fi
             rm -f "$stage" "$INCOMING"
+            rmdir "$REMOTE_DIR" 2>/dev/null || true
             exit "$status"
           }
           trap restore_on_failure ERR
@@ -90,6 +96,7 @@ jobs:
           actual_installed=$(sha256sum "$target" | awk '{print $1}')
           test "$actual_installed" = "$expected_new"
           rm -f "$INCOMING"
+          rmdir "$REMOTE_DIR"
           trap - ERR
           printf 'Previous deployer preserved at %s\n' "$backup"
           printf 'Installed deployer SHA-256: %s\n' "$actual_installed"
