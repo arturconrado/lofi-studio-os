@@ -84,6 +84,7 @@ def public_task(t):
             'asset_url': f'/api/creator/workshop/projects/{p["project_id"]}/media/{p["asset_id"]}' if p.get('asset_id') else None,
             'variant_key': p.get('variant_key'), 'batch_ids': p.get('batch_ids'),
             'operation': p['operation'], 'clip_id': p.get('clip_id'), 'reserved_usd': t['reserved_cost'],
+            'actual_usd': float(t['actual_cost']) if t.get('actual_cost') is not None else None,
             'attempt_stage': p.get('attempt_stage'),
             'current': p.get('current', True),
             'preview_range': p.get('preview_range'),
@@ -730,8 +731,12 @@ async def provider_callback(workspace: str, token: str, request: Request):
                 status='RUNNING';detail='Resultado recuperado pelo callback; consulte para baixar o mesmo pedido'
             else:
                 status='FAILED';detail='O provedor encerrou o pedido: '+terminal+'. A reserva permanece registrada.'
-            c.execute('UPDATE factory_tasks SET status=%s,payload=%s,detail=%s,updated_at=now() WHERE id=%s',
-                      (status,json.dumps(payload,ensure_ascii=False),detail,row['id']));c.commit()
+            from .workshop_provider import provider_usage_cost
+            actual=provider_usage_cost(data.get('usage'))
+            if terminal!='completed' and actual is not None:
+                detail='O provedor encerrou o pedido: '+terminal+'. Custo final conciliado: US$'+format(actual,'.6f')+'.'
+            c.execute('UPDATE factory_tasks SET status=%s,actual_cost=COALESCE(actual_cost,%s),payload=%s,detail=%s,updated_at=now() WHERE id=%s',
+                      (status,actual,json.dumps(payload,ensure_ascii=False),detail,row['id']));c.commit()
         return {'received':True,'duplicate':False}
     finally:WORKSPACE.reset(scope)
 

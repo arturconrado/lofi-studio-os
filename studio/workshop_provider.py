@@ -20,6 +20,16 @@ VIDEO_MODEL = 'google/veo-3.1-lite'
 BASE = 'https://openrouter.ai/api/v1'
 
 
+def provider_usage_cost(usage):
+    """Return only a finite, nonnegative provider-reported final charge."""
+    from decimal import InvalidOperation
+    if not isinstance(usage, dict) or 'cost' not in usage:return None
+    try:value=Decimal(str(usage['cost']))
+    except (InvalidOperation, TypeError, ValueError):return None
+    if not value.is_finite() or value<0 or value>Decimal('9999.999999'):return None
+    return value
+
+
 def quote(kind, seconds, resolution='720p'):
     last_frame = False
     try:
@@ -159,7 +169,7 @@ def refresh(tid):
     # Lock per task: concurrent refresh clicks must not duplicate media or roll selection back.
     with db() as c:
         t = c.execute('SELECT * FROM factory_tasks WHERE id=%s AND kind=%s FOR UPDATE', (tid, KIND)).fetchone()
-        if not t or t['status'] != 'RUNNING': return
+        if not t or t['status'] not in ('RUNNING','UNCERTAIN') or not t['payload'].get('provider_job_id'): return
         p = t['payload']; headers = {'Authorization': 'Bearer ' + runtime.key()}
         with httpx.Client(timeout=120, follow_redirects=False) as client:
             url = BASE + '/videos/' + p['provider_job_id']
@@ -167,12 +177,22 @@ def refresh(tid):
             if state['status'] in ('failed', 'cancelled', 'expired'):
                 p['provider_terminal_status'] = state['status']
                 if state.get('usage') is not None: p['provider_usage'] = state['usage']
-                detail = ('O provedor confirmou o cancelamento do pedido original; a reserva permanece registrada até conciliar a cobrança.'
-                          if state['status'] == 'cancelled' else
-                          'O pedido original terminou no provedor (' + state['status'] + '); a reserva permanece registrada até conciliar a cobrança.')
-                c.execute("UPDATE factory_tasks SET status='FAILED',payload=%s,detail=%s,updated_at=now() WHERE id=%s",
-                          (json.dumps(p, ensure_ascii=False), detail, tid)); c.commit(); return
+                actual=provider_usage_cost(state.get('usage'))
+                if actual is not None:
+                    detail='O pedido original terminou no provedor ('+state['status']+'); custo final conciliado: US$'+format(actual,'.6f')+'.'
+                else:
+                    detail=('O provedor confirmou o cancelamento do pedido original; a reserva permanece registrada até conciliar a cobrança.'
+                            if state['status'] == 'cancelled' else
+                            'O pedido original terminou no provedor (' + state['status'] + '); a reserva permanece registrada até conciliar a cobrança.')
+                c.execute("UPDATE factory_tasks SET status='FAILED',actual_cost=COALESCE(actual_cost,%s),payload=%s,detail=%s,updated_at=now() WHERE id=%s",
+                          (actual,json.dumps(p, ensure_ascii=False), detail, tid)); c.commit(); return
             if state['status'] != 'completed': return
+            if state.get('usage') is not None:
+                p['provider_usage']=state['usage']
+                actual=provider_usage_cost(state['usage'])
+                c.execute('UPDATE factory_tasks SET actual_cost=COALESCE(actual_cost,%s),payload=%s,updated_at=now() WHERE id=%s',
+                          (actual,json.dumps(p,ensure_ascii=False),tid));c.commit()
+                t=c.execute('SELECT * FROM factory_tasks WHERE id=%s AND kind=%s',(tid,KIND)).fetchone()
             with tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / 'clip.mp4'; size = 0
                 with client.stream('GET', url + '/content', headers=headers) as response:
@@ -206,7 +226,22 @@ def capabilities():
 
 
 def tick(task_id=None):
-    """Claim an authorized, never-sent reservation once, independently of the page."""
+    """Reconcile cancelled sends, then claim an authorized never-sent reservation once."""
+    # This durable scan is also the recovery path after the worker process restarts:
+    # only the original provider ID is polled, and no generation request is resent.
+    if task_id is None:
+        with db() as c:
+            due=c.execute("""UPDATE factory_tasks SET updated_at=now()
+              WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s
+                AND payload->>'operation'='video' AND status IN ('RUNNING','UNCERTAIN')
+                AND payload ? 'cancel_requested_at' AND payload ? 'provider_job_id'
+                AND NOT (payload ? 'provider_terminal_status')
+                AND updated_at<=now()-interval '30 seconds'
+                ORDER BY updated_at,id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id""",(KIND,)).fetchone()
+            if due:c.commit()
+        if due:
+            refresh(due['id'])
+            return True
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
         if not runtime.settings(c)['enabled']:return False

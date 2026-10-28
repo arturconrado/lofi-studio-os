@@ -166,7 +166,7 @@ DB=pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable
 
 
 @DB
-def test_cancel_video_is_local_before_submit_and_confirms_same_remote_job(client,monkeypatch):
+def test_cancel_video_survives_worker_restart_and_reconciles_same_remote_job_and_cost(client,monkeypatch):
     from test_authentication import signup
     from studio.core import db
     from studio.tenancy import WORKSPACE
@@ -196,32 +196,60 @@ def test_cancel_video_is_local_before_submit_and_confirms_same_remote_job(client
     assert response.status_code==200,response.text
     assert response.json()['status']=='RUNNING' and response.json()['cancel_state']=='requested'
     assert response.json()['reserved_usd']==pytest.approx(.08)
-    from studio import workshop_provider
-    queried=[]
-    class Response:
-        def raise_for_status(self):pass
-        def json(self):return {'status':'cancelled','usage':{'cost':.03}}
-    class ProviderClient:
-        def __init__(self,**kwargs):pass
-        def __enter__(self):return self
-        def __exit__(self,*args):pass
-        def get(self,url,**kwargs):queried.append(url);return Response()
-    monkeypatch.setattr(workshop_provider.httpx,'Client',ProviderClient)
-    response=cl.post(f'{root}/{running_id}/refresh')
-    assert response.status_code==200,response.text
-    assert response.json()['status']=='FAILED' and response.json()['cancel_state']=='confirmed'
-    assert queried==[workshop_provider.BASE+'/videos/private-job-id']
+    marker=WORKSPACE.set(workspace)
+    try:
+        with db() as c:c.execute("UPDATE factory_tasks SET updated_at=now()-interval '31 seconds' WHERE id=%s",(running_id,));c.commit()
+    finally:WORKSPACE.reset(marker)
+    # A fresh worker process has no in-memory request state. It must discover the
+    # durable cancellation and poll the original provider ID without resubmitting.
+    script='''
+import json,sys
+from studio import core,workshop_provider as provider
+from studio.tenancy import WORKSPACE
+class Response:
+    def raise_for_status(self):pass
+    def json(self):return {'status':'cancelled','usage':{'cost':.03}}
+class ProviderClient:
+    def __init__(self,**kwargs):pass
+    def __enter__(self):return self
+    def __exit__(self,*args):pass
+    def get(self,url,**kwargs):
+        print('POLLED '+url)
+        return Response()
+provider.httpx.Client=ProviderClient
+provider.runtime.key=lambda:'test-token'
+marker=WORKSPACE.set(sys.argv[1])
+try:
+    result=provider.tick()
+    from studio.financial import total_usage
+    with core.db() as c:
+        task=c.execute('SELECT status,reserved_cost,actual_cost,payload FROM factory_tasks WHERE id=%s',(sys.argv[2],)).fetchone()
+        print(json.dumps({'result':result,'status':task['status'],'reserved':str(task['reserved_cost']),
+          'actual':str(task['actual_cost']),'provider_id':task['payload']['provider_job_id'],
+          'terminal':task['payload']['provider_terminal_status'],'usage':task['payload']['provider_usage'],
+          'ledger':str(total_usage(c))}))
+finally:WORKSPACE.reset(marker)
+'''
+    env=os.environ.copy();env['DATABASE_URL']=os.environ['LOFI_TEST_DATABASE_URL'];env['PYTHONPATH']=os.getcwd()
+    restarted=subprocess.run([sys.executable,'-c',script,workspace,str(running_id)],cwd=os.getcwd(),env=env,
+                             text=True,capture_output=True,check=True,timeout=30)
+    assert 'POLLED https://openrouter.ai/api/v1/videos/private-job-id' in restarted.stdout
+    reconciled=json.loads(restarted.stdout.strip().splitlines()[-1])
+    assert {key:value for key,value in reconciled.items() if key!='ledger'}=={
+        'result':True,'status':'FAILED','reserved':'0.080000','actual':'0.030000',
+        'provider_id':'private-job-id','terminal':'cancelled','usage':{'cost':.03}}
+    assert Decimal(reconciled['ledger'])==Decimal('.03')
     marker=WORKSPACE.set(workspace)
     try:
         with db() as c:
             queued=c.execute('SELECT status,reserved_cost FROM factory_tasks WHERE id=%s',(queued_id,)).fetchone()
-            running=c.execute('SELECT status,reserved_cost,payload FROM factory_tasks WHERE id=%s',(running_id,)).fetchone()
+            running=c.execute('SELECT status,reserved_cost,actual_cost,payload FROM factory_tasks WHERE id=%s',(running_id,)).fetchone()
             assert queued['status']=='CANCELLED' and queued['reserved_cost']==0
-            assert running['status']=='FAILED' and running['reserved_cost']==Decimal('.08')
-            assert running['payload'].get('cancel_requested_at')
-            assert running['payload']['provider_job_id']=='private-job-id'
-            assert running['payload']['provider_terminal_status']=='cancelled'
-            assert running['payload']['provider_usage']=={'cost':.03}
+            assert running['status']=='FAILED' and running['reserved_cost']==Decimal('.08') and running['actual_cost']==Decimal('.03')
+            assert running['payload'].get('cancel_requested_at') and running['payload']['provider_job_id']=='private-job-id'
+            assert running['payload']['provider_terminal_status']=='cancelled' and running['payload']['provider_usage']=={'cost':.03}
+            from studio.financial import total_usage
+            assert total_usage(c)==Decimal('.03')
     finally:WORKSPACE.reset(marker)
 
 
@@ -264,8 +292,9 @@ def test_provider_callback_recovers_uncertain_video_job_and_deduplicates(client,
     marker=WORKSPACE.set(workspace)
     try:
         with db() as c:
-            task=c.execute('SELECT status,reserved_cost,payload FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
+            task=c.execute('SELECT status,reserved_cost,actual_cost,payload FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
             assert task['status']=='RUNNING' and task['reserved_cost']==Decimal('.08')
+            assert task['actual_cost']==Decimal('.06')
             assert task['payload']['provider_job_id']=='job-abc123'
             assert task['payload']['provider_usage']=={'cost':.06}
             assert task['payload']['webhook_event_key']=='job-abc123-completed'
@@ -356,13 +385,14 @@ def test_cancelled_provider_terminal_event_keeps_original_job_and_financial_rese
     marker=WORKSPACE.set(workspace)
     try:
         with db() as c:
-            task=c.execute('SELECT status,reserved_cost,payload FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
+            task=c.execute('SELECT status,reserved_cost,actual_cost,payload FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
             from studio.financial import total_usage
             assert task['status']=='FAILED' and task['reserved_cost']==Decimal('.08')
+            assert task['actual_cost']==Decimal('.03')
             assert task['payload']['provider_job_id']=='job-cancelled'
             assert task['payload']['provider_terminal_status']=='cancelled'
             assert task['payload']['provider_usage']=={'cost':.03}
-            assert total_usage(c)==Decimal('.08')
+            assert total_usage(c)==Decimal('.03')
     finally:WORKSPACE.reset(marker)
 
 
@@ -448,8 +478,9 @@ def test_paid_video_timeout_callback_and_poll_reconcile_same_attempt_without_res
     marker=WORKSPACE.set(workspace)
     try:
         with db() as c:
-            task=c.execute('SELECT status,reserved_cost,payload FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
+            task=c.execute('SELECT status,reserved_cost,actual_cost,payload FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
             assert task['status']=='RUNNING' and task['reserved_cost']==Decimal('.08')
+            assert task['actual_cost']==Decimal('.06')
             assert task['payload']['provider_job_id']=='job-lost-response'
     finally:WORKSPACE.reset(marker)
     marker=WORKSPACE.set(workspace)
@@ -458,8 +489,9 @@ def test_paid_video_timeout_callback_and_poll_reconcile_same_attempt_without_res
     marker=WORKSPACE.set(workspace)
     try:
         with db() as c:
-            task=c.execute('SELECT status,reserved_cost,payload FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
+            task=c.execute('SELECT status,reserved_cost,actual_cost,payload FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
             assert task['status']=='COMPLETED' and task['reserved_cost']==Decimal('.08')
+            assert task['actual_cost']==Decimal('.06')
             assert task['payload']['asset_id']=='original-job-result'
             assert task['payload']['provider_job_id']=='job-lost-response'
     finally:WORKSPACE.reset(marker)

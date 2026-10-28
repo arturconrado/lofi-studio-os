@@ -86,7 +86,7 @@ def bounded_json_call(request_id,channel_id,kind,meta,system,user,transform,resu
         value=transform(json.loads(result['choices'][0]['message']['content']))
         payload={result_key:value,'actual_cost_usd':result.get('usage',{}).get('cost')}
         with db() as c:
-            c.execute("UPDATE factory_tasks SET status='COMPLETED',reserved_cost=COALESCE(%s,reserved_cost),payload=payload||%s::jsonb,detail=%s,updated_at=now() WHERE id=%s",(payload['actual_cost_usd'],json.dumps(payload,ensure_ascii=False),label+' pronta para revisão',request_id));audit(c,kind.upper()+'_CREATED',str(request_id),json.dumps(meta,ensure_ascii=False)[:200]);c.commit()
+            c.execute("UPDATE factory_tasks SET status='COMPLETED',actual_cost=COALESCE(actual_cost,%s),payload=payload||%s::jsonb,detail=%s,updated_at=now() WHERE id=%s",(payload['actual_cost_usd'],json.dumps(payload,ensure_ascii=False),label+' pronta para revisão',request_id));audit(c,kind.upper()+'_CREATED',str(request_id),json.dumps(meta,ensure_ascii=False)[:200]);c.commit()
         return value,False,payload['actual_cost_usd']
     except Exception:
         with db() as c:c.execute("UPDATE factory_tasks SET status='UNCERTAIN',detail=%s,updated_at=now() WHERE id=%s",(label+' não concluída; sem nova tentativa paga automática',request_id));c.commit()

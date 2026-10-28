@@ -9,7 +9,7 @@ def total_usage(c):
     row=c.execute("""SELECT COALESCE(sum(GREATEST(estimated_cost,COALESCE(actual_cost,0))),0) n
       FROM jobs WHERE budget_reserved""").fetchone()
     total=Decimal(row['n'] or 0)
-    total+=Decimal(c.execute('SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks').fetchone()['n'] or 0)
+    total+=Decimal(c.execute('SELECT COALESCE(sum(COALESCE(actual_cost,reserved_cost)),0) n FROM factory_tasks').fetchone()['n'] or 0)
     # Resolve tables through this connection's search_path so isolated workspace
     # schemas are charged without reading another workspace or requiring public.
     has_plans=bool(c.execute("SELECT to_regclass('creator_plans') t").fetchone()['t'])
