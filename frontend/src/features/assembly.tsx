@@ -6,10 +6,12 @@ import { attempt } from '../lib/toast';
 import { Check, Empty, Field, Pill, Skeleton, Stages } from '../ds/ui';
 
 type Point = [number, number];
-type Clip = { id: string; seconds: number; reviewed: boolean; sha256: string; preview_url: string };
+type Clip = { id: string; seconds: number; reviewed: boolean; sha256: string; preview_url: string; origin: { kind: 'baseline_pilot' | 'reused_plan' | 'uploaded_to_plan'; id: string } };
 type Action = { action: string; minimum_seconds: number; direction: string; ready: boolean; clips: Clip[] };
 type Plan = {
-  plan_id: string; revision: number; preflight: { ready: boolean; failures: string[] }; actions: Action[];
+  plan_id: string; revision: number; revision_sha256?: string | null;
+  identity_reference?: { kind: 'pilot' | 'plan'; id: string; title: string; sha256: string; canonical: boolean };
+  preflight: { ready: boolean; failures: string[] }; actions: Action[];
   audio_programs: { id: string; title: string; seconds: number; music_style?: string }[];
   audio: { source_programs?: string[]; seconds?: number; unique_measured_seconds?: number };
   scene_sources: { batch_id?: string; pilot_id?: string; id: string; title: string; image_url: string }[];
@@ -86,6 +88,9 @@ export function Assembly({ id }: { id: string }) {
   const selectedScene = data?.scene_sources.find(s => s.image_url === regionSource) || data?.scene_sources[0];
   const selectedDuration = useMemo(() => selectedPrograms.reduce((total, programId) => total + Number(data?.audio_programs.find(p => p.id === programId)?.seconds || 0), 0), [selectedPrograms, data]);
 
+  const clipOrigin = (clip: Clip) => clip.origin.kind === 'baseline_pilot' ? `Episódio de referência ${clip.origin.id}`
+    : clip.origin.kind === 'reused_plan' ? `Reaproveitado do roteiro ${clip.origin.id}` : 'Enviado para este roteiro';
+
   const moveProgram = (index: number, offset: number) => setSelectedPrograms(current => {
     const next = index + offset; if (next < 0 || next >= current.length) return current;
     const value = [...current]; [value[index], value[next]] = [value[next], value[index]]; return value;
@@ -137,12 +142,14 @@ export function Assembly({ id }: { id: string }) {
   };
 
   return <>
-    <div class="page-head"><div class="grow"><h1>Preparar episódio completo</h1><p class="muted">Roteiro {data.plan_id} · montagem local sem geração paga ou publicação.</p></div><Pill tone={data.preflight.ready ? 'ok' : 'warn'}>{data.preflight.ready ? 'Pronto para montar' : 'Faltam materiais revisados'}</Pill></div>
+    <div class="page-head"><div class="grow"><h1>Preparar episódio completo</h1><p class="muted">Roteiro {data.plan_id} · revisão v{data.revision}{data.revision_sha256 ? ` · SHA-256 ${data.revision_sha256.slice(0,12)}` : ''} · montagem local sem geração paga ou publicação.</p></div><Pill tone={data.preflight.ready ? 'ok' : 'warn'}>{data.preflight.ready ? 'Pronto para montar' : 'Faltam materiais revisados'}</Pill></div>
 
     <section class="card stack">
       <h3>1. Referência e identidade</h3>
       <p class="faint">A referência define aparência e composição. Ela nunca entra no MP4 final.</p>
       {!data.identity_sources.length ? <div class="notice warn">Não há referência aprovada neste canal para a cena escolhida.</div> : <div class="grid auto">{data.identity_sources.map(source => <button type="button" class="recipe" onClick={() => selectIdentity(source)}><Pill tone={source.canonical ? 'violet' : ''}>{source.canonical ? 'Referência aprovada' : 'Plano do canal'}</Pill><h4>{source.title}</h4><span class="faint">Vincular ao roteiro</span></button>)}</div>}
+      {data.identity_reference ? <div class="notice">Identidade fixada: {data.identity_reference.title} · {data.identity_reference.kind === 'pilot' ? 'episódio' : 'roteiro'} {data.identity_reference.id} · SHA-256 {data.identity_reference.sha256.slice(0,12)}</div>
+        : data.identity_bound ? <div class="notice warn">Esta versão antiga já fixa a identidade por hash, mas não registra a origem da referência.</div> : null}
       {!data.identity_bound && <div class="notice warn">Selecione uma identidade antes de enviar ou reutilizar clipes; a escolha é vinculada por hash.</div>}
     </section>
 
@@ -154,6 +161,7 @@ export function Assembly({ id }: { id: string }) {
         {!action.ready && <label class="btn sm" style={{ alignSelf: 'flex-start', opacity: data.identity_bound ? 1 : .5 }}>Enviar clipe<input type="file" accept="video/mp4,video/*" disabled={!data.identity_bound} style={{ display: 'none' }} onChange={e => upload(action.action, (e.currentTarget as HTMLInputElement).files?.[0])} /></label>}
         {action.clips.map(clip => <div class="stack" style={{ gap: '8px' }}>
           <video controls preload="metadata" src={clip.preview_url} style={{ maxWidth: '480px', width: '100%' }} />
+          <span class="faint">Origem: {clipOrigin(clip)} · SHA-256 {clip.sha256.slice(0,12)} · revisão do roteiro v{data.revision}</span>
           {clip.reviewed ? <Pill tone="ok">Hash revisado</Pill> : <>
             <Check checked={!!reviews[clip.id]?.identity} onChange={v => setReviews({...reviews,[clip.id]:{...reviews[clip.id],identity:v}})}>Mesma garota, gato e objetos da referência</Check>
             <Check checked={!!reviews[clip.id]?.motion} onChange={v => setReviews({...reviews,[clip.id]:{...reviews[clip.id],motion:v}})}>Movimento completo e natural, sem cortes ou câmera móvel</Check>

@@ -111,6 +111,12 @@ def select_identity(pid:uuid.UUID,body:IdentityChange):
         if not source:raise HTTPException(409,'Escolha uma referência aprovada neste canal')
         spec=dict(row['data']['production_spec']);spec.update(character_reference='reviewed:'+source['sha256']+':girl',cat_reference='reviewed:'+source['sha256']+':cat')
         data=dict(row['data']);data['production_spec']=spec
+        data['identity_reference']={
+            'kind':'pilot' if body.source_pilot_id else 'plan',
+            'id':str(body.source_pilot_id or body.source_plan_id),
+            'title':source['title'],'sha256':source['sha256'],
+            'canonical':bool(source.get('canonical')),
+        }
         from .creator_plan_versions import save_locked_revision
         revision=save_locked_revision(c,row,data,body.revision);audit(c,'TIMELINE_IDENTITY_SELECTED',str(pid),source_id);c.commit()
     return {'production_spec':spec,'revision':revision,'paid_calls':0,'reviews_must_match_new_identity':True}
@@ -191,6 +197,7 @@ def plan_economics(pid:uuid.UUID):
 def status(pid:uuid.UUID):
     with db() as c:
         row=get_plan(c,pid);compiled,result=materials(row);available=compatible_assets(c,row);identities=identity_sources(c,row)
+        revision_record=c.execute('SELECT sha256 FROM creator_plan_revisions WHERE plan_id=%s AND revision=%s',(pid,row['revision'])).fetchone()
         online=bool(c.execute("SELECT 1 FROM factory_tasks WHERE id=%s AND kind=%s AND updated_at>now()-interval '45 seconds'",(HEARTBEAT,WORKER)).fetchone())
         jobs=c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'plan_id'=%s ORDER BY created_at DESC LIMIT 10",(KIND,str(pid))).fetchall()
         scenes=c.execute('SELECT s.batch_id,s.id,s.title,s.image_key FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.image_key IS NOT NULL ORDER BY s.batch_id,s.position',(row['channel_id'],)).fetchall()
@@ -217,7 +224,8 @@ def status(pid:uuid.UUID):
     for task in compiled['asset_tasks']:
         pixel= row['data']['production_spec'].get('visual_variant') in ('pixel_art_original','pixel_art_reviewed')
         entries=[{'id':k,'seconds':a.get('seconds'),'reviewed':a.get('status')=='APPROVED_ACTION' and a.get('human_review_sha256')==a.get('sha256') and (not pixel or (a.get('visual_style_reviewed') is True and a.get('visual_style_review_sha256')==a.get('sha256'))),
-                  'sha256':a.get('sha256'),'preview_url':f'/api/creator/assembly/plans/{pid}/clips/{k}/video'}
+                  'sha256':a.get('sha256'),'origin':({'kind':'baseline_pilot','id':a['baseline_pilot_id']} if a.get('baseline_pilot_id') else {'kind':'reused_plan','id':a['reused_from_plan']} if a.get('reused_from_plan') else {'kind':'uploaded_to_plan','id':str(pid)}),
+                  'preview_url':f'/api/creator/assembly/plans/{pid}/clips/{k}/video'}
                  for k,a in row['data'].get('production_assets',{}).items() if a.get('role')=='action_clip' and a.get('cache_fingerprint')==task['cache_fingerprint']]
         contract=library()['actions'].get(task['action'],{})
         actions.append({'action':task['action'],'minimum_seconds':minimum_seconds(compiled,task['action']),'pose':contract,
@@ -227,7 +235,8 @@ def status(pid:uuid.UUID):
     if audio_binding.get('audio_sources'):audio_summary['source_programs']=[s['program_id'] for s in audio_binding['audio_sources']]
     from .scene_profiles import scene as scene_profile
     requirements=scene_profile(row['data']['production_spec']['scenario'])
-    return {'plan_id':pid,'revision':row['revision'],'input_sha256':inputs_hash(row,result),'preflight':result,'actions':actions,'audio_programs':programs,'scene_sources':scenes,
+    return {'plan_id':pid,'revision':row['revision'],'revision_sha256':revision_record['sha256'] if revision_record else None,
+            'identity_reference':row['data'].get('identity_reference'),'input_sha256':inputs_hash(row,result),'preflight':result,'actions':actions,'audio_programs':programs,'scene_sources':scenes,
             'scene_requires_lights_region':requirements['requires_lights_region'],'required_seconds':compiled['duration_seconds'],
             'required_music_style':row['data']['production_spec']['music_style'],
             'required_visual_variant':row['data']['production_spec'].get('visual_variant','canonical_illustrated'),

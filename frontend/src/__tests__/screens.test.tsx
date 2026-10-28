@@ -21,6 +21,7 @@ const block = { id: 'block_review:LOFI-1', kind: 'block_review', priority: 10, t
   track_evidence: [{ name: 'listened_fully', type: 'bool', label: 'Ouvi' }], track_actions: { approve: { method: 'POST', path: '/api/tracks/{track_id}/approve', body: { asset_id: '{asset_id}' } }, reject: { method: 'POST', path: '/api/tracks/{track_id}/assets/{asset_id}/reject' } },
   evidence: [{ name: 'confirm_audio_video', type: 'bool', label: 'Ouvi e assisti' }, { name: 'confirm_rights', type: 'bool', label: 'Direitos' }], prefill: {}, action: { method: 'POST', path: '/api/miniobs/programs/LOFI-1/review', body: {} }, after: [] };
 let assemblyJob: any = null;
+let assemblyData: any = null;
 let publications: any[] = [];
 let pilotCandidates: any[] = [];
 
@@ -31,7 +32,7 @@ function respond(url: string): unknown {
   if (url.includes('/productions/legacy')) return { programs: [] };
   if (url.includes('/productions/p1')) return production;
   if (url.includes('/productions/quote')) return { recipe: { name: '8-Bit', sha256: 'a' }, scenario: 'snowy_night_studio', scene_label: 'Snowy', reference: { title: 'Snowy' }, estimate_usd: 2.48, estimate_per_block_usd: 2.48, suggested_ceiling_usd: 3, remaining_usd: 30, paid_enabled: true, audio_prompt: 'p', copy: { title: 't', description: 'd' }, visual: { mode: 'episode_reference', planned: [{ minute: 15, sequence: 'breath_pet', actions: ['pet_cat'] }], required_actions: ['pet_cat', 'typing_idle'], available_actions: [], missing_actions: ['pet_cat', 'typing_idle'], applied: false, executed: [], label: 'Sem movimentos programados' } };
-  if (url.includes('/assembly/plans/')) return { plan_id: 'plan-a', revision: 1, preflight: { ready: false, failures: ['action_clips_missing'] }, actions: [], audio_programs: [], audio: {}, scene_sources: [], scene_requires_lights_region: false, required_seconds: 3600, required_music_style: 'jazz_lofi', required_visual_variant: 'canonical_illustrated', environment: null, worker_online: false, identity_sources: [], identity_bound: false, jobs: assemblyJob ? [assemblyJob] : [], episode_state: assemblyJob?.state === 'COMPLETED' ? { state: 'QC', pending: [], order: ['DRAFT','PROPOSED','VALIDATED','PREVIEWED','RENDERING','QC','APPROVED','PUBLISHED'] } : { state: 'DRAFT', pending: ['action_clips_missing'], order: ['DRAFT','PROPOSED','VALIDATED','PREVIEWED','RENDERING','QC','APPROVED','PUBLISHED'] } };
+  if (url.includes('/assembly/plans/')) return assemblyData || { plan_id: 'plan-a', revision: 1, preflight: { ready: false, failures: ['action_clips_missing'] }, actions: [], audio_programs: [], audio: {}, scene_sources: [], scene_requires_lights_region: false, required_seconds: 3600, required_music_style: 'jazz_lofi', required_visual_variant: 'canonical_illustrated', environment: null, worker_online: false, identity_sources: [], identity_bound: false, jobs: assemblyJob ? [assemblyJob] : [], episode_state: assemblyJob?.state === 'COMPLETED' ? { state: 'QC', pending: [], order: ['DRAFT','PROPOSED','VALIDATED','PREVIEWED','RENDERING','QC','APPROVED','PUBLISHED'] } : { state: 'DRAFT', pending: ['action_clips_missing'], order: ['DRAFT','PROPOSED','VALIDATED','PREVIEWED','RENDERING','QC','APPROVED','PUBLISHED'] } };
   if (url.includes('/productions')) return { productions: [production] };
   if (url.includes('/inbox')) return { items: [block], count: 1, counts: { block_review: 1 } };
   if (url.includes('/catalog')) return { styles: [{ id: '8bit_lofi', label: '8-bit', bpm: [65, 85], direction: 'chip' }], scenes: [{ id: 'snowy_night_studio', label: 'Snowy Night Studio · lareira', approved: true }], sequences: [{ id: 'breath_pet', requires: ['cat'] }], contextual_actions: [] };
@@ -50,6 +51,7 @@ function respond(url: string): unknown {
 
 beforeEach(() => {
   assemblyJob = null;
+  assemblyData = null;
   publications = [];
   pilotCandidates = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(respond(url)), { status: 200 })));
@@ -77,8 +79,26 @@ describe('every screen renders with data', () => {
     navigate('/montagem/plan-a');
     const { container } = render(<App />);
     await waitFor(() => expect(container.textContent).toContain('Roteiro em preparação'));
+    expect(container.textContent).toContain('revisão v1');
     expect(container.textContent).toContain('Faltam clipes de ação revisados.');
     expect(container.textContent).toContain('Montagem');
+  });
+
+  it('shows the plan revision, pinned identity source, and clip origin', async () => {
+    assemblyData = { plan_id: 'plan-a', revision: 4, revision_sha256: 'f'.repeat(64),
+      identity_reference: { kind: 'plan', id: 'source-plan', title: 'Snowy reference', sha256: 'a'.repeat(64), canonical: false },
+      preflight: { ready: false, failures: ['action_clips_missing'] },
+      actions: [{ action: 'typing_idle', minimum_seconds: 2, direction: 'typing', ready: false,
+        clips: [{ id: 'clip-a', seconds: 8, reviewed: false, sha256: 'b'.repeat(64), preview_url: '/clip', origin: { kind: 'reused_plan', id: 'source-plan' } }] }],
+      audio_programs: [], audio: {}, scene_sources: [], scene_requires_lights_region: false, environment: null,
+      worker_online: false, required_seconds: 3600, required_music_style: 'jazz_lofi', required_visual_variant: 'canonical_illustrated',
+      identity_sources: [], identity_bound: true, jobs: [], episode_state: { state: 'DRAFT', pending: ['action_clips_missing'], order: ['DRAFT','PROPOSED','VALIDATED','PREVIEWED','RENDERING','QC','APPROVED','PUBLISHED'] } };
+    navigate('/montagem/plan-a');
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.textContent).toContain('revisão v4'));
+    expect(container.textContent).toContain('Identidade fixada: Snowy reference');
+    expect(container.textContent).toContain('Reaproveitado do roteiro source-plan');
+    expect(container.textContent).toContain('SHA-256 bbbbbbbbbbbb');
   });
 
   it('offers whole episode review only for a completed current render', async () => {

@@ -27,6 +27,38 @@ def test_missing_inputs_do_not_queue_or_charge_and_require_csrf(client):
     assert client.post(base+'/clips/not_an_action',files={'file':('x.mp4',b'invalid')},headers=headers).status_code==422
 
 
+def test_assembly_status_exposes_revision_digest_and_identity_source(client):
+    import json
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio.production_harness import production_spec_hash
+    from studio.creator_plan_versions import content_hash
+    target,headers,spec,cid=draft(client)
+    source=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers)
+    assert source.status_code==200,source.text
+    source=source.json()['id'];asset_id=str(uuid.uuid4());sha='a'*64
+    workspace=client.get('/api/auth/me').json()['workspace_id'];marker=WORKSPACE.set(workspace)
+    try:
+        with db() as c:
+            row=c.execute('SELECT data FROM creator_plans WHERE id=%s',(source,)).fetchone()
+            asset={'role':'interaction_reference','state':'APPROVED_REFERENCE','human_review':'approved',
+                   'sha256':sha,'human_review_sha256':sha,
+                   'spec_sha256':production_spec_hash(row['data']['production_spec'])}
+            c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',%s::jsonb) WHERE id=%s",
+                      (json.dumps({asset_id:asset}),source));c.commit()
+    finally:WORKSPACE.reset(marker)
+
+    selected=client.post(f'/api/creator/assembly/plans/{target}/identity',
+                         json={'source_plan_id':source,'revision':1},headers=headers)
+    assert selected.status_code==200,selected.text
+    assert selected.json()['revision']==2
+    status=client.get(f'/api/creator/assembly/plans/{target}').json()
+    saved=client.get(f'/api/creator/plans/{target}/revisions/2').json()
+    assert status['revision']==2 and status['revision_sha256']==saved['sha256']==content_hash(saved['data'])
+    assert status['identity_reference']=={'kind':'plan','id':source,'title':saved['data']['identity_reference']['title'],
+                                          'sha256':sha,'canonical':False}
+
+
 def test_regions_survive_budget_save_and_never_approve_full_program(client):
     pid,headers,spec,cid=draft(client);base='/api/creator/assembly/plans/'+pid
     regions={'revision':1,'sky':[[.6,0],[1,0],[1,.3],[.6,.3]],'lights':[[.6,.3],[1,.3],[1,.6],[.6,.6]],'cushion_box':[.1,.7,.2,.1],'confirm_regions':True}
@@ -64,6 +96,7 @@ def test_real_clip_upload_review_and_compatible_reuse_are_separate(client,monkey
     assert r.status_code==200,r.text
     clip=r.json();action=next(a for a in client.get(base).json()['actions'] if a['action']=='typing_idle')
     assert not action['ready']
+    assert action['clips'][0]['origin']=={'kind':'uploaded_to_plan','id':pid}
     review={'sha256':clip['sha256'],'confirm_identity_props':True,'confirm_motion':True,'confirm_pose_anchors':True}
     assert client.post(base+'/clips/'+clip['id']+'/review',json=review,headers=headers).status_code==422
     review['confirm_loop_seam']=True
