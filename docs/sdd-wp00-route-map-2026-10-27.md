@@ -14,6 +14,7 @@ Verificação estrutural: a contagem AST dos decorators HTTP no baseline encontr
 - O fallback de Basic admin é um caminho distinto: o middleware autoriza a requisição sem definir `req.state.identity` nem o contexto de workspace e não aplica os filtros de papel/CSRF da sessão. Cada handler precisa ser revisado para confirmar como trata esse caminho; o mapa abaixo descreve só a política global, não uma garantia de autorização funcional.
 - Algumas operações verificam autorização adicional dentro dos próprios handlers (por exemplo, gestão/publicação no YouTube e direitos de mídia). O middleware global não substitui a auditoria por endpoint nem demonstra isolamento de cada consulta ao banco.
 - A tentativa read-only sem sessão de obter `/openapi.json` retornou 401; não foi obtido catálogo dinâmico. `GET /health` não foi chamado.
+- Essa observação descreve a tentativa HTTP externa; uma inspeção read-only local do objeto FastAPI carregado em memória pelo container Studio foi realizada em 28/10/2026 e está registrada ao final deste documento.
 - As suítes usam `LOFI_TEST_DATABASE_URL` e gravam/limpam o banco configurado. A variável não estava configurada inicialmente; para validar sem risco apontei os testes a um PostgreSQL temporário local, isolado e descartável em `127.0.0.1:55439`, sem usar banco compartilhado. A suíte de autenticação passou (23 testes), a de publicação YouTube passou (11) e a execução completa de `tests/` passou no head `9d47c37` (284 testes, 3 avisos de depreciação). Isso não equivale a concluir os aceites TEST-01…TEST-41 nem prova paridade com produção ou homologação visual.
 
 ## Revisão estática dos handlers de YouTube/publicação
@@ -329,6 +330,10 @@ Os pontos de submissão em `creator_service.py`, `batch_factory.py` e `workshop_
 
 ## Limites e próximos passos
 
-- A auditoria não importou o app nem chamou endpoints: o ambiente de leitura não tem a dependência FastAPI instalada. A extração usa AST da fonte e foi confrontada com as 223 declarações `app/router` encontradas por busca textual.
+- A extração original usa AST da fonte e foi confrontada com as 223 declarações `app/router` encontradas por busca textual. A verificação adicional de runtime abaixo importa a aplicação sem iniciar lifespan, chamar handlers, acessar dados ou fazer requisições.
 - Este mapa descreve a `main` baseline. A auditoria de produção confirmou múltiplas revisões de imagem; ainda é preciso verificar quais rotas cada serviço expõe e reconciliar permissões e caminhos entre portal antigo e novo.
-- Para fechar WP-00, completar uma matriz por endpoint de papel/escopo/regra do handler, comparar com o runtime e registrar jornada de Revisão → Biblioteca → publicação simulada. Este mapa não fecha WP-00 nem TEST-27.
+- Para fechar WP-00, completar a matriz por endpoint de papel/escopo/regra do handler e validar as regras dinamicamente com sessão autenticada, além de registrar a jornada de Revisão → Biblioteca → publicação simulada no runtime. A captura de rotas do serviço Studio não fecha WP-00 nem TEST-27.
+
+## Inventário de rotas do runtime Studio — 28/10/2026, 05:26 UTC
+
+Sem iniciar o app, a consulta interna `app.openapi()` no container `studio` em execução produziu 223 pares método/caminho em 199 caminhos; o SHA-256 do inventário normalizado é `0bf9f2b35771bf07ca73b2d0b79c40268f4eea0bd5c24eb3190b5e9a2add128d`. O mesmo cálculo no código de `main` em `cb369c97e9f9fb175392f4341296b50d3f42476e` produziu a mesma contagem e hash. Isso confirma paridade do inventário declarado pelo app FastAPI do serviço Studio com essa revisão de código. A consulta não executou rotas, validou papéis/escopos, chamadas de banco, fluxos funcionais, nem rotas dos outros seis containers; o HTTP `/openapi.json` continua protegido por sessão e a matriz runtime de autorização segue pendente.

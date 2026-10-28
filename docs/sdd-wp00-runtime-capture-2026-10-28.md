@@ -50,3 +50,33 @@ Esta captura atualiza a evidência do WP-00 sobre serviços, identidade das imag
 ## Checagem de autenticação do runtime
 
 Uma requisição GET local ao endpoint OpenAPI do Studio retornou HTTP 401 (`Autenticação necessária`). Isso comprova que o endpoint de documentação está atrás do middleware de sessão; não revela a lista de rotas nem comprova as permissões específicas de cada endpoint. A aba da plataforma estava em `/login`, então a matriz runtime de permissões segue pendente de uma sessão autenticada.
+
+## Revalidação read-only — 28/10/2026, aproximadamente 05:15 UTC
+
+O alias local `lofi_vps` ainda não resolvia. A lista autenticada de droplets da DigitalOcean identificou um único droplet ativo compatível com o servidor; usei o endereço retornado pela API com a chave `lofi_vps`, host-key checking estrito e comandos apenas de leitura. O nome observado pelo SSH corresponde ao droplet. Nenhum endereço IP ou conteúdo de chave foi registrado neste documento.
+
+Nova inspeção de estado confirmou os sete containers Lo-Fi ativos e em execução, com as mesmas tags e revisões OCI descritas acima: core em `cb369c9`, YouTube publisher em `1789d4d`, rádio/channel-radio em `be426a8` e music-worker com rótulo `development`. Isso confirma o estado observado, sem provar saúde funcional ou equivalência dos serviços.
+
+A entrada ativa de deploy em `authorized_keys` continua restrita e chama um comando fixo no host. O SHA-256 do executável chamado continua idêntico ao `ops/auto-deploy.sh` de `origin/main` (`cb369c9`, prefixo `4b97425d`). O `ops/auto-deploy.sh` no head atual do PR #63 continua diferente (prefixo `803d0961`). O PR não instala esse script no caminho fixo; o bloqueio de integração permanece. A leitura não abriu `.env`, valores de segredo, conteúdo de banco, volumes ou mídia.
+
+Resultado: a falha do alias não impede mais a consulta autorizada de leitura enquanto a API da DigitalOcean fornecer o droplet atual, mas o alias local segue sem correção. Nenhum arquivo, serviço, banco, configuração ou dado da VPS foi alterado.
+
+## Rechecagem de estado dos containers — 28/10/2026, 05:18 UTC
+
+Uma nova consulta read-only de `docker ps` confirmou sete containers Lo-Fi em execução: Studio (`healthy`, ativo há cerca de 5 h), creator e export-worker (ativos há cerca de 5 h), YouTube publisher, rádio, channel-radio e music-worker (ativos há cerca de 3 dias). As tags de imagem permanecem `production-cb369c9`, `production-ed85886`, `production-be426a8-radio` e `production-d877875`, respectivamente. Também há um container separado `lofi-staging-tunnel-connector` em execução; ele não foi tratado como serviço de produção do Lo-Fi Studio. Estado `Up`/`healthy` confirma apenas o estado reportado pelo Docker nesta consulta, não a disponibilidade funcional de cada rota ou worker. Nenhuma ação remota de escrita foi executada.
+
+## Catálogo PostgreSQL read-only — 28/10/2026, 05:19 UTC
+
+Em transação explicitamente read-only, consultei apenas `information_schema.columns` e os catálogos `pg_class`/`pg_trigger` para as duas tabelas sem DDL rastreado. `public.live_motion_studies` tem `channel_id UUID`, `object_key TEXT` e `report JSONB`; `public.visual_project_budgets` tem `project_id UUID` e `limit_usd NUMERIC`. Ambas informam `lofi_app` como owner e não têm triggers de usuário. A extensão `pg_stat_statements` não está disponível, então esta captura não oferece histórico de consultas para atribuir escritores observados em produção. Não foram lidos registros, valores, credenciais ou dados de mídia. Isso confirma o formato e o owner atuais, mas os catálogos consultados não provam autoria/histórico de criação; ausência de trigger tampouco exclui escritores na aplicação. A busca no código canônico da `main` encontra apenas consultas `SELECT`/existência para essas tabelas, sem DDL nem comandos de escrita nos módulos correspondentes. A origem operacional, os escritores e a retenção continuam sem prova e devem permanecer como descoberta pendente do WP-00.
+
+## Inventário de snapshots/backups DO — 28/10/2026, 05:23 UTC
+
+Uma nova listagem autenticada de imagens do usuário na DigitalOcean retornou um único item: o snapshot privado `lofi-vps-full-pre-main-merge-2026-10-24`, criado em 24/10/2026. A listagem de droplet anteriormente verificada informa `backup_ids` vazio. Não foi criado nem restaurado snapshot nesta consulta. O artefato antecede a captura atual e, sem restore em destino isolado com teste de rollback, continua insuficiente para TEST-27.
+
+## Fingerprint de inicialização do schema — 28/10/2026, 05:24 UTC
+
+O valor de `studio_schema_state.revision`, consultado com transação read-only, coincide com `schema_revision()` calculado dentro do container Studio em execução e com o mesmo cálculo usando o código de `main` no commit `cb369c97e9f9fb175392f4341296b50d3f42476e`: `a644d5c9f624c1203c12a99af9b8764a57b1afe8a6f480b3c4e960d02fae4e21`. Isso confirma que as funções de inicialização incluídas nesse fingerprint coincidem entre runtime, estado registrado no banco e essa revisão da `main`. O fingerprint não identifica a origem de tabelas externas à lista coberta por essas funções, não prova a revisão de cada serviço e não substitui inventário de escritores.
+
+## Estatísticas agregadas das duas tabelas — 28/10/2026, 05:25 UTC
+
+`pg_stat_user_tables` reportou, para cada tabela, um insert, zero updates/deletes e estimativa de uma linha viva; `stats_reset` do banco retornou `NULL`. São contadores agregados, sem conteúdo de linhas, sem autoria de comando/processo e sem intervalo temporal atribuível nesta evidência. Eles confirmam atividade de inserção contabilizada pelas estatísticas atuais, mas não identificam o escritor, nem a criação estrutural, política de retenção ou atualidade exata dos dados. Não usar estes contadores para decidir migração ou exclusão.
