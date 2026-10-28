@@ -175,3 +175,10 @@ Sem merge, aprovação formal, deploy, escrita na VPS, publicação ou geração
 - O recibo do Short agora identifica hash e janela da trilha aprovada de origem, programa e revisão, além da política de uma única faixa de áudio sem trilha musical, voz ou efeitos sobrepostos. A regressão inspeciona a saída e confirma uma faixa de áudio.
 - A mudança melhora proveniência e comprova a composição atual, que reutiliza um trecho da trilha do vídeo longo. Não implementa direção sonora própria para Shorts, novas músicas/efeitos/voz nem revisão auditiva final; G5-06 e WP-05 seguem parciais.
 - PR #74 permanece aberto. Sem merge, publicação, geração paga ou alteração na VPS/`main`.
+
+## Revalidação WP-05 / escolha de trilha para Shorts — 28/10/2026 10:13 UTC
+
+- PR #74 head `6b7aaea2d00e6a314aae7579eca819fb9b914015`; CI `Checks` run `40670263745` (373) está enfileirado. `git diff --check` e compilação Python passaram localmente; o ambiente local não tem `pytest` nem dependências frontend.
+- A tela de Shorts permite manter o trecho sincronizado da trilha do vídeo longo ou selecionar uma trilha pronta do canal. Antes de enfileirar a montagem, o servidor revalida pertencimento ao canal, duração, manifesto, integridade do programa e revisão de áudio atual; o contrato rejeita combinações inconsistentes de modo e identificador.
+- É reaproveitamento de áudio existente, sem custo de geração. Não equivale a composição musical nova nem direção sonora independente para Shorts; G5-06 e WP-05 permanecem parciais, e a revisão auditiva final ainda precisa de evidência humana.
+- PR #74 continua aberto e mergeável. Nenhum merge, publicação, chamada paga ou alteração na VPS/`main` foi realizada.
