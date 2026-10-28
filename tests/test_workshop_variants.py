@@ -501,7 +501,7 @@ def test_http_queued_stale_variant_is_cancelled_without_provider_charge(client,m
 
 
 @DB
-def test_paid_attempt_cycle_survives_restart_like_reloads_splits_and_project_duplicates(client,monkeypatch):
+def test_paid_attempt_cycle_persists_across_reload_splits_and_project_duplicates(client,monkeypatch):
     from studio.core import db
     from studio.tenancy import WORKSPACE
     d,media=fixture();clip=d.clips[0];clip.image_id=clip.video_id=None;d.insertions[1].minute=19/60
@@ -515,6 +515,12 @@ def test_paid_attempt_cycle_survives_restart_like_reloads_splits_and_project_dup
     assert first.status_code==200,first.text
     assert first.json()['attempt_stage']=='initial'
     assert len(calls)==1
+
+    # Force lazy schema setup to run again as it would after a fresh process starts.
+    from studio import workshop_api as workshop
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:workshop._ENSURED.discard((identity['workspace_id'],'visual_workshop'))
+    finally:WORKSPACE.reset(marker)
 
     # A new request UUID and a project copy cannot buy the same already-used variant.
     repeated=client.get(url+f'/clips/{clip.id}/quote/video?variant_key={first_key}').json()
