@@ -960,6 +960,49 @@ def review_short(pid: uuid.UUID, tid: uuid.UUID, body: ShortReview):
     return {'approved': body.approve, 'state': payload['review_state']}
 
 
+@router.get('/shorts/library')
+def short_library(channel_id: uuid.UUID):
+    """Approved, current Short artifacts in the existing Library surface."""
+    ready()
+    with db() as c:
+        profile(c, channel_id)
+        rows = c.execute('''SELECT t.id,t.payload,t.updated_at,p.id project_id,p.data project_data
+          FROM factory_tasks t JOIN visual_projects p ON p.id=(t.payload->>'project_id')::uuid
+          WHERE t.kind=%s AND t.payload->>'operation'='short_render' AND t.status='COMPLETED'
+            AND t.payload->>'review_state'='approved'
+            AND t.payload->>'review_sha256'=t.payload->'report'->>'sha256'
+            AND p.channel_id=%s
+          ORDER BY t.updated_at DESC LIMIT 100''', (KIND, channel_id)).fetchall()
+        items = []
+        for row in rows:
+            payload = row['payload']; report = payload.get('report') or {}
+            sha = report.get('sha256'); asset_id = payload.get('asset_id')
+            if not sha or not asset_id or payload.get('draft_sha256') != digest(row['project_data']):
+                continue
+            try:
+                spec = ShortSpec.model_validate(payload.get('spec'))
+            except Exception:
+                continue
+            if spec.content_hash() != payload.get('short_spec_sha256'):
+                continue
+            asset = c.execute('SELECT data FROM visual_media WHERE id=%s AND project_id=%s',
+                              (asset_id, row['project_id'])).fetchone()
+            if not asset:
+                continue
+            data = asset['data']
+            if (data.get('kind') != 'short' or data.get('sha256') != sha or
+                    data.get('approved') is not True or data.get('review_sha256') != sha):
+                continue
+            pid = str(row['project_id']); tid = str(row['id'])
+            items.append({'short_id': tid, 'project_id': pid, 'channel_id': str(channel_id),
+                'title': spec.title, 'description': spec.description, 'story_title': spec.story_title,
+                'story_summary': spec.story_summary, 'parent_video_id': spec.parent_video_id,
+                'seconds': float(report.get('seconds') or spec.seconds), 'sha256': sha,
+                'approved_at': row['updated_at'],
+                'video_url': f'/api/creator/workshop/projects/{pid}/shorts/{tid}/video'})
+    return items
+
+
 @router.post('/projects/{pid}/render')
 def render(pid: uuid.UUID, body: Render):
     with db() as c:

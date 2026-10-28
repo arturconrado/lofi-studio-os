@@ -17,6 +17,7 @@ const GROUPS: Record<string, string[]> = {
 
 type Publication = { id: string; channel_id: string; title: string; description: string; intent?: string; primary_phrase?: string; keywords?: string[]; publication_metadata?: { seconds?: number; growth_context?: Record<string, string> }; pilot_id?: string | null; privacy: string; made_for_kids?: boolean; actual_privacy: string | null; state: string; video_id: string | null; detail: string; bytes_sent?: number; created_at: string };
 type PilotCandidate = { pilot_id: string; channel_id: string; title: string; seconds: number; thumbnail_url: string; video_url: string; approved_at: string | null; created_at: string };
+type ShortCandidate = { short_id: string; project_id: string; channel_id: string; title: string; description: string; story_title: string; story_summary: string; parent_video_id: string; seconds: number; sha256: string; approved_at: string; video_url: string };
 const PUB_STATE: Record<string, [string, string]> = { uploaded: ['ok', 'No YouTube'], ready: ['ok', 'Pronto para publicar'], queued: ['info', 'Na fila'], uploading: ['violet', 'Enviando'], held: ['', 'Pausado pela agenda'],
   interrupted: ['warn', 'Interrompido'], uncertain: ['warn', 'Incerto'], failed: ['bad', 'Falhou'], deleted: ['', 'Excluído'] };
 
@@ -160,6 +161,23 @@ function Publications({ cid }: { cid: string }) {
   );
 }
 
+function ApprovedShorts({ cid, queryText }: { cid: string; queryText: string }) {
+  const shorts = useResource<ShortCandidate[]>(`/api/creator/workshop/shorts/library?channel_id=${encodeURIComponent(cid)}`, ['production.updated'], [cid]);
+  const rows = (shorts.data || []).filter(item => !queryText ||
+    `${item.title} ${item.story_title} ${item.story_summary}`.toLowerCase().includes(queryText.toLowerCase()));
+  if (shorts.loading || !rows.length) return null;
+  return <section class="card">
+    <div class="card-head"><h3 class="grow">Shorts aprovados</h3><Pill tone="ok">Fluxo independente</Pill></div>
+    <p class="faint">Cada Short mantém sua própria história, aprovação e vínculo com o vídeo longo. Aprovação não inicia upload.</p>
+    <div class="grid cols-2">{rows.map(item => <article class="card stack" key={item.short_id}>
+      <div class="row spread"><b>{item.title || item.story_title}</b><Pill tone="ok">Aprovado</Pill></div>
+      <p class="faint">{item.story_summary}</p>
+      <div class="faint">{duration(item.seconds)} · derivado do vídeo <a href={`https://youtu.be/${item.parent_video_id}`} target="_blank" rel="noreferrer">{item.parent_video_id}</a></div>
+      <div class="row"><a class="btn ghost sm" href={item.video_url} target="_blank" rel="noreferrer">Assistir Short</a><span class="faint mono" title={item.sha256}>SHA-256 {item.sha256.slice(0, 12)}…</span></div>
+    </article>)}</div>
+  </section>;
+}
+
 export function Library() {
   const cid = channel.value?.id;
   const [group, setGroup] = useState('todos');
@@ -181,6 +199,7 @@ export function Library() {
       {prods.loading ? <Skeleton lines={5} /> : list.length === 0
         ? <div class="card"><Empty title="Nenhuma produção neste filtro" icon={<IconLibrary />}><a class="btn primary" href={href('/produzir')}>Produzir</a></Empty></div>
         : <div class="grid cols-2">{list.map(p => <ProjectCard p={p} />)}</div>}
+      {cid && <ApprovedShorts cid={cid} queryText={q} />}
       {cid && <Publications cid={cid} />}
       {old.length > 0 && (
         <section class="card">

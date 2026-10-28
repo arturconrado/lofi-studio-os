@@ -23,6 +23,7 @@ const block = { id: 'block_review:LOFI-1', kind: 'block_review', priority: 10, t
 let assemblyJob: any = null;
 let publications: any[] = [];
 let pilotCandidates: any[] = [];
+let shortCandidates: any[] = [];
 
 function respond(url: string): unknown {
   if (url.includes('/api/creator/recipes/r1')) return { recipe, revisions: [{ revision: 1, sha256: recipe.sha256, reviewed: false, created_at: production.created_at }], channels: [] };
@@ -44,6 +45,7 @@ function respond(url: string): unknown {
   if (url.includes('/api/auth/me')) return { role: 'workspace_owner', email: 'a@b.c' };
   if (url.includes('/api/creator/programs/')) return { title: 't', description: 'd' };
   if (url.includes('/api/youtube/publications/pilots/candidates')) return pilotCandidates;
+  if (url.includes('/api/creator/workshop/shorts/library')) return shortCandidates;
   if (url.includes('/api/youtube/publications')) return publications;
   return [];
 }
@@ -52,6 +54,7 @@ beforeEach(() => {
   assemblyJob = null;
   publications = [];
   pilotCandidates = [];
+  shortCandidates = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(respond(url)), { status: 200 })));
   channels.value = respond('/api/channels') as any; channelId.value = 'c1';
   HTMLMediaElement.prototype.pause = () => {};
@@ -110,5 +113,19 @@ describe('every screen renders with data', () => {
     expect(container.textContent).toContain('No YouTube');
     expect(container.querySelector('a[href="https://youtu.be/b-oS7AYM8Lk"]')).not.toBeNull();
     expect(container.textContent).not.toContain('Preparar para publicar');
+  });
+
+  it('shows approved Shorts in a separate Library section linked to the long video', async () => {
+    shortCandidates = [{ short_id: 'short-1', project_id: 'project-1', channel_id: 'c1', title: 'The Sleepiest Coworker',
+      description: 'A quiet coding break.', story_title: 'A pause', story_summary: 'A cat asks for a break, then work resumes.',
+      parent_video_id: 'abcdefghijk', seconds: 18, sha256: 'a'.repeat(64), approved_at: new Date().toISOString(), video_url: '/short-video' }];
+    navigate('/biblioteca');
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.textContent).toContain('Shorts aprovados'));
+    expect(container.textContent).toContain('Fluxo independente');
+    expect(container.textContent).toContain('Aprovado');
+    expect(container.querySelector('a[href="/short-video"]')).not.toBeNull();
+    expect(container.querySelector('a[href="https://youtu.be/abcdefghijk"]')).not.toBeNull();
+    expect(container.textContent).toContain('Aprovação não inicia upload');
   });
 });

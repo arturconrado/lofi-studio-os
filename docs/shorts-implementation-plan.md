@@ -153,4 +153,10 @@ Finalizar os testes do render, aprovação/rejeição e interface; atualizar o b
 
 G5-01 → campanha/intenção e público; G5-02 → inventário/proveniência; G5-03 → história completa; G5-04 → enquadramento; G5-05 → duração pelo perfil; G5-06 → som próprio; G5-07 → Revisão/Biblioteca por entrega; G5-08 → calendário/estado do longo; G5-09 → decisão de dependência. O primeiro marco WP-08 é um Short de acervo; depois duas histórias distintas. Campanhas ficam no WP-09.
 
+## Implementação S4 — Revisão → Biblioteca de Shorts
+
+O endpoint de leitura `/api/creator/workshop/shorts/library` expõe apenas Shorts concluídos, aprovados para o hash atual, pertencentes ao canal e ainda compatíveis com o projeto e o manifesto da história. A tela Biblioteca os apresenta em uma seção própria, com player, duração, hash e vínculo ao longo. Uma edição do projeto ou alteração do manifesto remove a versão antiga da lista de publicação; a fonte continua registrada no projeto.
+
+Esta fatia fecha a apresentação do derivado aprovado na Biblioteca (G5-07/G1-02) e não autoriza nem inicia envio. A preparação da publicação como `content_format='short'`, o transporte resumível ligado ao hash aprovado e a exibição do estado de upload pertencem ao S5 e continuam pendentes. Revisão visual/humana na aplicação e verificação com a versão implantada também seguem necessárias.
+
 Fontes oficiais relevantes: [métricas de Shorts](https://support.google.com/youtube/answer/12942217?co=YOUTUBE._YTVideoType%3Dshorts&hl=en), [Related video em Shorts](https://support.google.com/youtube/answer/14075157?hl=pt-BR), [busca e descoberta de Shorts](https://support.google.com/youtube/answer/11914225?co=YOUTUBE._YTVideoType%3Dshorts&hl=pt-BR).
