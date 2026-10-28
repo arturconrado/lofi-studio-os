@@ -48,20 +48,29 @@ def test_assistant_requires_cost_confirmation_before_any_external_work():
 def test_completed_suggestion_reuses_without_provider_or_budget(monkeypatch):
     from contextlib import contextmanager
     from uuid import uuid4
+    import hashlib, json
+    from fastapi import HTTPException
     from studio import form_assistant as f, channels
     cid, rid = uuid4(), uuid4()
+    body = f.AssistRequest(request_id=rid, channel_id=cid, brief='Chuva suave', focus='scene_brief', current=ProductionSpec(), confirm_cost=True)
+    user = json.dumps({'focus': body.focus, 'brief': body.brief,
+        'current': {k: v for k, v in body.current.model_dump().items() if k in f.FIELDS}}, ensure_ascii=False)
+    fingerprint = hashlib.sha256(user.encode('utf-8')).hexdigest()
     class Connection:
         def execute(self, *args): return self
         def fetchone(self):
-            return {'kind': f.KIND, 'status': 'COMPLETED', 'payload': {'channel_id': str(cid), 'focus': 'scene_brief', 'patch': {'scene_brief': 'Chuva suave'}}}
+            return {'kind': f.KIND, 'status': 'COMPLETED', 'payload': {'channel_id': str(cid), 'focus': 'scene_brief', 'input_sha256': fingerprint, 'patch': {'scene_brief': 'Chuva suave'}}}
     @contextmanager
     def fake_db(): yield Connection()
     monkeypatch.setattr(f, 'db', fake_db)
     monkeypatch.setattr(channels, 'profile', lambda c, channel: None)
     def forbidden(): raise AssertionError('Cache must precede provider work')
     monkeypatch.setattr(f.runtime, 'key', forbidden)
-    result = f.suggest(f.AssistRequest(request_id=rid, channel_id=cid, brief='Chuva suave', focus='scene_brief', current=ProductionSpec(), confirm_cost=True))
+    result = f.suggest(body)
     assert result['reused'] and not result['generation_started']
+    with pytest.raises(HTTPException) as error:
+        f.suggest(body.model_copy(update={'brief': 'Neve no estúdio'}))
+    assert error.value.status_code == 409
 
 
 def test_channel_ownership_is_checked_before_task_lookup(monkeypatch):
