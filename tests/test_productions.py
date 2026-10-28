@@ -150,6 +150,14 @@ def test_permanent_delete_requires_exact_phrase_and_purges_only_owned_media(clie
     assert result.status_code==200 and result.json()=={'deleted':True,'ledger_retained':True}
     assert set(store.deleted)==set(keys)
     assert sql(owner,'SELECT state,spec_sha256 FROM productions WHERE id=%s',(p['id'],))[0]=={'state':'deleted','spec_sha256':'deleted'}
+    from studio.creator_plan_versions import content_hash
+    revisions=sql(owner,'SELECT revision,sha256,data FROM creator_plan_revisions WHERE plan_id=(SELECT id FROM creator_plans WHERE program_id=%s)',(bid,))
+    assert revisions and all(row['data']=={'redacted':True,'reason':'permanent_deletion'} for row in revisions)
+    assert all(row['sha256']==content_hash(row['data']) for row in revisions)
+    plan_id=sql(owner,'SELECT id FROM creator_plans WHERE program_id=%s',(bid,))[0]['id']
+    assert client.get(f'/api/creator/plans/{plan_id}/revisions').status_code==200
+    assert client.get(f'/api/creator/plans/{plan_id}/revisions').json()=={'revisions':[]}
+    assert client.get(f'/api/creator/plans/{plan_id}/revisions/1').status_code==404
     assert sql(owner,'SELECT count(*) n FROM audit WHERE action=\'PRODUCTION_PERMANENTLY_DELETED\' AND entity_id=%s',(p['id'],))[0]['n']==1
     assert client.get(f'/api/creator/productions/{p["id"]}').status_code==410
 
