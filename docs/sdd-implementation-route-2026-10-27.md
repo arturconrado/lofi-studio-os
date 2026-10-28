@@ -22,12 +22,12 @@
 Baseline comparada: `origin/main` no commit `cb369c97e9f9fb175392f4341296b50d3f42476e`. As contagens abaixo comparam SHA-256; igualdade de conteúdo não prova que o arquivo seja executado, e divergência não prova que deva ser promovido.
 
 - **music-worker:** 57 arquivos capturados; 26 têm mesmo caminho e hash em `main`; 31 têm caminho existente com hash diferente.
-- **youtube-publisher:** 128 arquivos; 87 têm mesmo caminho e hash; 22 têm caminho existente com hash diferente; 19 caminhos não existem em `main`.
+- **youtube-publisher:** a recontagem do snapshot atual encontrou 130 arquivos; 87 têm mesmo caminho e hash, 23 têm caminho existente com hash diferente e 20 caminhos estão ausentes de `main`. Os 20 ausentes são 19 bundles JS com nomes hash e o manifesto do snapshot; precisam ser reconciliados com os fontes/bundles atuais, sem tratá-los como código-fonte executável.
 - **cache-code:** 383 arquivos capturados. A comparação por conteúdo identificou 55 itens cujo conteúdo não aparece nos arquivos de código rastreados em `main` nem nos snapshots dos dois serviços; a revisão registrada no PR #69 identificou 47 conteúdos Python distintos entre esses itens.
 
 A evidência anterior de recuperação em `docs/audit-2026-10-15/evidence` confirma apenas uma cópia local de fontes/entradas: 23 arquivos de código restaurados foram verificados, mas `offsite_full_disaster_restore_tested=false` e `complete_final_mp4s_local_backup=false`. É um resultado histórico útil, porém não fecha o TEST-27 do estado atual.
 
-**Implicação:** WP-00 ainda precisa classificar os 31 + 22 arquivos divergentes e os 19 caminhos ausentes do publisher, e revisar os 55 itens de cache sem correspondência. Não copiar nenhum desses arquivos para caminhos executáveis até atribuir função, origem, dependências, teste, dono e rollback. Contagens são evidência de divergência, não decisão de canonicalidade.
+**Implicação:** WP-00 ainda precisa classificar os 31 arquivos divergentes do music-worker, os 23 caminhos divergentes do publisher, os 19 bundles JS ausentes e o manifesto do snapshot, além de revisar os 55 itens de cache sem correspondência. Não copiar nenhum desses arquivos para caminhos executáveis até atribuir função, origem, dependências, teste, dono e rollback. Contagens são evidência de divergência, não decisão de canonicalidade.
 
 ## Verificação read-only do runtime (27/10/2026)
 
