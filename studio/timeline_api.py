@@ -89,9 +89,11 @@ def identity_sources(c,row):
                 sources.append({'plan_id':str(p['id']),'title':data.get('title','Referência do estúdio')+' · '+str(p['minutes'])+' min','sha256':a['sha256'],'reference_video_url':'/api/creator/motion-validation/'+str(uuid.UUID(key))+'/video'})
     from .visual_identity import REGISTRY
     for entry in REGISTRY['approved_episodes']:
-        owned=c.execute('SELECT id FROM ambient_pilots WHERE id=%s AND channel_id=%s',(uuid.UUID(entry['pilot_id']),row['channel_id'])).fetchone()
+        try:pilot_id=uuid.UUID(entry['pilot_id'])
+        except (ValueError,TypeError,AttributeError):continue
+        owned=c.execute('SELECT id FROM ambient_pilots WHERE id=%s AND channel_id=%s',(pilot_id,row['channel_id'])).fetchone()
         if owned:
-            sources.append({'pilot_id':entry['pilot_id'],'plan_id':'episode:'+entry['pilot_id'],'title':entry['title']+' · referência canônica','sha256':entry['files']['source']['sha256'],'canonical':True})
+            sources.append({'pilot_id':str(pilot_id),'plan_id':'episode:'+str(pilot_id),'title':entry['title']+' · referência canônica','sha256':entry['files']['source']['sha256'],'canonical':True})
     return sources
 
 
