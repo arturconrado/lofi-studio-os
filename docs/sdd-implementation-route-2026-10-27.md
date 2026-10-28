@@ -117,7 +117,15 @@ Esta seção substitui os hashes e estados anteriores somente para os PRs indica
 | #73 — evidências WP-04 | Aberto, base `main`; CI aprovado. | Captura documental parcial; não prova calibração, cobertura de referências nem aceite de WP-04. |
 | #74 — proveniência WP-05 | Aberto, base `main`; CI aprovado. | Recibo de montagem parcial; composição nova dirigida pelo harness e revisão auditiva do áudio final continuam pendentes. |
 
-Os PRs #66 e #72 usam a branch documental do #71 como base e precisam sincronizar o head atual antes de revisar seus diffs finais; não houve aprovação, merge, deploy nem escrita na VPS nesta atualização.
+## Atualização de sincronização e validação — 28/10/2026
+
+| PR | Head/base atuais | CI | Situação |
+|---|---|---|---|
+| #71 — WP-02 | Head `514666d23d1c6969d4c86abb0971e0d87b6f252f`, base `main` | Run `40658397002` (343) passou. O head de implementação `e633f72` também passou no run 342. | Aberto e mergeável; revisão independente e aceite do pacote pendentes. TEST-41 segue parcial. |
+| #66 — WP-01 | Head `255e9b1e4ac35c2914d677f101597fc335477ed6`, base atualizada do #71 | Run `40658754010` (346) passou, incluindo bundle combinado. | Aberto e mergeável; WP-01 continua parcial e condicionado a WP-00. |
+| #72 — autorização/workspace | Head `10c290f4caa0569a9e56083c8ca254cbe394ea0d`, base atualizada do #71 | Run `40658486105` (345) passou. | Aberto e mergeável; autorização em runtime e TEST-37 permanecem pendentes. |
+
+A sincronização preservou os diffs independentes dos três PRs. Nenhum foi aprovado ou mergeado; não houve deploy, escrita na VPS, alteração na `main` ou geração paga.
 
 ### Gates ainda abertos para o plano completo
 
