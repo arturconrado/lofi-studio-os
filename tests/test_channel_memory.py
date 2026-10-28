@@ -24,6 +24,7 @@ class MemoryCursor:
         if table == 'analytics_snapshots' and len(params) > 1:
             self.result = [row for row in self.result
                            if row['content_format'] == params[1] and row['intent'] == params[2]]
+        return self
 
     def fetchall(self):
         return self.result
