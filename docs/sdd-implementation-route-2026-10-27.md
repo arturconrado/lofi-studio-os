@@ -182,3 +182,11 @@ Sem merge, aprovação formal, deploy, escrita na VPS, publicação ou geração
 - A tela de Shorts permite manter o trecho sincronizado da trilha do vídeo longo ou selecionar uma trilha pronta do canal. Antes de enfileirar a montagem, o servidor revalida pertencimento ao canal, duração, manifesto, integridade do programa e revisão de áudio atual; o contrato rejeita combinações inconsistentes de modo e identificador.
 - É reaproveitamento de áudio existente, sem custo de geração. Não equivale a composição musical nova nem direção sonora independente para Shorts; G5-06 e WP-05 permanecem parciais, e a revisão auditiva final ainda precisa de evidência humana.
 - PR #74 continua aberto e mergeável. Nenhum merge, publicação, chamada paga ou alteração na VPS/`main` foi realizada.
+
+## Resultado da revalidação WP-05 — 28/10/2026 10:24 UTC
+
+- PR #74 head `ab0b28318f0b73a3971d5c5e5cc7b2f35227976d`; Checks run `40671239425` (377) passou: 290 testes Python, 34 Vitest, typecheck, build, bundle versionado e verificações de interface.
+- As falhas anteriores dos runs 373 e 375 eram somente divergência do bundle compilado entre macOS local e Linux CI. O bundle canônico do Linux foi sincronizado; o workflow retornou ao conteúdo original e não faz parte do diff final do PR.
+- #74 segue aberto, sem merge. A revisão humana final de áudio e a direção sonora própria de Shorts continuam pendentes; WP-05 e G5-06 seguem parciais.
+- O registro deste roteiro está no head #71 `1efec3579f062c702c4ce5a7a7cd22f85fabf599`; Checks run `40670373288` (374) passou. O PR #71 continua aberto e mergeável.
+- Sem merge, deploy, escrita na VPS/`main`, publicação ou geração paga.
