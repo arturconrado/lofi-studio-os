@@ -605,6 +605,45 @@ def mock_generation(monkeypatch):
 
 
 @DB
+def test_visual_project_budget_releases_known_reservation_surplus_but_keeps_unknown_cost(client,monkeypatch):
+    """A final charge frees unused reservation; an unresolved task still occupies its quote."""
+    from studio import workshop_provider,workshop_api
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    draft,media=fixture();url,identity=seed_project(client,draft,media)
+    project_id=url.rsplit('/',1)[-1]
+    calls,_=mock_generation(monkeypatch)
+    monkeypatch.setattr(workshop_provider,'quote',lambda kind,seconds:{'model':'test','usd':.05,'seconds':seconds,'last_frame_supported':False})
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            c.execute('CREATE TABLE IF NOT EXISTS visual_project_budgets(project_id UUID PRIMARY KEY,limit_usd NUMERIC NOT NULL)')
+            c.execute('INSERT INTO visual_project_budgets(project_id,limit_usd) VALUES(%s,.08)',(project_id,))
+            c.execute("""INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,actual_cost,status)
+                         VALUES(%s,%s,'test',%s::jsonb,.10,.03,'COMPLETED')""",
+                      (uuid.uuid4(),'prior',json.dumps({'project_id':project_id})))
+            c.commit()
+    finally:WORKSPACE.reset(marker)
+
+    response=client.post(url+f'/clips/{draft.base.id}/generate/image',json={
+        'request_id':str(uuid.uuid4()),'revision':1,'max_usd':.05,'confirm_cost':True})
+    assert response.status_code==200,response.text
+    assert len(calls)==1
+
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            # The first task has no reconciled charge, so its full reservation
+            # remains occupied alongside the previous task's known $0.03 cost.
+            c.execute("UPDATE factory_tasks SET status='UNCERTAIN',actual_cost=NULL,reserved_cost=.05 WHERE id=%s",
+                      (response.json()['id'],))
+            assert workshop_api.project_generation_usage(c,project_id)==Decimal('.08')
+            c.commit()
+    finally:WORKSPACE.reset(marker)
+    assert len(calls)==1
+
+
+@DB
 def test_http_batch_quotes_reserves_once_recovers_and_reviews_each_variant(client,monkeypatch):
     from studio import workshop_provider as provider
     from studio.core import db

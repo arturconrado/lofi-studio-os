@@ -534,6 +534,15 @@ def generation_targets(draft, clip, media, variant_key=None, resolution=None):
     return groups
 
 
+def project_generation_usage(c, project_id):
+    """Return reconciled project spend, keeping reservations for unknown tasks."""
+    return c.execute("""SELECT COALESCE(sum(COALESCE(actual_cost,
+        CASE WHEN jsonb_typeof(payload->'actual_cost_usd')='number'
+             THEN (payload->>'actual_cost_usd')::numeric END,
+        reserved_cost)),0) n
+        FROM factory_tasks WHERE payload->>'project_id'=%s""",(str(project_id),)).fetchone()['n']
+
+
 @router.get('/projects/{pid}/clips/{cid}/quote/{kind}')
 def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], variant_key: str | None = None, resolution: Literal['720p','1080p'] = '720p'):
     from .workshop_provider import quote as provider_quote
@@ -603,7 +612,11 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if c.execute("SELECT to_regclass('visual_project_budgets') t").fetchone()['t']:
             budget=c.execute('SELECT limit_usd FROM visual_project_budgets WHERE project_id=%s',(pid,)).fetchone()
             if budget:
-                used=c.execute("SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE payload->>'project_id'=%s",(str(pid),)).fetchone()['n']
+                # A project ceiling covers paid tasks in this project. Once a
+                # terminal charge is known, count that amount instead of the
+                # larger reservation; while cost is unknown, keep the full
+                # reservation occupied.
+                used=project_generation_usage(c,pid)
                 if used+Decimal(str(total))>budget['limit_usd']:
                     raise HTTPException(409,'O teto autorizado deste teste foi atingido. Nenhum novo envio foi feito.')
         base=status(draft,draft.base,media)
