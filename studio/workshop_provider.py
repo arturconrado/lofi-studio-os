@@ -148,11 +148,11 @@ def submit(tid):
                 with db() as c:
                     # A terminal callback may win the race with this HTTP response.
                     # Preserve its terminal status and payload if it already arrived.
-                    c.execute("UPDATE factory_tasks SET status='RUNNING',payload=payload||%s::jsonb,detail='Animando trecho; consulte o andamento',updated_at=now() WHERE id=%s AND status='SUBMITTING'",
+                    c.execute("UPDATE factory_tasks SET status='RUNNING',payload=payload||%s::jsonb,detail=CASE WHEN payload ? 'cancel_requested_at' THEN 'Cancelamento local solicitado; o pedido original continua em acompanhamento' ELSE 'Animando trecho; consulte o andamento' END,updated_at=now() WHERE id=%s AND status='SUBMITTING'",
                               (json.dumps({'provider_job_id': job}), tid)); c.commit()
     except Exception:
         with db() as c:
-            c.execute("UPDATE factory_tasks SET status='UNCERTAIN',detail='Envio sem conclusão confirmada. Reserva mantida; aguardando callback ou reconciliação.',updated_at=now() WHERE id=%s AND status IN ('SUBMITTING','QUEUED')", (tid,)); c.commit()
+            c.execute("UPDATE factory_tasks SET status='UNCERTAIN',detail=CASE WHEN payload ? 'cancel_requested_at' THEN 'Cancelamento local solicitado, mas o envio pode ter sido aceito. Reserva mantida; reconciliando o pedido original.' ELSE 'Envio sem conclusão confirmada. Reserva mantida; aguardando callback ou reconciliação.' END,updated_at=now() WHERE id=%s AND status IN ('SUBMITTING','QUEUED')", (tid,)); c.commit()
 
 
 def refresh(tid):
@@ -164,8 +164,14 @@ def refresh(tid):
         with httpx.Client(timeout=120, follow_redirects=False) as client:
             url = BASE + '/videos/' + p['provider_job_id']
             r = client.get(url, headers=headers); r.raise_for_status(); state = r.json()
-            if state['status'] == 'failed':
-                c.execute("UPDATE factory_tasks SET status='FAILED',detail='Provedor informou falha; sem nova tentativa automática' WHERE id=%s", (tid,)); c.commit(); return
+            if state['status'] in ('failed', 'cancelled', 'expired'):
+                p['provider_terminal_status'] = state['status']
+                if state.get('usage') is not None: p['provider_usage'] = state['usage']
+                detail = ('O provedor confirmou o cancelamento do pedido original; a reserva permanece registrada até conciliar a cobrança.'
+                          if state['status'] == 'cancelled' else
+                          'O pedido original terminou no provedor (' + state['status'] + '); a reserva permanece registrada até conciliar a cobrança.')
+                c.execute("UPDATE factory_tasks SET status='FAILED',payload=%s,detail=%s,updated_at=now() WHERE id=%s",
+                          (json.dumps(p, ensure_ascii=False), detail, tid)); c.commit(); return
             if state['status'] != 'completed': return
             with tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / 'clip.mp4'; size = 0

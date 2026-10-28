@@ -88,6 +88,13 @@ def public_task(t):
             'preview_range': p.get('preview_range'),
             'report': p.get('report'), 'approved': p.get('approved', False),
             'url': f'/api/creator/workshop/projects/{p["project_id"]}/renders/{t["id"]}' if p.get('video_key') else None}
+    if p.get('cancel_requested_at'):
+        terminal = p.get('provider_terminal_status')
+        out['cancel_state'] = ('confirmed' if terminal == 'cancelled' else
+                               'remote_finished' if terminal in ('completed', 'failed', 'expired') else
+                               'requested')
+    elif t['status'] == 'CANCELLED' and p.get('cancelled_before_submission'):
+        out['cancel_state'] = 'before_submission'
     if t['status'] == 'UNCERTAIN':
         # Never expose callback tokens or provider IDs. Tell the user which safe
         # reconciliation path is available for this persisted attempt.
@@ -739,6 +746,44 @@ def refresh(pid: uuid.UUID, tid: uuid.UUID):
             submit_queued(tid)
         else:refresh_provider(tid)
     with db() as c: return public_task(task(c, tid, pid))
+
+
+@router.post('/projects/{pid}/jobs/{tid}/cancel')
+def cancel_job(pid: uuid.UUID, tid: uuid.UUID):
+    """Request local cancellation without assuming the remote provider stopped."""
+    with db() as c:
+        # The worker uses this same lock before claiming QUEUED work. This makes
+        # a local cancel-before-submit definitive; once SUBMITTING, retain the
+        # reservation and reconcile the original provider request instead.
+        c.execute('SELECT pg_advisory_xact_lock(192837467)')
+        project(c, pid)
+        row = c.execute('SELECT * FROM factory_tasks WHERE id=%s AND kind=%s FOR UPDATE', (tid, KIND)).fetchone()
+        if not row or row['payload'].get('project_id') != str(pid):
+            raise HTTPException(404, 'Tarefa não encontrada neste projeto')
+        payload = row['payload']
+        if payload.get('operation') != 'video':
+            raise HTTPException(409, 'Cancelamento disponível apenas para gerações de vídeo')
+        if row['status'] == 'QUEUED':
+            payload['cancelled_before_submission'] = True
+            c.execute("UPDATE factory_tasks SET status='CANCELLED',reserved_cost=0,payload=%s,detail='Cancelado localmente antes do envio; nenhuma chamada ao provedor foi feita',updated_at=now() WHERE id=%s",
+                      (json.dumps(payload, ensure_ascii=False), tid))
+        elif row['status'] in ('SUBMITTING', 'RUNNING', 'UNCERTAIN'):
+            payload.setdefault('cancel_requested_at', time.time())
+            detail = ('Pedido local de cancelamento registrado; o provedor ainda pode concluir. O acompanhamento e a reserva continuam ativos.'
+                      if not payload.get('provider_terminal_status') else
+                      'O pedido original já terminou no provedor; cancelamento não desfaz o resultado nem a cobrança.')
+            c.execute('UPDATE factory_tasks SET payload=%s,detail=%s,updated_at=now() WHERE id=%s',
+                      (json.dumps(payload, ensure_ascii=False), detail, tid))
+        elif row['status'] in ('COMPLETED', 'FAILED', 'CANCELLED'):
+            if payload.get('cancel_requested_at') or payload.get('cancelled_before_submission'):
+                pass  # idempotent response to a repeated cancel request
+            else:
+                raise HTTPException(409, 'Esta tarefa já terminou')
+        else:
+            raise HTTPException(409, 'Esta tarefa não pode ser cancelada neste estado')
+        c.commit()
+        row = c.execute('SELECT * FROM factory_tasks WHERE id=%s AND kind=%s', (tid, KIND)).fetchone()
+        return public_task(row)
 
 
 @router.get('/projects/{pid}/media/{aid}')
