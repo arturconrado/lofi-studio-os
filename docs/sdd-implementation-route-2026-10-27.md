@@ -9,7 +9,7 @@
 | WP-00 — descoberta | PR #65 foi mergeado com resumo sanitizado; PRs #67, #68 e #69 preservaram snapshots de arquivos do runtime/cache | Parcial. Os próprios PRs dizem que os snapshots não incluem configuração, banco, volumes, estado/runtime ou mídia e não provam restauração. WP-00 permanece aberto. |
 | WP-01 — versões, persistência e acesso | PR #66 aberto; head `32f9b4aa3ce3a7a9f44d174087a98519f2f2ab1b`; CI verde; teste de regressão cobre redaction das revisões após exclusão | Uma fatia implementada e revisada em comentário. Ainda depende da saída de WP-00 e não conclui permissões ponta a ponta, proveniência, vínculo de aprovações a hashes ou todos os vínculos de artefatos. |
 | WP-02 — finanças/operação | PR #61 mergeado unifica o limite de gasto com IA | Base entregue. Confirmar cobertura dos casos de reserva atômica, concorrência, timeout, reinício, reconciliação e cancelamento antes de ampliar autonomia paga. |
-| WP-03 — fluxo existente | PRs #57, #58 e #60 mergeados cobrem partes da Biblioteca, paridade do portal e metadados; PR #63 continua aberto | Parcial. #63 ainda requer correção/verificação do caminho que instala `ops/auto-deploy.sh` no host e TEST-27. |
+| WP-03 — fluxo existente | PRs #57, #58 e #60 mergeados cobrem partes da Biblioteca, paridade do portal e metadados; PR #63 continua aberto e seu CI passou | Parcial. A revisão confirmou que o comando de deploy ativo na VPS diverge do script atualizado do #63, gerencia três serviços e não inclui o publicador; o workflow do PR também não envia/instala esse script. TEST-27 segue pendente. |
 | WP-04 — direção/referências/avaliação | PR #62 (sinais de Growth) e #70 (recuperação de memória por canal/RAG) mergeados | Capacidades disponíveis no código; não substituem validar fontes, direção visual/temporal, calibração e avaliação com evidência do canal. |
 | WP-05 — música/som | Nenhum aceite integral do pacote foi demonstrado por estes PRs | A desenvolver após WP-01/02; pode avançar em paralelo com WP-04 quando as dependências forem satisfeitas. |
 | WP-06 — experiência conversacional | Ainda não há evidência de conclusão integral nos PRs listados | Protótipo pode avançar após WP-00; execução real depende de WP-01 a WP-05 e de uma proposta canônica única. |
@@ -34,6 +34,8 @@ A evidência anterior de recuperação em `docs/audit-2026-10-15/evidence` confi
 Uma nova consulta somente de leitura ao host e aos metadados das imagens confirmou sete containers Lo-Fi em execução. Creator, Studio e export-worker usam imagem identificada pela revisão `cb369c9` (baseline atual de `main`). Publisher está identificado como `1789d4d`; rádio e channel-radio como `be426a8`; music-worker usa tag `d877875`, mas o rótulo OCI de revisão informa apenas `development`. Os três primeiros SHAs de serviço são ancestrais de `main`; isso não prova que os conteúdos efetivos das imagens sejam byte a byte iguais ao código atual. O rótulo do music-worker tampouco identifica uma revisão Git verificável.
 
 A DigitalOcean também informa que há um snapshot do host, disponível, criado em 24/10/2026. Por ser anterior à observação atual, e sem restauração isolada exercitada, ele não comprova backup atual, consistência de banco/volumes, recuperação sem perda ou fechamento do TEST-27. Nenhum serviço, banco, volume, arquivo ou configuração foi alterado nesta consulta.
+
+Uma comparação read-only posterior ao head do PR #63 confirmou que a rotina atualmente forçada pela chave de deploy na VPS é diferente de `ops/auto-deploy.sh` no PR. A rotina instalada descreve e gerencia Studio, creator e export-worker; não inclui o YouTube publisher. O workflow #63 empacota `studio/`, `web/` e `requirements.txt`, sem a rotina atualizada. Portanto, CI verde no PR não instala nem valida o mecanismo que o host executará. Não houve escrita remota.
 
 **Ação WP-00 derivada:** reconciliar publisher, rádio, channel-radio e music-worker com os artefatos versionados e com o mecanismo de release, registrando revisão de origem, hash/digest da imagem, arquivos divergentes e o caminho de implantação. Para music-worker, estabelecer uma identidade de build rastreável. Não reconstruir nem trocar imagens até a comparação e os gates de recuperação estarem documentados.
 
@@ -79,7 +81,7 @@ Depois de WP-01/02 e da referência funcional de WP-03, avançar em paralelo:
 
 ## Regras de revisão/aprovação para os PRs abertos
 
-- **#63:** não aprovar enquanto o caminho de instalação do script e TEST-27 não tiverem evidência; CI verde não cobre esses gates.
+- **#63:** não aprovar enquanto o caminho de instalação do script atualizado no host e TEST-27 não tiverem evidência. A verificação read-only confirmou que o comando ativo é diferente do script proposto e não gerencia o publicador; CI verde não cobre esses gates.
 - **#66:** o code review atual não apontou defeito novo no head e o CI está verde, mas a saída de WP-00 e a revisão independente ainda são condições para aprovação formal.
 - Os dois PRs foram criados pela conta conectada. A aprovação formal precisa vir de outro revisor; comentário de revisão não equivale a aprovação.
 - Não mergear snapshots #67–#69 como aplicação. Eles são evidência de recuperação para comparação, não autorização para sobrescrever `main` ou produção.
