@@ -46,3 +46,7 @@ Esse inventário demonstra que o código e os ativos examinados têm conteúdo r
 ## Resultado para o SDD
 
 Esta captura atualiza a evidência do WP-00 sobre serviços, identidade das imagens, conteúdo por hash, rotina realmente chamada, material de backup e capacidade. Confirma que o core (`studio`, `creator`, `export-worker`) compartilha uma imagem/revisão, enquanto publisher, serviços de rádio e music-worker têm revisões distintas. O código lido é recuperável pela `main` histórica, com oito bundles preservados somente nos snapshots identificados. A origem funcional dos bundles não referenciados, paridade de rotas/runtime, restore isolado, rollback exercitado e reconciliação do mecanismo de bootstrap continuam pendentes. **TEST-27 não está concluído.**
+
+## Checagem de autenticação do runtime
+
+Uma requisição GET local ao endpoint OpenAPI do Studio retornou HTTP 401 (`Autenticação necessária`). Isso comprova que o endpoint de documentação está atrás do middleware de sessão; não revela a lista de rotas nem comprova as permissões específicas de cada endpoint. A aba da plataforma estava em `/login`, então a matriz runtime de permissões segue pendente de uma sessão autenticada.
