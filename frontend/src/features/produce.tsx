@@ -57,6 +57,7 @@ export function Produce() {
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [assistantNote, setAssistantNote] = useState('');
   const [sceneProposal, setSceneProposal] = useState('');
+  const [sceneProposalApplied, setSceneProposalApplied] = useState(false);
   const requestId = useRef(uuid());
 
   const allowed = bound.data?.recipes || [];
@@ -125,6 +126,7 @@ export function Produce() {
 
   const prepareTimeline = async () => {
     if (!quote || !cid || !growthPackage) return;
+    if (sceneProposal && !sceneProposalApplied) { setAssistantNote('Aplique a versão revisada da proposta à ideia antes de salvar o roteiro.'); return; }
     const phrase = growthPackage.primary_phrase.trim().toLocaleLowerCase();
     const opening = growthPackage.description.trim().match(/^.*?[.!?](?:\s|$)/)?.[0] || growthPackage.description.trim();
     if (!growthPackage.title.trim().toLocaleLowerCase().startsWith(phrase) || !opening.toLocaleLowerCase().includes(phrase) || growthPackage.description.trim().length < 450) {
@@ -132,7 +134,7 @@ export function Produce() {
     }
     setPreparing(true);
     const saved = await attempt(() => post<{ id: string }>('/api/creator/storyboard/save', {
-      channel_id: cid, spec: { ...quote.spec, hours, ...(sceneProposal ? { scene_brief: sceneProposal } : {}) },
+      channel_id: cid, spec: { ...quote.spec, hours, ...(sceneProposalApplied && sceneProposal ? { scene_brief: sceneProposal } : {}) },
       youtube_metadata: {
         title: growthPackage.title, description: growthPackage.description, intent: growthIntent,
         primary_phrase: growthPackage.primary_phrase,
@@ -158,6 +160,7 @@ export function Produce() {
       const proposal = result.patch.scene_brief || '';
       if (!proposal) throw new Error('O assistente não retornou uma proposta de cena.');
       setSceneProposal(proposal);
+      setSceneProposalApplied(false);
       setAssistantNote(`Proposta pronta para revisão${result.cost_usd != null ? ` · custo US$ ${Number(result.cost_usd).toFixed(4)}` : ''}. Nenhuma produção foi iniciada.`);
     } catch (e:any) {
       setAssistantNote(e.message || 'Não foi possível preparar a proposta. Confira o histórico antes de tentar novamente.');
@@ -187,27 +190,27 @@ export function Produce() {
           </Field>
           <p class="faint" style={{ fontSize: '13px' }}>A preparação da timeline aceita 1h, 4h ou 8h sem cobrança. A produção paga segue bloqueada enquanto faltarem o compositor integrado ou os assets aprovados.</p>
           <Field label="Ideia (opcional)" hint="Vira o tema do título, da descrição e a direção musical da hora.">
-            <textarea class="textarea" maxLength={1500} placeholder="ex.: madrugada de neve, pixels quentes, foco profundo" value={idea} onInput={e => { setIdea((e.target as HTMLTextAreaElement).value); setSceneProposal(''); }} />
+            <textarea class="textarea" maxLength={1500} placeholder="ex.: madrugada de neve, pixels quentes, foco profundo" value={idea} onInput={e => { setIdea((e.target as HTMLTextAreaElement).value); setSceneProposal(''); setSceneProposalApplied(false); }} />
           </Field>
           <div class="notice">
             <b>Desenvolver a ideia com o assistente</b>
             <p class="faint">Descreva o que você quer ver. O assistente prepara uma proposta de cena para revisar; só o texto aceito segue para o roteiro. Isso não inicia produção.</p>
-            <textarea class="textarea" maxLength={800} placeholder="ex.: uma madrugada de Halloween, chuva na janela e luzes quentes de uma cidade distante" value={assistantBrief} onInput={e => { setAssistantBrief((e.target as HTMLTextAreaElement).value); setSceneProposal(''); }} />
+            <textarea class="textarea" maxLength={800} placeholder="ex.: uma madrugada de Halloween, chuva na janela e luzes quentes de uma cidade distante" value={assistantBrief} onInput={e => { setAssistantBrief((e.target as HTMLTextAreaElement).value); setSceneProposal(''); setSceneProposalApplied(false); }} />
             <div class="row wrap" style={{ marginTop: '8px' }}>
               <Check checked={assistantCostConfirmed} onChange={setAssistantCostConfirmed}>Autorizo até US$0,10 para criar esta proposta.</Check>
               <button class="btn secondary" disabled={!assistantCostConfirmed || assistantBusy || !quote || assistantBrief.trim().length < 3} onClick={suggestScene}>{assistantBusy ? 'Preparando…' : 'Pedir proposta'}</button>
             </div>
             {assistantNote && <p class="faint" role="status">{assistantNote}</p>}
             {sceneProposal && <div class="stack" style={{ marginTop: '8px' }}>
-              <Field label="Proposta de cena — revise antes de aplicar"><textarea class="textarea" rows={4} maxLength={2000} value={sceneProposal} onInput={e => setSceneProposal((e.target as HTMLTextAreaElement).value)} /></Field>
-              <button class="btn" type="button" onClick={() => { setIdea(sceneProposal); setGrowthPackage(null); setGrowthNote('A ideia mudou; gere novamente título e descrição para manter o Growth alinhado.'); }}>Aplicar à ideia do roteiro</button>
+              <Field label="Proposta de cena — revise antes de aplicar"><textarea class="textarea" rows={4} maxLength={2000} value={sceneProposal} onInput={e => { setSceneProposal((e.target as HTMLTextAreaElement).value); setSceneProposalApplied(false); setGrowthPackage(null); }} /></Field>
+              <button class="btn" type="button" onClick={() => { setIdea(sceneProposal); setSceneProposalApplied(true); setGrowthPackage(null); setGrowthNote('A ideia mudou; gere novamente título e descrição para manter o Growth alinhado.'); }}>Aplicar à ideia do roteiro</button>
             </div>}
           </div>
         </div>
         <div class="card stack">
           <h3>3. Cena</h3>
           <div class="grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: '8px' }}>
-            {scenes.map(s => <button type="button" class="scene" aria-pressed={s.id === scenario} title={s.reference?.setting} onClick={() => { setScenario(s.id); setSceneProposal(''); }}><b>{s.label.split(' · ')[0]}</b><span class="faint" style={{ fontSize: '12px' }}>{s.label.split(' · ')[1] || ''}</span></button>)}
+            {scenes.map(s => <button type="button" class="scene" aria-pressed={s.id === scenario} title={s.reference?.setting} onClick={() => { setScenario(s.id); setSceneProposal(''); setSceneProposalApplied(false); }}><b>{s.label.split(' · ')[0]}</b><span class="faint" style={{ fontSize: '12px' }}>{s.label.split(' · ')[1] || ''}</span></button>)}
           </div>
           {recipe && (recipe.data.visual.variant !== 'canonical_illustrated' || recipe.data.music.style_id === '8bit_lofi') && <div class="notice">Direção pixel art aplicada à cena e às ações, com o episódio aprovado servindo de guia de identidade e composição.</div>}
         </div>
