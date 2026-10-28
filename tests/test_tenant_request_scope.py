@@ -1,7 +1,12 @@
 import base64
+import hashlib
+import hmac
+import json
 import os
 import secrets
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime,timedelta,timezone
 
 import pytest
@@ -75,3 +80,37 @@ def test_public_admin_requests_do_not_inherit_worker_workspace(client,monkeypatc
     basic_response=client.get('/api/tracks',headers={'Authorization':'Basic '+basic})
     assert basic_response.status_code==200,basic_response.text
     assert private_id not in {row['id'] for row in basic_response.json()}
+
+
+def test_provider_callback_is_public_but_signature_and_public_scope_are_enforced(client,monkeypatch):
+    """The provider has no user session; its signed callback must stay public-scoped."""
+    from studio import workshop_api
+
+    monkeypatch.setenv('LOFI_WORKSPACE_ID',str(uuid.uuid4()))
+    monkeypatch.setenv('OPENROUTER_VIDEO_WEBHOOK_SECRET','test-webhook-secret')
+    seen_workspaces=[]
+
+    class Cursor:
+        def execute(self,*args,**kwargs):
+            from studio.tenancy import active_workspace
+            seen_workspaces.append(active_workspace())
+            return self
+        def fetchone(self):return None
+
+    @contextmanager
+    def fake_db():
+        yield Cursor()
+
+    monkeypatch.setattr(workshop_api,'db',fake_db)
+    event={'type':'video.generation.completed','data':{'id':'provider-job-1','status':'completed'}}
+    raw=json.dumps(event,separators=(',',':')).encode()
+    timestamp=str(int(time.time()))
+    signature=hmac.new(b'test-webhook-secret',timestamp.encode()+b','+raw,hashlib.sha256).hexdigest()
+    response=client.post(
+        '/api/creator/workshop/provider-callback/public/unrecognized-token',
+        content=raw,
+        headers={'X-OpenRouter-Signature':f't={timestamp},v1={signature}',
+                 'X-OpenRouter-Idempotency-Key':'evt-callback-test'},
+    )
+    assert response.status_code==404,response.text
+    assert seen_workspaces==[None]
