@@ -19,8 +19,9 @@ Em PostgreSQL descartável, criei um registro privado em um workspace, configure
 - Regressão integrada: sessão de workspace vê o próprio registro; `platform_admin` e Basic admin não herdam um workspace apenas por variável de processo.
 - Regressões unitárias: worker sem contexto herda o valor padrão; contexto público explícito não herda; a API não recebe fila nem cliente de armazenamento com prefixo de tenant, enquanto o contexto de worker continua recebendo ambos isolados.
 - Regressão HTTP real para `POST /api/tracks/{id}/generate`: `viewer`, `creator` e `operator` recebem 403 antes de criar job/reserva; `workspace_admin` alcança o próximo bloqueio de segurança, mas a chave ausente encerra o fluxo antes de qualquer chamada paga. A contagem de jobs permanece zero.
+- Regressão de log do worker simula erro com um valor sentinela de credencial e verifica que a mensagem/traceback não aparece no log nem no detalhe persistido; são mantidos somente ID da tarefa, operação e classe do erro.
 - Suíte `tests/` em PostgreSQL descartável após reorganizar os testes em arquivos independentes: 281 testes aprovados, 3 avisos de depreciação.
 
 ## Limites
 
-Isso comprova o contrato local entre middleware e resolução de schema e adiciona uma checagem HTTP sem gasto para um fluxo pago. Não demonstra a configuração do ambiente implantado, nem substitui matriz completa de autorização por endpoint, verificação de armazenamento/filas, auditoria de logs com segredos identificáveis ou homologação dos papéis em todos os fluxos. TEST-37 e WP-00 permanecem parciais até a revisão integral e a confirmação do runtime.
+Isso comprova o contrato local entre middleware e resolução de schema, adiciona uma checagem HTTP sem gasto para um fluxo pago e uma regressão contra vazamento de segredos no log do worker. Não demonstra a configuração do ambiente implantado, nem substitui a matriz completa de autorização por endpoint, verificação de armazenamento/filas ou homologação dos papéis em todos os fluxos. TEST-37 e WP-00 permanecem parciais até a revisão integral e a confirmação do runtime.
