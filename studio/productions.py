@@ -507,6 +507,9 @@ def permanent_delete(pid:uuid.UUID,body:PermanentDeleteRequest):
         if c.execute("SELECT to_regclass('program_metadata') t").fetchone()['t']:
             c.execute("UPDATE program_metadata SET title='[conteúdo removido]',description='',theme='',music_description='',alternatives='[]'::jsonb,keywords='[]'::jsonb,primary_phrase='',publication_metadata='{}'::jsonb WHERE program_id=ANY(%s)",(programs,))
         c.execute("UPDATE production_batches SET state='deleted',detail='Mídias e conteúdo removidos definitivamente',audio_key=NULL,video_key=NULL,manifest_key=NULL,visual_cycle_key=NULL WHERE id=ANY(%s)",(programs,))
+        from .creator_plan_versions import redact_deleted_plans
+        plan_ids=[r['id'] for r in c.execute('SELECT id FROM creator_plans WHERE program_id=ANY(%s)',(programs,)).fetchall()]
+        redacted_revisions=redact_deleted_plans(c,plan_ids)
         c.execute("UPDATE creator_plans SET status='deleted',theme='[conteúdo removido]',data='{}'::jsonb WHERE program_id=ANY(%s)",(programs,))
         c.execute("UPDATE productions SET state='deleted',scenario='deleted',idea='',cursor_detail='Conteúdo removido definitivamente',error=NULL,spec='{}'::jsonb,spec_sha256='deleted',recipe_snapshot='{}'::jsonb,reference='{}'::jsonb,youtube_metadata='{}'::jsonb,updated_at=now() WHERE id=%s",(pid,))
         # Keep source/reference media outside the generated object namespaces.
@@ -525,6 +528,6 @@ def permanent_delete(pid:uuid.UUID,body:PermanentDeleteRequest):
                         if item['Key']==key:versions.append({'Key':key,'VersionId':item['VersionId']})
                 if versions:client.delete_objects(Bucket=bucket,Delete={'Objects':versions,'Quiet':True})
                 else:client.delete_object(Bucket=bucket,Key=key)
-        audit(c,'PRODUCTION_PERMANENTLY_DELETED',str(pid),'Media and identifying content purged; cost/job ledger retained')
+        audit(c,'PRODUCTION_PERMANENTLY_DELETED',str(pid),f'Media and identifying content purged; cost/job ledger retained; {redacted_revisions} storyboard revisions redacted')
         c.commit()
     return {'deleted':True,'ledger_retained':True}

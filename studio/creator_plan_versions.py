@@ -46,13 +46,29 @@ def save_locked_revision(c,row,data,expected):
 
 
 def history(c,plan_id):
-    return c.execute('''SELECT revision,sha256,created_at FROM creator_plan_revisions
-      WHERE plan_id=%s ORDER BY revision DESC''',(plan_id,)).fetchall()
+    return c.execute('''SELECT r.revision,r.sha256,r.created_at FROM creator_plan_revisions r
+      JOIN creator_plans p ON p.id=r.plan_id
+      WHERE r.plan_id=%s AND p.status<>'deleted' ORDER BY r.revision DESC''',
+      (plan_id,)).fetchall()
+
+
+def redact_deleted_plans(c,plan_ids):
+    """Remove recoverable storyboard content while retaining a minimal audit trail."""
+    if not plan_ids or not c.execute("SELECT to_regclass('creator_plan_revisions') t").fetchone()['t']:
+        return 0
+    tombstone={'redacted':True,'reason':'permanent_deletion'}
+    digest=content_hash(tombstone)
+    result=c.execute('''UPDATE creator_plan_revisions
+      SET data=%s::jsonb,sha256=%s WHERE plan_id=ANY(%s)''',
+      (json.dumps(tombstone,separators=(',',':')),digest,plan_ids))
+    return result.rowcount
 
 
 def get(c,plan_id,revision):
-    return c.execute('''SELECT plan_id,revision,sha256,data,created_at FROM creator_plan_revisions
-      WHERE plan_id=%s AND revision=%s''',(plan_id,revision)).fetchone()
+    return c.execute('''SELECT r.plan_id,r.revision,r.sha256,r.data,r.created_at
+      FROM creator_plan_revisions r JOIN creator_plans p ON p.id=r.plan_id
+      WHERE r.plan_id=%s AND r.revision=%s AND p.status<>'deleted' ''',
+      (plan_id,revision)).fetchone()
 
 
 def require_current_revision(c,plan_id,expected):

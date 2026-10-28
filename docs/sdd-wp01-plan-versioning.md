@@ -9,7 +9,8 @@ Esta entrega implementa uma primeira parte do WP-01. Ela não declara o pacote c
 ## Mudança nesta entrega
 
 - `creator_plans.revision` identifica a revisão atual.
-- `creator_plan_revisions` guarda snapshots da proposta e das decisões de montagem com SHA-256 do JSON canônico.
+- `creator_plan_revisions` guarda snapshots da proposta e das decisões de montagem com SHA-256 do JSON canônico enquanto o roteiro está retido.
+- Exclusão permanente é exceção explícita à imutabilidade: remove o conteúdo de todas as revisões e substitui os hashes por um tombstone, mantendo somente revisão/data para trilha mínima. Revisões de roteiros excluídos não podem ser listadas nem consultadas.
 - Ao inicializar, os registros legados com conteúdo recebem um snapshot da versão atual. Isso não inventa histórico anterior nem aprova conteúdo antigo.
 - Salvar uma edição existente requer `draft_revision`. Alterar identidade, trilha, áreas da cena ou máscaras também exige a revisão exibida e cria uma nova revisão quando o conteúdo muda. Uma revisão vencida retorna conflito para a interface recarregar.
 - A tela de montagem lê a revisão junto com o estado do roteiro e envia esse número ao salvar essas decisões. Uploads e aprovações de arquivos continuam vinculados ao hash dos próprios artefatos e não criam revisão da proposta.
