@@ -249,3 +249,8 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 - PR #63 head `909ca6f52134a8dffc60e678dbcc962856c04267` passou no Checks run `40724149004`. O workflow agora consulta o protocolo instalado antes de transmitir o arquivo; `ops/auto-deploy.sh` responde `LOFI_DEPLOY_PROTOCOL=2` sem escrita.
 - A captura WP-00 confirma que o deployer atualmente instalado na VPS ainda não reconhece esse protocolo. Com o novo gate, o workflow para antes de enviar qualquer release até que a versão atualizada seja instalada por caminho autorizado. Isso fecha o falso sinal de deploy automático, mas não instala o script, não implanta o publicador e não conclui TEST-27.
 - Os PRs continuam abertos; nenhuma aprovação, merge, deploy, conexão à VPS ou alteração de produção ocorreu.
+
+## CI após sincronização documental — 28/10/2026
+
+- Depois do head documental `29483c24efb5058ae643b3cadbb2a18e302df5c5`, #66 foi sincronizado no head `8aea254b04013d0f63fa74beb53d5a660dc87d0f` e passou no Checks run `40746185868`; #72 foi sincronizado no head `e790827c6e4369275c027673ca8cf64e0599eb4f` e passou no run `40746206476`.
+- A alteração sincronizada é documental. Os códigos funcionais de WP-01/WP-02 permanecem parciais e ainda dependem das verificações WP-00; mergeabilidade e CI não substituem autorização autenticada em runtime, homologação ou produção.
