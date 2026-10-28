@@ -17,7 +17,7 @@ def test_uncertain_public_task_explains_reconciliation_without_leaking_provider_
     payload={'project_id':str(uuid.uuid4()),'operation':'video','callback_token':'secret-callback-token'}
     callback=public_task({**base,'payload':payload})
     assert callback['reconciliation_state']=='callback_pending'
-    assert 'callback_token' not in callback and 'secret-callback-token' not in json.dumps(callback)
+    assert 'callback_token' not in callback and 'secret-callback-token' not in json.dumps(callback,default=str)
     payload.update(callback_token=None,provider_job_id=None)
     legacy=public_task({**base,'payload':payload})
     assert legacy['reconciliation_state']=='manual_reconciliation'
