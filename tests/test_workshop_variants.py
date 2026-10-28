@@ -517,9 +517,9 @@ def test_paid_attempt_cycle_persists_across_reload_splits_and_project_duplicates
     assert len(calls)==1
 
     # Force lazy schema setup to run again as it would after a fresh process starts.
-    from studio import workshop_api as workshop
+    from studio import core
     marker=WORKSPACE.set(identity['workspace_id'])
-    try:workshop._ENSURED.discard((identity['workspace_id'],'visual_workshop'))
+    try:core._ENSURED.discard((identity['workspace_id'],'visual_workshop'))
     finally:WORKSPACE.reset(marker)
 
     # A new request UUID and a project copy cannot buy the same already-used variant.
