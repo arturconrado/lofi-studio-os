@@ -254,3 +254,10 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 
 - Depois do head documental `29483c24efb5058ae643b3cadbb2a18e302df5c5`, #66 foi sincronizado no head `8aea254b04013d0f63fa74beb53d5a660dc87d0f` e passou no Checks run `40746185868`; #72 foi sincronizado no head `e790827c6e4369275c027673ca8cf64e0599eb4f` e passou no run `40746206476`.
 - A alteração sincronizada é documental. Os códigos funcionais de WP-01/WP-02 permanecem parciais e ainda dependem das verificações WP-00; mergeabilidade e CI não substituem autorização autenticada em runtime, homologação ou produção.
+
+## WP-00 após login autenticado — 28/10/2026
+
+- O usuário entrou no Studio; `/studio/diagnostico` abriu em sessão autenticada e apresentou o estado visual de serviços. Essa evidência confirma acesso à interface nesta conta.
+- A tentativa de abrir `/openapi.json` no navegador foi bloqueada antes de retornar dados. Não houve validação do catálogo dinâmico, códigos HTTP ou permissões das rotas implantadas.
+- A matriz por papéis continua pendente: não foram exercitados `viewer`, `creator`, `operator`, `workspace_admin` e Basic admin. WP-00 e TEST-37 permanecem abertos; não se presume que a interface acessível prove autorização correta por endpoint.
+- Evidência detalhada registrada em `docs/sdd-wp00-runtime-capture-2026-10-28.md`. Nenhuma mutação foi realizada.
