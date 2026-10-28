@@ -160,6 +160,35 @@ def test_membership_last_owner_and_workspace_switch(client):
     assert client.get('/api/auth/members').status_code==403
 
 
+def test_workspace_admin_cannot_manage_members_or_touch_other_workspace(client):
+    _,owner=signup(client)
+    owner_user_id=client.get('/api/auth/me').json()['user_id']
+    owner_cookie=client.cookies.get(auth.COOKIE)
+    owner_headers={'X-CSRF-Token':owner['csrf_token']}
+
+    admin_email,admin=signup(client)
+    admin_cookie=client.cookies.get(auth.COOKIE)
+
+    outsider_email,_=signup(client)
+    outsider_user_id=client.get('/api/auth/me').json()['user_id']
+
+    client.cookies.clear();client.cookies.set(auth.COOKIE,owner_cookie)
+    assert client.post('/api/auth/members',json={'email':admin_email,'role':'workspace_admin'},headers=owner_headers).status_code==200
+    assert client.put('/api/auth/members',json={'user_id':outsider_user_id,'role':'viewer'},headers=owner_headers).status_code==404
+
+    client.cookies.clear();client.cookies.set(auth.COOKIE,admin_cookie)
+    admin_headers={'X-CSRF-Token':admin['csrf_token']}
+    assert client.post('/api/auth/workspace',json={'workspace_id':owner['workspace_id']},headers=admin_headers).status_code==200
+    assert client.get('/api/auth/me').json()['role']=='workspace_admin'
+    assert client.get('/api/auth/members').status_code==200
+    assert client.put('/api/auth/members',json={'user_id':owner_user_id,'role':'viewer'},headers=admin_headers).status_code==403
+    assert client.post('/api/auth/members',json={'email':outsider_email,'role':'creator'},headers=admin_headers).status_code==403
+
+    client.cookies.clear()
+    assert client.get('/api/auth/members',auth=('legacy-admin','legacy-local-test-password')).status_code==403
+    assert client.post('/api/auth/members',json={'email':outsider_email,'role':'creator'},auth=('legacy-admin','legacy-local-test-password')).status_code==403
+
+
 def test_new_workspace_empty_and_legacy_preserved(client):
     from studio.core import db, init_db
     from studio.tenancy import WORKSPACE
