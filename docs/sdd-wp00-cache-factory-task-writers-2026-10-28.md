@@ -21,16 +21,17 @@ Os 52 caminhos são contagens de caminhos dentro de grupos, não 52 componentes 
 
 ## Relação com a evidência de runtime
 
-- A captura de 28/10 observou três tarefas visuais em `UNCERTAIN`, mas a consulta de runtime usada para preservar privacidade trouxe contagens e custo agregado, sem IDs, payloads, request IDs, timestamps individuais ou autoria.
+- Uma nova consulta read-only em 28/10 leu somente fingerprint MD5 truncado, `kind`, modelo, estado, timestamps, reserva, estágio/operação e presença de identificadores de callback/provedor/solicitação. As três tarefas em `UNCERTAIN` são do tipo `growth_packaging_20261024`, usam `google/gemini-2.5-flash-lite` e somam US$ 0,05 em reservas (duas de US$ 0,02 e uma de US$ 0,01). Os fingerprints registrados são `36da2b2822`, `b270db3b8a` e `7251ac53eb`; UUIDs e conteúdo do payload não foram selecionados nem preservados.
+- Na consulta, nenhuma das três tinha `operation`, `attempt_stage`, token de callback, ID de tarefa do provedor ou `request_id` no payload. Isso restringe a família funcional à geração de embalagem de Growth, mas não identifica a sessão/endpoint que iniciou cada tarefa, nem comprova se o provedor concluiu ou cobrou uma chamada.
 - O Studio e os seis outros containers foram identificados por imagem/revisão, mas isso não demonstra que os diretórios de teste dentro do mount `/cache` tenham sido importados ou chamados por esses serviços.
-- A busca estática identifica caminhos candidatos que poderiam escrever estados; não correlaciona nenhum caminho a uma tarefa real. Não atribuir as tarefas incertas às variantes `continuity`, `fresh-hd`, `Halloween`, `seven-hours` ou `validation45` sem evidência adicional.
+- A busca estática identifica caminhos candidatos que poderiam escrever estados; não correlaciona nenhum caminho arquivado a uma tarefa real. Não atribuir as tarefas incertas às variantes `continuity`, `fresh-hd`, `Halloween`, `seven-hours` ou `validation45` sem evidência adicional.
 - Capturas arquivísticas continuam preservadas. Nenhum script foi importado, iniciado, copiado para local executável ou usado para alterar banco, mídia ou serviço.
 
 ## Próxima evidência necessária para fechar a atribuição
 
-1. Em sessão read-only, identificar para cada tarefa incerta somente os campos mínimos necessários à correlação: ID, `kind`, `created_at`, `updated_at`, hash/versão do payload sem seus valores privados, e IDs de solicitação/provedor quando já existirem. Não selecionar prompt, tokens, URLs assinadas, conteúdo de mídia nem campos de usuário.
-2. Comparar esses fingerprints com os registros/históricos da aplicação e com as revisões exatas dos containers que poderiam escrevê-los.
-3. Separar escrita de API, transição de worker, ferramenta de recuperação e cópia de teste; verificar transaction/audit log ou evidência operacional disponível antes de atribuir autoria.
-4. Manter a incerteza se as evidências não permitirem correlação. Não executar scripts arquivados como forma de descobrir seu efeito.
+1. Consultar apenas metadados de auditoria permitidos, logs sanitizados e revisões exatas para procurar correlação por fingerprint/timestamp; não ampliar a seleção para prompts, tokens, URLs assinadas, conteúdo de mídia, UUIDs brutos ou campos de usuário.
+2. Determinar se existe registro local confiável de resposta/custo para cada tarefa. A ausência de ID remoto impede concluir que o provedor não executou a chamada; não reenviar automaticamente uma tarefa `UNCERTAIN`.
+3. Separar a rota Growth atual de escritores históricos ou ferramentas de recuperação; verificar logs sanitizados/transações disponíveis antes de atribuir autoria.
+4. Manter sem conclusão a autoria exata e o resultado/custo terminal enquanto não houver evidência suficiente. Não executar scripts arquivados como forma de descobrir seu efeito.
 
-Esta captura estática avança a catalogação de WP-00, mas **não fecha WP-00, TEST-27 ou TEST-37**, não resolve tarefas incertas e não autoriza bootstrap, deploy ou promoção de código do cache.
+Esta captura estática e a consulta limitada de metadados avançam a catalogação de WP-00, mas **não fecham WP-00, TEST-27 ou TEST-37**, não resolvem o resultado/custo terminal das tarefas incertas e não autorizam bootstrap, deploy ou promoção de código do cache.

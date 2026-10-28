@@ -310,3 +310,10 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 - Inventário e método estão em [sdd-wp00-cache-factory-task-writers-2026-10-28.md](sdd-wp00-cache-factory-task-writers-2026-10-28.md). A busca foi estática e não executou/importou os arquivos; path hit não prova uso nem autoria.
 - As três tarefas visuais `UNCERTAIN` ainda não foram correlacionadas: a consulta de runtime preservou somente agregados, sem IDs ou payloads. Não atribuir essas tarefas a nenhuma variante ou ferramenta arquivada.
 - Este resultado avança a catalogação, mas WP-00, TEST-27 e TEST-37 permanecem abertos. Nenhum script foi executado e nenhum dado, serviço ou mídia da VPS foi alterado.
+
+## Correção da correlação das tarefas Growth — 28/10/2026
+
+- A captura financeira anterior acima dizia que as tarefas incertas eram visuais e não identificadas. Nova consulta read-only, com seleção limitada a metadados, mostra que as três tarefas em `UNCERTAIN` são da família `growth_packaging_20261024`, modelo `google/gemini-2.5-flash-lite`, com reservas de US$ 0,02, US$ 0,02 e US$ 0,01. Os fingerprints pseudônimos e timestamps estão na captura [sdd-wp00-cache-factory-task-writers-2026-10-28.md](sdd-wp00-cache-factory-task-writers-2026-10-28.md); UUIDs e payloads privados não foram selecionados.
+- Nenhuma tinha identificador de operação, estágio de tentativa, callback, tarefa do provedor ou `request_id` no payload. Isso liga as tarefas à família de embalagem de Growth, mas não prova qual interação as iniciou, se o provedor terminou o processamento ou qual foi o custo terminal. A rotina compartilhada atualmente marca a tarefa como `UNCERTAIN` para evitar uma nova chamada paga automática após falha; sem identificador remoto, o resultado não pode ser reconciliado apenas por callback.
+- Portanto, a classificação histórica como “visuais” está substituída por esta evidência mais recente. A autoria exata, eventual resposta/cobrança e causa individual permanecem sem confirmação. Não fazer retry automático; manter WP-00 parcial e registrar este ponto como risco de reconciliação no WP-02.
+- Nenhum dado, serviço, publicação ou arquivo da VPS foi alterado.
