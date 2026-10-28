@@ -205,3 +205,10 @@ Consulta de documentação oficial em 28/10/2026; esta é uma decisão de arquit
 **Decisão: adaptar o fluxo local; dispensar integração com OpusClip/WayinVideo neste marco.** O harness deve analisar materiais aprovados e intervalos reais, propor história e enquadramento vertical, registrar direção sonora e entregar a montagem em Revisão; o compositor existente executa crop/fundo sincronizado e trilhas sem duplicação. Integração futura só será considerada se um gap medido não puder ser coberto localmente, após validar exportação, direitos/proveniência, custo, privacidade, API e experiência de revisão. Nenhuma conta foi conectada, arquivo enviado ou crédito externo consumido.
 
 Esta pesquisa fecha somente a decisão documental de G5-09; não prova implementação de análise visual sem fala, reenquadramento inteligente, direção sonora G5-06, nem os aceites de WP-08/TEST-18/19.
+
+## Revalidação WP-05 / direção sonora narrativa para Shorts — 28/10/2026
+
+- PR #74 head `7507e8d44d0b2efd880c893cd9435630110067f4`; Checks run `40673063578` passou: 290 testes Python, 34 testes Vitest, typecheck/build, bundle Linux versionado e verificações de interface.
+- A tela permite selecionar música contínua, pausa breve na virada da história, toque suave no desfecho ou ambos. A montagem aplica os cues localmente nos timestamps narrativos; a pausa afeta a música de origem e o toque é sintetizado localmente. A proveniência registra cues e intervalos; a regressão confirma MP4 vertical decodificável com uma faixa de áudio.
+- Isso cobre uma fatia de G5-06, não composição nova dirigida pelo harness (TEST-16), nem revisão humana do áudio completo vinculada ao hash final e integridade (TEST-17). A audição/aprovação humana continua necessária; WP-05 permanece parcial.
+- #74 segue aberto e mergeável. Sem merge, deploy, escrita na VPS/`main`, publicação ou geração paga.
