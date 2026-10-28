@@ -25,6 +25,8 @@ Baseline comparada: `origin/main` no commit `cb369c97e9f9fb175392f4341296b50d3f4
 - **youtube-publisher:** 128 arquivos; 87 têm mesmo caminho e hash; 22 têm caminho existente com hash diferente; 19 caminhos não existem em `main`.
 - **cache-code:** 383 arquivos capturados. A comparação por conteúdo identificou 55 itens cujo conteúdo não aparece nos arquivos de código rastreados em `main` nem nos snapshots dos dois serviços; a revisão registrada no PR #69 identificou 47 conteúdos Python distintos entre esses itens.
 
+A evidência anterior de recuperação em `docs/audit-2026-10-15/evidence` confirma apenas uma cópia local de fontes/entradas: 23 arquivos de código restaurados foram verificados, mas `offsite_full_disaster_restore_tested=false` e `complete_final_mp4s_local_backup=false`. É um resultado histórico útil, porém não fecha o TEST-27 do estado atual.
+
 **Implicação:** WP-00 ainda precisa classificar os 31 + 22 arquivos divergentes e os 19 caminhos ausentes do publisher, e revisar os 55 itens de cache sem correspondência. Não copiar nenhum desses arquivos para caminhos executáveis até atribuir função, origem, dependências, teste, dono e rollback. Contagens são evidência de divergência, não decisão de canonicalidade.
 
 ## Sequência ajustada
