@@ -16,6 +16,10 @@ Consulta somente de leitura ao droplet da Lo-Fi Studio, com acesso SSH direto ao
 
 Os sete containers Lo-Fi estavam em execução. Studio estava marcado como healthy; creator, export-worker, publisher, rádio, channel-radio e music-worker estavam ativos. A revisão do core (`cb369c9`) coincide com `main` nessa captura. As revisões do publisher (`1789d4d`) e de rádio (`be426a8`) existem no histórico e são ancestrais de `main`, mas são antigas; isso não prova que os bytes das imagens correspondam exatamente a esses commits. A revisão OCI de music-worker não identifica um commit. A observação de estado não substitui teste funcional de cada endpoint.
 
+### Confirmação de disponibilidade — 28/10/2026, 06:52 UTC
+
+Uma segunda consulta SSH somente de leitura, usando diretamente o IP público retornado pela API da DigitalOcean e a chave local `lofi_vps`, confirmou os mesmos sete containers Lo-Fi ativos e as mesmas tags de imagem da captura acima; Studio continuava `healthy`. `ssh -G lofi_vps` ainda não resolve o alias e trata o texto como hostname literal, por isso esta confirmação usou IP conhecido e `StrictHostKeyChecking=yes`. Nenhum comando de escrita foi executado no servidor.
+
 ## Caminho de implantação
 
 A chave de deploy configurada no `authorized_keys` executa um caminho fixo no host. O SHA-256 completo do script instalado foi comparado com o arquivo versionado em `origin/main` (`cb369c9`): os bytes correspondem exatamente (`4b97425d…`). Portanto, o código do script que está instalado permanece recuperável na `main`. O script `ops/auto-deploy.sh` proposto no head do PR #63 tem hash diferente (`803d0961…`). O script atualmente instalado declara que atualiza Studio, creator e export-worker; não inclui publisher, rádio, channel-radio nem music-worker. O workflow do PR #63 empacota `studio/`, `web/` e `requirements.txt`, mas não instala o novo `ops/auto-deploy.sh` no caminho fixo chamado pela chave. Assim, o script antigo está preservado em `main`, mas o PR #63 ainda não prova que o publicador ou a nova rotina de deploy serão ativados.
