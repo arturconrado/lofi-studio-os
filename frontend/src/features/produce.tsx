@@ -30,6 +30,7 @@ type Quote = { recipe: { name: string; sha256: string }; scenario: string; scene
   suggested_ceiling_usd: number; remaining_usd: number; paid_enabled: boolean; audio_prompt: string; copy: { title: string; description: string }; visual: VisualPlan;
   spec: Record<string, unknown>; whole_episode_export_available: boolean; episode_export_blocker: string | null };
 type GrowthPackage = { title:string; description:string; primary_phrase:string; primary_phrase_source:string; search_phrase_options:any[]; historical_context:any; reference_editorial_leads:any[]; channel_memory?:{version:string;items:any[];auto_refreshed_from_saved_observations:boolean}; request_id:string; cost_usd?:number };
+type BriefSuggestion = { patch: { scene_brief?: string }; reused: boolean; generation_started: false; cost_usd?: number };
 
 export function Produce() {
   const cid = channel.value?.id;
@@ -51,6 +52,11 @@ export function Produce() {
   const [growthBusy, setGrowthBusy] = useState(false);
   const [growthNote, setGrowthNote] = useState('');
   const [growthPackage, setGrowthPackage] = useState<GrowthPackage|null>(null);
+  const [assistantBrief, setAssistantBrief] = useState('');
+  const [assistantCostConfirmed, setAssistantCostConfirmed] = useState(false);
+  const [assistantBusy, setAssistantBusy] = useState(false);
+  const [assistantNote, setAssistantNote] = useState('');
+  const [sceneProposal, setSceneProposal] = useState('');
   const requestId = useRef(uuid());
 
   const allowed = bound.data?.recipes || [];
@@ -126,7 +132,7 @@ export function Produce() {
     }
     setPreparing(true);
     const saved = await attempt(() => post<{ id: string }>('/api/creator/storyboard/save', {
-      channel_id: cid, spec: { ...quote.spec, hours },
+      channel_id: cid, spec: { ...quote.spec, hours, ...(sceneProposal ? { scene_brief: sceneProposal } : {}) },
       youtube_metadata: {
         title: growthPackage.title, description: growthPackage.description, intent: growthIntent,
         primary_phrase: growthPackage.primary_phrase,
@@ -139,6 +145,23 @@ export function Produce() {
     }), 'Roteiro e pacote Growth salvos; nenhuma produção iniciada');
     setPreparing(false);
     if (saved) navigate('/montagem/' + saved.id);
+  };
+
+  const suggestScene = async () => {
+    if (!cid || !quote || !assistantCostConfirmed || assistantBrief.trim().length < 3) return;
+    setAssistantBusy(true); setAssistantNote('Preparando uma proposta de direção para sua revisão…');
+    try {
+      const result = await post<BriefSuggestion>('/api/creator/form-assist', {
+        request_id: uuid(), channel_id: cid, brief: assistantBrief.trim(), focus: 'scene_brief', current: quote.spec,
+        confirm_cost: true,
+      });
+      const proposal = result.patch.scene_brief || '';
+      if (!proposal) throw new Error('O assistente não retornou uma proposta de cena.');
+      setSceneProposal(proposal);
+      setAssistantNote(`Proposta pronta para revisão${result.cost_usd != null ? ` · custo US$ ${Number(result.cost_usd).toFixed(4)}` : ''}. Nenhuma produção foi iniciada.`);
+    } catch (e:any) {
+      setAssistantNote(e.message || 'Não foi possível preparar a proposta. Confira o histórico antes de tentar novamente.');
+    } finally { setAssistantCostConfirmed(false); setAssistantBusy(false); }
   };
 
   if (recipes.loading) return <Skeleton lines={6} />;
@@ -166,6 +189,20 @@ export function Produce() {
           <Field label="Ideia (opcional)" hint="Vira o tema do título, da descrição e a direção musical da hora.">
             <textarea class="textarea" maxLength={1500} placeholder="ex.: madrugada de neve, pixels quentes, foco profundo" value={idea} onInput={e => setIdea((e.target as HTMLTextAreaElement).value)} />
           </Field>
+          <div class="notice">
+            <b>Desenvolver a ideia com o assistente</b>
+            <p class="faint">Descreva o que você quer ver. O assistente prepara uma proposta de cena para revisar; só o texto aceito segue para o roteiro. Isso não inicia produção.</p>
+            <textarea class="textarea" maxLength={800} placeholder="ex.: uma madrugada de Halloween, chuva na janela e luzes quentes de uma cidade distante" value={assistantBrief} onInput={e => setAssistantBrief((e.target as HTMLTextAreaElement).value)} />
+            <div class="row wrap" style={{ marginTop: '8px' }}>
+              <Check checked={assistantCostConfirmed} onChange={setAssistantCostConfirmed}>Autorizo até US$0,10 para criar esta proposta.</Check>
+              <button class="btn secondary" disabled={!assistantCostConfirmed || assistantBusy || !quote || assistantBrief.trim().length < 3} onClick={suggestScene}>{assistantBusy ? 'Preparando…' : 'Pedir proposta'}</button>
+            </div>
+            {assistantNote && <p class="faint" role="status">{assistantNote}</p>}
+            {sceneProposal && <div class="stack" style={{ marginTop: '8px' }}>
+              <Field label="Proposta de cena — revise antes de aplicar"><textarea class="textarea" rows={4} maxLength={2000} value={sceneProposal} onInput={e => setSceneProposal((e.target as HTMLTextAreaElement).value)} /></Field>
+              <button class="btn" type="button" onClick={() => { setIdea(sceneProposal); setGrowthPackage(null); setGrowthNote('A ideia mudou; gere novamente título e descrição para manter o Growth alinhado.'); }}>Aplicar à ideia do roteiro</button>
+            </div>}
+          </div>
         </div>
         <div class="card stack">
           <h3>3. Cena</h3>

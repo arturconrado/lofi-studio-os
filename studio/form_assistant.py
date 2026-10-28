@@ -1,5 +1,5 @@
 """Bounded creative field suggestions. Never starts production or changes budgets."""
-import json,uuid
+import hashlib,json,uuid
 from decimal import Decimal,ROUND_CEILING
 from typing import Literal
 import httpx
@@ -98,7 +98,11 @@ def suggest(body:AssistRequest):
     context={k:v for k,v in body.current.model_dump().items() if k in FIELDS}
     system=SYSTEM
     user=json.dumps({'focus':body.focus,'brief':body.brief,'current':context},ensure_ascii=False)
-    patch,reused,cost=bounded_json_call(body.request_id,body.channel_id,KIND,{'focus':body.focus},system,user,lambda raw:filter_patch(raw,body.focus),'patch','Sugestão de campos')
+    # Reusing an id is safe only for the exact same creative input. Without this
+    # fingerprint, changing the brief while keeping request_id could silently
+    # return a stale proposal from the previous request.
+    input_sha256=hashlib.sha256(user.encode('utf-8')).hexdigest()
+    patch,reused,cost=bounded_json_call(body.request_id,body.channel_id,KIND,{'focus':body.focus,'input_sha256':input_sha256},system,user,lambda raw:filter_patch(raw,body.focus),'patch','Sugestão de campos')
     result={'patch':patch,'reused':reused,'generation_started':False}
     if not reused:result['cost_usd']=cost
     return result
