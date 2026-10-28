@@ -220,3 +220,10 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 - Para incluir ações fora do escopo, a interface exige uma revisão explícita com motivo, confirma a lista atual e registra o histórico; a revisão não faz chamada paga nem muda o teto financeiro. A próxima geração exige nova cotação e confirmação de custo.
 - Isso cobre a unidade entrega/operação no motor visual. G4-04 segue parcial: ainda falta um vínculo canônico de campanha e a aplicação de cotas agregadas equivalentes aos demais motores pagos. TEST-23 não é fechado por esse teste isolado; campanhas, outras engines e reinício/recuperação continuam a exigir aceites próprios.
 - #71 permanece aberto, sem merge. Sem deploy, escrita na VPS/`main`, publicação ou chamada paga.
+
+## Revalidação WP-05 / direção musical ligada ao harness — 28/10/2026
+
+- PR #74 head `7e387cbc1f15f05e56ce0fd758bf7a290f07f0bc`; Checks run `40676622125` passou: 292 testes Python, 34 Vitest, typecheck/build, bundle versionado e verificações de interface.
+- O worker agora usa um compilador determinístico do pedido de cada faixa: tema aprovado, briefing musical, bíblia/estilo e instrumentos da receita, itens a evitar, BPM, tonalidade e variação são combinados. O texto resultante é o mesmo persistido no prompt do job e enviado ao provedor; testes não chamam o provedor.
+- Isto verifica a construção e persistência da direção, não uma saída musical real. TEST-16 ainda exige gerar uma composição nova usando referência autorizada e avaliar ritmo, instrumentos e atmosfera. TEST-17 ainda exige decodificação/integridade e audição do arquivo final vinculado ao hash. WP-05 permanece parcial e sem gasto pago nesta etapa.
+- #74 continua aberto e mergeável. Sem merge, deploy, escrita na VPS/`main`, publicação ou geração paga.
