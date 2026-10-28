@@ -161,3 +161,10 @@ Sem merges, deploys, alterações na VPS, produção, dados ou publicação fora
 | #73/#74 — WP-04/WP-05 | Abertos, mergeáveis; evidências anteriores continuam parciais. | Calibração de referência e avaliação (WP-04), composição nova dirigida pelo harness e revisão auditiva do áudio final (WP-05) permanecem sem aceite. |
 
 Sem merge, aprovação formal, deploy, escrita na VPS, publicação ou geração paga nesta atualização. WP-00 ainda bloqueia o aceite dos pacotes dependentes; WP-03 a WP-09 e FUT-10/11 não estão concluídos.
+
+## Revalidação WP-02 — 28/10/2026 09:57 UTC
+
+- PR #71 head `ba3c5d032560e642fd40fbd62fa8c8cb3120b87f`; CI `Checks` run `40667767237` passou: 308 testes Python, Vitest/typecheck/build e verificações de interface.
+- No teto financeiro configurado por projeto visual, o uso agora considera a cobrança final conciliada quando disponível; custo desconhecido conserva a reserva. Adicionada regressão PostgreSQL que valida a liberação do excedente e a retenção da reserva incerta. `py_compile` e `git diff --check` também passaram localmente.
+- Esta alteração cobre a conciliação financeira do teto existente por projeto. Não cria ainda relações explícitas de campanha/entrega nem contadores agregados por ação, entrega e campanha; portanto G4-04 e WP-02 continuam parciais.
+- PR #71 segue aberto e sem merge. O alias SSH ainda não resolve um hostname; a auditoria read-only da VPS não foi repetida. Sem alteração na VPS, `main`, produção ou dados externos.
