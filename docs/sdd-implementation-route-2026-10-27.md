@@ -104,7 +104,7 @@ Depois de WP-01/02 e da referência funcional de WP-03, avançar em paralelo:
 
 A cada PR, atualizar status apenas com evidência ligada ao head atual, testes/cenários cobertos e limitações. Manter separados: revisão do código, CI, teste/homologação em staging, autorização de merge e validação de produção. O SDD original e os dados de produção permanecem sem alteração por este documento.
 
-## Snapshot de acompanhamento — 28/10/2026 08:00 UTC
+## Snapshot de acompanhamento — 28/10/2026 08:13 UTC
 
 Esta seção substitui os hashes e estados anteriores somente para os PRs indicados; as seções acima preservam evidências históricas e não devem ser lidas como estado atual.
 
@@ -113,14 +113,14 @@ Esta seção substitui os hashes e estados anteriores somente para os PRs indica
 | #71 — WP-02 | Aberto, base `main`, head `94dc0dbdcd8b9ab8ac4ef25d17f219c389f59e72`; `MERGEABLE`; decisão formal de review vazia. | CI `40653063076` passou. Corrige o teto durável para compartilhar cópias do mesmo projeto/unidade dentro do canal e isola UUIDs iguais entre canais. O CI não substitui review independente nem aceite do WP-02. |
 | #66 — WP-01 | Aberto, base `docs/sdd-implementation-route-current`, head `53a151780052d93dd28bf41908d02dabd90c1c4a`; `MERGEABLE`; decisão formal de review vazia. | Sincronizado com o head #71 `94dc0db`. CI `40653351948` passou. A fatia ainda depende de WP-00; revisar o head atual e fechar os gates de permissões/proveniência antes de aceite. |
 | #63 — WP-03/deploy | Aberto, base `main`; CI anteriormente observado como aprovado. | A rotina fixada no host não é a versão deste PR e não instala a si própria; não aprovar nem executar deploy até haver bootstrap compatível com a regra de alterações via GitHub e evidência de TEST-27. |
-| #72 — runtime/schema | Aberto, base `main`; CI aprovado no head observado anteriormente. | Manter o callback acessível apenas pela autenticação de token/HMAC prevista quando integrado com #71. Exigir revisão da composição final e testes do fluxo combinado. |
+| #72 — runtime/schema | Aberto, base `docs/sdd-implementation-route-current` (#71), head `b6691f2b2bbef2bb296951a50898218ad8869f74`; `MERGEABLE`; decisão formal de review vazia. | CI `40654844668` passou na composição atual. Inclui regressão do callback público sem sessão, valida assinatura e mantém `public` sem herdar `LOFI_WORKSPACE_ID`; o token inválido continua sem tarefa (404). WP-00/TEST-37 seguem parciais. |
 | #73 — evidências WP-04 | Aberto, base `main`; CI aprovado. | Captura documental parcial; não prova calibração, cobertura de referências nem aceite de WP-04. |
 | #74 — proveniência WP-05 | Aberto, base `main`; CI aprovado. | Recibo de montagem parcial; composição nova dirigida pelo harness e revisão auditiva do áudio final continuam pendentes. |
 
 ### Gates ainda abertos para o plano completo
 
-- **WP-00:** ainda não há nova leitura da VPS nesta rodada porque o alias `lofi_vps` não resolve. A auditoria read-only, TEST-27 (restauração isolada) e reconciliação de serviço/dados seguem incompletas. Nenhuma escrita na VPS foi feita.
-- **WP-01/02:** #66 e #71 têm CI verde, mas continuam abertos e sem decisão formal de review; o aceite do pacote depende dos gates do WP-00 e dos cenários SDD que ainda não estão cobertos.
+- **WP-00:** ainda não há nova leitura da VPS nesta rodada porque o alias `lofi_vps` resolve para o literal `lofi_vps`, sem hostname configurado. A auditoria read-only, TEST-27 (restauração isolada) e reconciliação de serviço/dados seguem incompletas. Nenhuma escrita na VPS foi feita.
+- **WP-01/02:** #66 e #71 têm CI verde (`40653880793` e `40653870924`), mas continuam abertos e sem decisão formal de review; o aceite do pacote depende dos gates do WP-00 e dos cenários SDD que ainda não estão cobertos.
 - **WP-03:** #63 não resolve sozinho a instalação do próprio deployer. A jornada autenticada, recuperação após falha e equivalência com a imagem instalada permanecem por demonstrar.
 - **WP-04/05:** #73 e #74 são fatias parciais e não fecham os critérios funcionais e de qualidade correspondentes.
 - **WP-06 a WP-11:** continuam sem evidência de conclusão integral; FUT permanece fora do caminho crítico do núcleo.
