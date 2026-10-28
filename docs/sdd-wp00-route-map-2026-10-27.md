@@ -87,6 +87,12 @@ Escopo: rotas de `studio/workshop_api.py`, `studio/ambient_api.py`, `studio/yout
 
 **Achado WP-00 / G1-02 (revisado):** para pilotos ambientais, o código versionado contém o caminho Revisão → candidato visível na Biblioteca → entrada `ready` de publicação; `prepare_pilot` é serializado por piloto e retorna a publicação existente, sem iniciar upload. Isso dá evidência estática positiva do contrato e da idempotência da preparação, mas ainda não prova o comportamento implantado, recuperação depois de reinício entre aprovação e listagem, nem a identidade do arquivo por hash em todas as telas. O render completo do Visual Workshop atualiza apenas o job aprovado e não é o mesmo tipo de artefato do piloto ambiental; a inclusão de clipes na `visual_library` é outra função (reuso em projetos), não a Biblioteca de publicação. Não propor promoção entre esses domínios sem requisito específico. Próximo gate WP-00: reproduzir com sessão autenticada e piloto descartável ou registro de teste isolado; conferir visibilidade após reload, hash/artefato, repetição de `prepare`, recuperação e ausência de upload até autorização. A falta de teste da jornada integrada deve ser considerada no WP-03/TEST-01/02/33.
 
+## Reprodução somente de leitura: vídeo de Halloween
+
+Em 27/10/2026, a Biblioteca autenticada mostrou um registro de publicação para o vídeo de Halloween ligado a um ID do YouTube. No YouTube Studio, o vídeo correspondente estava **Público**, com duração de **1:01:01** e os indicadores de qualidade **SD e HD concluídos**. A tela da plataforma indicava que o YouTube recebeu o arquivo; a inspeção remota confirmou que o processamento de HD também terminou. Não houve edição, salvamento ou novo envio.
+
+Essa evidência encerra a dúvida sobre o estado atual desse vídeo específico: ele está publicado e processado no YouTube. Ela não prova o histórico do percentual de envio, a correção dos estados dos outros vídeos, nem o comportamento de recuperação entre a API da plataforma e o YouTube. Esses pontos continuam sujeitos aos cenários G1-03/04 e TEST-02/34.
+
 ## Rotas declaradas
 
 | Módulo | Método | Caminho efetivo | Linha no código | Política global estática |
