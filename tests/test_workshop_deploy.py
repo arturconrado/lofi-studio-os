@@ -32,3 +32,39 @@ def test_youtube_publisher_deploy_is_versioned_and_upload_safe():
     assert "'youtube-publisher'):d['services'][s]['image']" in script
     assert 'studio.youtube_publish' in script
     assert 'for s in "${SERVICES[@]}"; do' in script
+
+
+@pytest.mark.parametrize('failure,success',[('none',True),('service',False),('compose',False)])
+def test_deploy_rollback_restores_and_verifies_previous_services(tmp_path,failure,success):
+    script=Path('ops/auto-deploy.sh').read_text()
+    start=script.index('rollback() {')
+    end=script.index('\nif ! docker compose',start)
+    rollback=script[start:end]
+    previous=tmp_path/'previous.json';previous.write_text('{"version":"old"}')
+    current=tmp_path/'current.json';current.write_text('{"version":"new"}')
+    env={**os.environ,'TEST_FAILURE':failure,'TEST_CURRENT':str(current)}
+    stub='''set -euo pipefail
+say() { :; }
+fail() { exit 1; }
+SERVICES=(studio creator export-worker youtube-publisher)
+previous_images=(old-image old-image old-image old-image)
+previous_revisions=(old-sha old-sha old-sha old-sha)
+rollback_compose="$TEST_PREVIOUS"
+COMPOSE="$TEST_CURRENT"
+PROJECT=fixture
+docker() {
+  if [ "$1" = compose ]; then [ "$TEST_FAILURE" != compose ]; return; fi
+  container="$2"; format="$4"; service=""
+  for name in "${SERVICES[@]}"; do if [[ "$container" == *"$name-1" ]]; then service="$name"; fi; done
+  case "$format" in
+    '{{.State.Running}}') if [ "$TEST_FAILURE" = service ] && [ "$service" = creator ]; then echo false; else echo true; fi ;;
+    '{{.Config.Image}}') echo old-image ;;
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}') echo old-sha ;;
+    *) return 2 ;;
+  esac
+}
+'''
+    env['TEST_PREVIOUS']=str(previous)
+    result=subprocess.run(['bash','-c',stub+rollback+'\nrollback'],env=env,capture_output=True,text=True)
+    assert (result.returncode==0) is success
+    assert current.read_text()==previous.read_text()

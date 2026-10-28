@@ -42,10 +42,15 @@ EOF
 
 current=$(docker inspect lofi-vibe-coding-studio-1 --format '{{.Config.Image}}')
 all_current=1
+previous_images=()
+previous_revisions=()
 for s in "${SERVICES[@]}"; do
   container="lofi-vibe-coding-$s-1"
-  image=$(docker inspect "$container" --format '{{.Config.Image}}' 2>/dev/null || true)
+  image=$(docker inspect "$container" --format '{{.Config.Image}}' 2>/dev/null) || fail "serviço $s indisponível; nenhuma troca foi feita"
   revision=$(docker inspect "$container" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)
+  [ -n "$image" ] || fail "imagem anterior do serviço $s não identificada; nenhuma troca foi feita"
+  previous_images+=("$image")
+  previous_revisions+=("$revision")
   { [ "$image" = "lofi-studio-os:production-$SHA" ] && [ "$revision" = "$FULL_SHA" ]; } || all_current=0
 done
 [ "$all_current" = 1 ] && { say "versão $SHA já está em todos os serviços gerenciados"; exit 0; }
@@ -85,14 +90,39 @@ docker run --rm "lofi-studio-os:production-$SHA" python -c 'import studio.api,st
   || fail "a imagem nova não importa os módulos; nada foi trocado"
 
 # 5. Swap the managed services, keeping the previous compose for rollback.
-cp -p "$COMPOSE" "$COMPOSE_DIR/compose.production-final.private.before-$SHA.private.json"
+rollback_compose="$COMPOSE_DIR/compose.production-final.private.before-$SHA-$TS.private.json"
+cp -p "$COMPOSE" "$rollback_compose"
 python3 - "$COMPOSE" "$SHA" <<'EOF'
 import json,sys
 path,sha=sys.argv[1],sys.argv[2];d=json.load(open(path))
 for s in ('studio','creator','export-worker','youtube-publisher'):d['services'][s]['image']='lofi-studio-os:production-'+sha
 json.dump(d,open(path,'w'),indent=2)
 EOF
-docker compose -p "$PROJECT" -f "$COMPOSE" up -d --no-deps "${SERVICES[@]}" >/dev/null 2>&1
+
+rollback() {
+  cp -p "$rollback_compose" "$COMPOSE" || { say "não foi possível restaurar a configuração anterior"; return 1; }
+  if ! docker compose -p "$PROJECT" -f "$COMPOSE" up -d --no-deps "${SERVICES[@]}" >/dev/null 2>&1; then
+    say "a configuração anterior foi restaurada, mas o Compose falhou ao reativá-la"
+    return 1
+  fi
+  for i in "${!SERVICES[@]}"; do
+    s=${SERVICES[$i]}
+    container="lofi-vibe-coding-$s-1"
+    state=$(docker inspect "$container" --format '{{.State.Running}}' 2>/dev/null || true)
+    image=$(docker inspect "$container" --format '{{.Config.Image}}' 2>/dev/null || true)
+    revision=$(docker inspect "$container" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)
+    if [ "$state" != "true" ] || [ "$image" != "${previous_images[$i]}" ] || { [ -n "${previous_revisions[$i]}" ] && [ "$revision" != "${previous_revisions[$i]}" ]; }; then
+      say "reversão não confirmada para o serviço $s"
+      return 1
+    fi
+  done
+  say "reversão confirmada para todas as imagens anteriores"
+}
+
+if ! docker compose -p "$PROJECT" -f "$COMPOSE" up -d --no-deps "${SERVICES[@]}" >/dev/null 2>&1; then
+  rollback || fail "a ativação falhou e a reversão não foi confirmada; intervenção necessária"
+  fail "a ativação falhou; versão anterior restaurada e confirmada"
+fi
 
 healthy() {
   for s in "${SERVICES[@]}"; do
@@ -105,9 +135,8 @@ healthy() {
 ok=0
 for _ in $(seq 1 30); do sleep 3; if healthy; then ok=1; break; fi; done
 if [ "$ok" != 1 ]; then
-  cp -p "$COMPOSE_DIR/compose.production-final.private.before-$SHA.private.json" "$COMPOSE"
-  docker compose -p "$PROJECT" -f "$COMPOSE" up -d --no-deps "${SERVICES[@]}" >/dev/null 2>&1
-  fail "saúde não confirmada; voltei para $current"
+  rollback || fail "saúde não confirmada e a reversão não pôde ser confirmada; intervenção necessária"
+  fail "saúde não confirmada; versão anterior restaurada e confirmada (${current#lofi-studio-os:production-})"
 fi
 
 cat > "$R/DEPLOY-RECORD.txt" <<EOF
@@ -118,7 +147,7 @@ services_updated=${SERVICES[*]}
 previous_image=$current
 db_backup=$dump
 transmitter_code_behind=${behind:-none}
-rollback: cd $COMPOSE_DIR && cp compose.production-final.private.before-$SHA.private.json compose.production-final.private.json && docker compose -p $PROJECT -f compose.production-final.private.json up -d --no-deps ${SERVICES[*]}
+rollback: cd $COMPOSE_DIR && cp $(basename "$rollback_compose") compose.production-final.private.json && docker compose -p $PROJECT -f compose.production-final.private.json up -d --no-deps ${SERVICES[*]}
 EOF
 chmod 600 "$R/DEPLOY-RECORD.txt"
 
