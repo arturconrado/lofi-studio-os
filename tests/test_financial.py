@@ -60,6 +60,49 @@ def test_workspace_usage_counts_tenant_plans_without_cross_workspace_leakage(mon
 
 
 @pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
+def test_reconciled_actual_cost_releases_unused_reservation_across_paid_engines(monkeypatch):
+    """Final provider charges replace estimates; unresolved work keeps its reservation."""
+    from psycopg import sql
+    from studio import core
+    from studio.tenancy import WORKSPACE, schema_name
+
+    monkeypatch.setenv('DATABASE_URL',os.environ['LOFI_TEST_DATABASE_URL'])
+    workspace_id=str(uuid4());schema=schema_name(workspace_id)
+    with core.db() as c:
+        c.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema)));c.commit()
+    try:
+        marker=WORKSPACE.set(workspace_id)
+        try:core.init_db()
+        finally:WORKSPACE.reset(marker)
+        marker=WORKSPACE.set(workspace_id)
+        try:
+            with core.db() as c:
+                for track in ('FIN-RECON-1','FIN-RECON-2'):
+                    c.execute("INSERT INTO tracks(id,title,collection,bpm,prompt) VALUES(%s,'test','test',70,'test')",(track,))
+                c.execute("""INSERT INTO jobs(id,track_id,status,provider,model,estimated_cost,actual_cost,budget_reserved,submitted_at)
+                    VALUES(%s,'FIN-RECON-1','COMPLETED','test','test',.08,.03,true,now()),
+                          (%s,'FIN-RECON-2','UNCERTAIN','test','test',.08,NULL,true,now())""",(uuid4(),uuid4()))
+                c.execute("""INSERT INTO creator_plans(id,request_id,theme,minutes,data,status,reserved,actual_cost)
+                    VALUES(%s,%s,'reconciled',60,'{}','draft',.10,.04),
+                          (%s,%s,'uncertain',60,'{}','planning',.10,NULL)""",(uuid4(),uuid4(),uuid4(),uuid4()))
+                c.execute("""INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,actual_cost)
+                    VALUES(%s,'test','test','{}',.08,'FAILED',.03),
+                          (%s,'test','test','{}',.08,'UNCERTAIN',NULL)""",(uuid4(),uuid4()))
+                c.commit()
+            with core.db() as c:
+                assert financial.total_usage(c)==Decimal('.36')
+            from studio.api import budget as budget_report
+            report=budget_report()
+            assert Decimal(report['reserved'])==Decimal('.36')
+            assert Decimal(report['reported'])==Decimal('.10')
+            assert report['unconfirmed']==3
+        finally:WORKSPACE.reset(marker)
+    finally:
+        with core.db() as c:
+            c.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(schema)));c.commit()
+
+
+@pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
 def test_shared_ceiling_serializes_concurrent_workspace_reservations(monkeypatch):
     """Two sessions cannot reserve the same remaining balance."""
     from concurrent.futures import ThreadPoolExecutor

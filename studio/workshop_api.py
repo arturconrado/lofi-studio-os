@@ -44,6 +44,42 @@ def ensure(c):
       correction_signature TEXT, correction_reason TEXT,
       correction_variant_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(channel_id,creative_unit_id,operation))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS visual_delivery_attempt_scopes(
+      project_id UUID NOT NULL REFERENCES visual_projects(id),
+      channel_id UUID NOT NULL REFERENCES radio_channels(id),
+      operation TEXT NOT NULL CHECK(operation IN ('image','video')),
+      creative_unit_ids JSONB NOT NULL,
+      initial_unit_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+      correction_unit_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id,operation))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS visual_delivery_attempt_scope_reviews(
+      id UUID PRIMARY KEY, request_id UUID NOT NULL UNIQUE,
+      project_id UUID NOT NULL REFERENCES visual_projects(id), channel_id UUID NOT NULL REFERENCES radio_channels(id),
+      reason TEXT NOT NULL, previous_unit_ids JSONB NOT NULL, reviewed_unit_ids JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+    # Existing paid deliveries receive a durable scope from their current
+    # saved draft plus every action already recorded in task history. Later
+    # edits cannot silently expand the paid inventory.
+    projects=c.execute('''SELECT p.id,p.channel_id,p.data FROM visual_projects p
+        WHERE EXISTS (SELECT 1 FROM factory_tasks t WHERE t.kind=%s AND t.payload->>'project_id'=p.id::text)''',(KIND,)).fetchall()
+    for project_row in projects:
+        task_rows=c.execute('''SELECT payload->>'operation' operation,payload->>'creative_unit_id' unit,
+            payload->>'attempt_stage' stage FROM factory_tasks
+            WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'operation' IN ('image','video')''',
+            (KIND,str(project_row['id']))).fetchall()
+        try:inventory=set(creative_unit_inventory(Draft.model_validate(project_row['data'])))
+        except Exception:inventory=set()
+        inventory.update(str(row['unit']) for row in task_rows if row['unit'])
+        if not inventory:continue
+        for operation in ('image','video'):
+            rows=[row for row in task_rows if row['operation']==operation]
+            if not rows:continue
+            initial=sorted({str(row['unit']) for row in rows if row['unit'] and row['stage']=='initial'})
+            correction=sorted({str(row['unit']) for row in rows if row['unit'] and row['stage']=='correction'})
+            c.execute('''INSERT INTO visual_delivery_attempt_scopes(project_id,channel_id,operation,creative_unit_ids,initial_unit_ids,correction_unit_ids)
+                VALUES(%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb) ON CONFLICT(project_id,operation) DO NOTHING''',
+                (project_row['id'],project_row['channel_id'],operation,json.dumps(sorted(inventory)),json.dumps(initial),json.dumps(correction)))
 
 
 def ready():
@@ -114,6 +150,11 @@ def creative_unit(draft, clip):
     while clip.continues_from:
         clip=by_id[str(clip.continues_from)]
     return clip.id
+
+
+def creative_unit_inventory(draft):
+    """Stable action inventory for this delivery, including continuation parts once."""
+    return sorted({str(creative_unit(draft, clip)) for clip in clips(draft)})
 
 
 def creative_spec_signature(draft, clip, operation, resolution, media):
@@ -194,9 +235,20 @@ def attempt_decision(c, draft, clip, operation, resolution, groups, media, proje
     unit=creative_unit(draft,clip);spec=creative_spec_signature(draft,clip,operation,resolution,media)
     keys=attempt_keys(clip,groups)
     history=attempt_history(c,unit,operation,project_id)
+    scope=c.execute('SELECT * FROM visual_delivery_attempt_scopes WHERE project_id=%s AND operation=%s',(project_id,operation)).fetchone()
+    frozen=c.execute('SELECT creative_unit_ids FROM visual_delivery_attempt_scopes WHERE project_id=%s ORDER BY created_at LIMIT 1',(project_id,)).fetchone()
+    inventory=(frozen['creative_unit_ids'] if frozen else creative_unit_inventory(draft))
+    initial_units=scope['initial_unit_ids'] if scope else []
+    correction_units=scope['correction_unit_ids'] if scope else []
+    delivery_scope={'locked':frozen is not None,'initial_used':len(initial_units),'initial_limit':len(inventory),
+        'correction_used':len(correction_units),'correction_limit':len(inventory)}
     def decision(values):
-        return {'channel_id':str(channel_id),**values,'history':history,
+        return {'channel_id':str(channel_id),'delivery_scope':delivery_scope,**values,'history':history,
                 'alternatives':attempt_alternatives(values.get('stage'),values.get('allowed',False))}
+    if frozen and str(unit) not in set(inventory):
+        return decision({'allowed':False,'stage':'blocked','requires_reason':False,'attempts_used':0,
+            'scope_review_required':True,
+            'message':'A entrega já fixou seu conjunto de ações pagas. Revise e confirme o escopo da entrega antes de acrescentar uma nova ação.'})
     row=c.execute('SELECT * FROM visual_creative_attempts WHERE channel_id=%s AND creative_unit_id=%s AND operation=%s',
                   (channel_id,unit,operation)).fetchone()
     if not row:
@@ -225,7 +277,7 @@ def attempt_decision(c, draft, clip, operation, resolution, groups, media, proje
             'unit_id':str(unit),'signature':spec,'keys':keys})
 
 
-def reserve_attempt(c, decision, operation, correction_reason=None):
+def reserve_attempt(c, decision, operation, correction_reason=None, *, draft, project_id):
     if not decision['allowed']:
         raise HTTPException(409,decision['message'])
     if decision['requires_reason'] and len((correction_reason or '').strip())<12:
@@ -233,6 +285,16 @@ def reserve_attempt(c, decision, operation, correction_reason=None):
     if not decision['requires_reason'] and correction_reason:
         raise HTTPException(422,'A justificativa só se aplica ao ciclo de correção.')
     channel=decision['channel_id'];unit=decision['unit_id'];spec=decision['signature'];keys=decision['keys']
+    scope=c.execute('SELECT * FROM visual_delivery_attempt_scopes WHERE project_id=%s AND operation=%s FOR UPDATE',(project_id,operation)).fetchone()
+    frozen=c.execute('SELECT creative_unit_ids FROM visual_delivery_attempt_scopes WHERE project_id=%s ORDER BY created_at LIMIT 1 FOR UPDATE',(project_id,)).fetchone()
+    if not scope:
+        inventory=frozen['creative_unit_ids'] if frozen else creative_unit_inventory(draft)
+        c.execute('''INSERT INTO visual_delivery_attempt_scopes(project_id,channel_id,operation,creative_unit_ids)
+                     VALUES(%s,%s,%s,%s::jsonb)''',(project_id,channel,operation,json.dumps(inventory)))
+        scope={'creative_unit_ids':inventory,'initial_unit_ids':[],'correction_unit_ids':[]}
+    inventory=scope['creative_unit_ids']
+    if unit not in inventory:
+        raise HTTPException(409,'A entrega já fixou seu conjunto de ações pagas. Revise e confirme o escopo da entrega antes de acrescentar uma nova ação.')
     if decision['stage']=='initial' and decision['attempts_used']==0:
         c.execute('''INSERT INTO visual_creative_attempts(channel_id,creative_unit_id,operation,initial_signature,initial_variant_keys)
                      VALUES(%s,%s,%s,%s,%s::jsonb)''',(channel,unit,operation,spec,json.dumps(keys)))
@@ -249,7 +311,54 @@ def reserve_attempt(c, decision, operation, correction_reason=None):
             row=c.execute('SELECT correction_variant_keys FROM visual_creative_attempts WHERE channel_id=%s AND creative_unit_id=%s AND operation=%s FOR UPDATE',(channel,unit,operation)).fetchone()
             c.execute('UPDATE visual_creative_attempts SET correction_variant_keys=%s::jsonb,updated_at=now() WHERE channel_id=%s AND creative_unit_id=%s AND operation=%s',
                       (json.dumps([*(row['correction_variant_keys'] or []),*keys]),channel,unit,operation))
+    field='initial_unit_ids' if decision['stage']=='initial' else 'correction_unit_ids'
+    used=scope[field] or []
+    if unit not in used:
+        used=[*used,unit]
+        if len(used)>len(inventory):
+            raise HTTPException(409,'O limite agregado da entrega foi atingido; nenhum novo envio foi reservado.')
+        c.execute(f'UPDATE visual_delivery_attempt_scopes SET {field}=%s::jsonb,updated_at=now() WHERE project_id=%s AND operation=%s',
+                  (json.dumps(used),project_id,operation))
     return decision['stage']
+
+
+class DeliveryScopeReview(Strict):
+    request_id: uuid.UUID
+    revision: int = Field(ge=1)
+    reason: str = Field(min_length=12,max_length=1000)
+    confirm_current_actions: bool = False
+
+
+@router.post('/projects/{pid}/attempt-scope/review')
+def review_delivery_attempt_scope(pid: uuid.UUID, body: DeliveryScopeReview):
+    ready()
+    reason=body.reason.strip()
+    if len(reason)<12:raise HTTPException(422,'Explique o motivo da mudança de escopo.')
+    if not body.confirm_current_actions:
+        raise HTTPException(422,'Confirme que revisou as ações atuais da entrega.')
+    with db() as c:
+        row=project(c,pid,True)
+        previous=c.execute('SELECT * FROM visual_delivery_attempt_scope_reviews WHERE request_id=%s',(body.request_id,)).fetchone()
+        if previous:
+            if str(previous['project_id'])!=str(pid) or previous['reason']!=reason:
+                raise HTTPException(409,'Identificador de revisão já utilizado para outro escopo.')
+            return {'reviewed':True,'reused':True,'unit_count':len(previous['reviewed_unit_ids']),'paid_calls':0}
+        if row['revision']!=body.revision:
+            raise HTTPException(409,'A entrega mudou. Atualize a tela e revise o escopo novamente.')
+        scopes=c.execute('SELECT * FROM visual_delivery_attempt_scopes WHERE project_id=%s FOR UPDATE',(pid,)).fetchall()
+        if not scopes:
+            raise HTTPException(409,'Nenhuma operação paga fixou o escopo desta entrega ainda.')
+        previous_units=sorted({str(unit) for scope in scopes for unit in scope['creative_unit_ids']})
+        reviewed_units=sorted(set(previous_units)|set(creative_unit_inventory(Draft.model_validate(row['data']))))
+        c.execute('''INSERT INTO visual_delivery_attempt_scope_reviews(id,request_id,project_id,channel_id,reason,previous_unit_ids,reviewed_unit_ids)
+                     VALUES(%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)''',
+                  (uuid.uuid4(),body.request_id,pid,row['channel_id'],reason,json.dumps(previous_units),json.dumps(reviewed_units)))
+        for scope in scopes:
+            c.execute('UPDATE visual_delivery_attempt_scopes SET creative_unit_ids=%s::jsonb,updated_at=now() WHERE project_id=%s AND operation=%s',
+                      (json.dumps(reviewed_units),pid,scope['operation']))
+        audit(c,'VISUAL_DELIVERY_SCOPE_REVIEWED',str(pid),f'{len(previous_units)} -> {len(reviewed_units)} actions; {reason}')
+        c.commit()
+    return {'reviewed':True,'reused':False,'unit_count':len(reviewed_units),'paid_calls':0}
 
 
 def validate_refs(draft, media):
@@ -534,6 +643,15 @@ def generation_targets(draft, clip, media, variant_key=None, resolution=None):
     return groups
 
 
+def project_generation_usage(c, project_id):
+    """Return reconciled project spend, keeping reservations for unknown tasks."""
+    return c.execute("""SELECT COALESCE(sum(COALESCE(actual_cost,
+        CASE WHEN jsonb_typeof(payload->'actual_cost_usd')='number'
+             THEN (payload->>'actual_cost_usd')::numeric END,
+        reserved_cost)),0) n
+        FROM factory_tasks WHERE payload->>'project_id'=%s""",(str(project_id),)).fetchone()['n']
+
+
 @router.get('/projects/{pid}/clips/{cid}/quote/{kind}')
 def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], variant_key: str | None = None, resolution: Literal['720p','1080p'] = '720p'):
     from .workshop_provider import quote as provider_quote
@@ -546,7 +664,7 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
         attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media,pid,row['channel_id'])
     q=(provider_quote(kind,clip.seconds,resolution) if resolution!='720p' else provider_quote(kind,clip.seconds)) if groups else {'usd':0,'seconds':clip.seconds}
     return {**q,'unit_usd':q['usd'],'usd':round(q['usd']*len(groups),6),'new_clips':len(groups),
-            'attempt':{key:attempt[key] for key in ('allowed','stage','requires_reason','attempts_used','message','history','alternatives') if key in attempt},
+            'attempt':{key:attempt[key] for key in ('allowed','stage','requires_reason','attempts_used','message','history','alternatives','delivery_scope','scope_review_required') if key in attempt},
             'reused_occurrences':sum(len(g['event_ids']) for g in variant_plan(draft,clip,media) if _status(draft,occurrence_clip(draft,clip,g,media),media,g)['video_ready']) if clip.id!=draft.base.id else 0,
             'waiting_variants':sum(not g['source_ready'] for g in variant_plan(draft,clip,media)) if clip.id!=draft.base.id else 0,
             'variants':[{'key':g['key'],'minutes':g['minutes']} for g in groups if g]}
@@ -603,7 +721,11 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if c.execute("SELECT to_regclass('visual_project_budgets') t").fetchone()['t']:
             budget=c.execute('SELECT limit_usd FROM visual_project_budgets WHERE project_id=%s',(pid,)).fetchone()
             if budget:
-                used=c.execute("SELECT COALESCE(sum(reserved_cost),0) n FROM factory_tasks WHERE payload->>'project_id'=%s",(str(pid),)).fetchone()['n']
+                # A project ceiling covers paid tasks in this project. Once a
+                # terminal charge is known, count that amount instead of the
+                # larger reservation; while cost is unknown, keep the full
+                # reservation occupied.
+                used=project_generation_usage(c,pid)
                 if used+Decimal(str(total))>budget['limit_usd']:
                     raise HTTPException(409,'O teto autorizado deste teste foi atingido. Nenhum novo envio foi feito.')
         base=status(draft,draft.base,media)
@@ -625,7 +747,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 entry['frames'].append(0)
             prepared={key:base_cut_images(value['source'],value['frames']) for key,value in by_source.items()}
         tids=[body.request_id if n==0 else uuid.uuid5(body.request_id,g['key']) for n,g in enumerate(groups)]
-        attempt_stage=reserve_attempt(c,decision,kind,body.correction_reason)
+        attempt_stage=reserve_attempt(c,decision,kind,body.correction_reason,draft=draft,project_id=pid)
         for index,group in enumerate(groups):
             effective=clip;image=media.get(str(clip.image_id));return_frame=None
             selected=[media[str(r)] for r in refs]

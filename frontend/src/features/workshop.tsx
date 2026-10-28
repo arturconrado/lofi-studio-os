@@ -28,7 +28,9 @@ function attemptContext(attempt: any) {
     return `${stage}${recorded ? ` · ${recorded}` : ''}: ${entry.request_count} solicitação(ões), ${entry.variant_count} variante(s), valor reservado ${reserved}, estado: ${state}${entry.correction_reason ? ` · motivo: ${entry.correction_reason}` : ''}`;
   });
   const alternatives = (attempt?.alternatives || []).map((value: string) => `• ${value}`);
-  return [history.length ? `Histórico persistido:\n${history.join('\n')}` : 'Histórico persistido: nenhuma geração reservada para esta unidade.',
+  const scope = attempt?.delivery_scope;
+  const scopeLine = scope ? `Limite da entrega (${scope.locked ? 'inventário fixado' : 'previsto para as ações atuais'}): ${scope.initial_used}/${scope.initial_limit} tentativas iniciais e ${scope.correction_used}/${scope.correction_limit} correções.` : '';
+  return [scopeLine, history.length ? `Histórico persistido:\n${history.join('\n')}` : 'Histórico persistido: nenhuma geração reservada para esta unidade.',
     alternatives.length ? `Alternativas:\n${alternatives.join('\n')}` : ''].filter(Boolean).join('\n\n');
 }
 const newClip = (name: string): Clip => ({ id: uuid(), name, motion: 'Descreva o movimento e a pose de retorno à base.', seconds: 8, references: [], continues_from: null, image_id: null, video_id: null });
@@ -219,6 +221,14 @@ export function Workshop({ id }: { id?: string }) {
     const q = await api(`${prefix}/projects/${id}/clips/${clip.id}/quote/${kind}?${query}`);
     if(q.new_clips===0){setMessage('Os vídeos já estão disponíveis para revisão.');return;}
     const historyAndAlternatives=attemptContext(q.attempt);
+    if(q.attempt?.scope_review_required){
+      if(!confirm(`${q.attempt.message}\n\nA revisão salva somente o escopo atual; não inicia geração nem amplia o orçamento financeiro.`))return;
+      const reason=prompt('Descreva por que a entrega precisa incluir estas ações adicionais.');
+      if(!reason?.trim())return;
+      await post(`${prefix}/projects/${id}/attempt-scope/review`,{request_id:uuid(),revision:d!.revision,reason:reason.trim(),confirm_current_actions:true});
+      setMessage('Escopo da entrega revisado. Confira novamente o orçamento e confirme a geração separadamente.');
+      return;
+    }
     if(q.attempt?.allowed===false){setMessage([q.attempt.message || 'O limite desta unidade criativa foi atingido.',historyAndAlternatives].filter(Boolean).join('\n\n'));return;}
     let correctionReason: string | undefined;
     if(q.attempt?.requires_reason){

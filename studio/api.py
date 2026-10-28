@@ -310,14 +310,16 @@ def save_settings(body:SettingsBody):
 @app.get('/api/budget')
 def budget():
     with db() as c:
-        usage=c.execute("SELECT COALESCE(sum(GREATEST(estimated_cost,COALESCE(actual_cost,0))),0) reserved, COALESCE(sum(actual_cost),0) reported, count(*) FILTER(WHERE submitted_at IS NOT NULL AND actual_cost IS NULL) unconfirmed FROM jobs WHERE budget_reserved").fetchone()
+        usage=c.execute("SELECT COALESCE(sum(COALESCE(actual_cost,estimated_cost)),0) reserved, COALESCE(sum(actual_cost),0) reported, count(*) FILTER(WHERE submitted_at IS NOT NULL AND actual_cost IS NULL) unconfirmed FROM jobs WHERE budget_reserved").fetchone()
         from .financial import total_usage
         usage['reserved']=total_usage(c)
-        if c.execute("SELECT to_regclass('public.creator_plans') t").fetchone()['t']:
-            plans=c.execute('SELECT COALESCE(sum(GREATEST(reserved,COALESCE(actual_cost,0))),0) reserved,COALESCE(sum(actual_cost),0) reported,count(*) FILTER(WHERE actual_cost IS NULL) unconfirmed FROM creator_plans').fetchone()
+        if c.execute("SELECT to_regclass('creator_plans') t").fetchone()['t']:
+            plans=c.execute('SELECT COALESCE(sum(COALESCE(actual_cost,reserved)),0) reserved,COALESCE(sum(actual_cost),0) reported,count(*) FILTER(WHERE actual_cost IS NULL) unconfirmed FROM creator_plans').fetchone()
             for name in ('reported','unconfirmed'):usage[name]+=plans[name]
-        task_costs=c.execute("""SELECT COALESCE(sum(CASE WHEN jsonb_typeof(payload->'actual_cost_usd')='number' THEN (payload->>'actual_cost_usd')::numeric ELSE 0 END),0) reported,
-          count(*) FILTER(WHERE status!='PLANNED' AND jsonb_typeof(payload->'actual_cost_usd') IS DISTINCT FROM 'number') unconfirmed FROM factory_tasks""").fetchone()
+        task_costs=c.execute("""SELECT COALESCE(sum(COALESCE(actual_cost,CASE WHEN jsonb_typeof(payload->'actual_cost_usd')='number'
+              THEN (payload->>'actual_cost_usd')::numeric END)),0) reported,
+          count(*) FILTER(WHERE status!='PLANNED' AND actual_cost IS NULL
+              AND jsonb_typeof(payload->'actual_cost_usd') IS DISTINCT FROM 'number') unconfirmed FROM factory_tasks""").fetchone()
         usage['reported']+=task_costs['reported'];usage['unconfirmed']+=task_costs['unconfirmed']
         settings=runtime.public_settings()
         usage['available']=max(Decimal(0),Decimal(settings['total_limit'])-Decimal(usage['reserved']))
