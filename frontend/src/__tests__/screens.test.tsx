@@ -21,6 +21,8 @@ const block = { id: 'block_review:LOFI-1', kind: 'block_review', priority: 10, t
   track_evidence: [{ name: 'listened_fully', type: 'bool', label: 'Ouvi' }], track_actions: { approve: { method: 'POST', path: '/api/tracks/{track_id}/approve', body: { asset_id: '{asset_id}' } }, reject: { method: 'POST', path: '/api/tracks/{track_id}/assets/{asset_id}/reject' } },
   evidence: [{ name: 'confirm_audio_video', type: 'bool', label: 'Ouvi e assisti' }, { name: 'confirm_rights', type: 'bool', label: 'Direitos' }], prefill: {}, action: { method: 'POST', path: '/api/miniobs/programs/LOFI-1/review', body: {} }, after: [] };
 let assemblyJob: any = null;
+let publications: any[] = [];
+let pilotCandidates: any[] = [];
 
 function respond(url: string): unknown {
   if (url.includes('/api/creator/recipes/r1')) return { recipe, revisions: [{ revision: 1, sha256: recipe.sha256, reviewed: false, created_at: production.created_at }], channels: [] };
@@ -41,11 +43,15 @@ function respond(url: string): unknown {
   if (url.includes('/api/auth/members')) return [{ email: 'a@b.c', role: 'workspace_owner' }];
   if (url.includes('/api/auth/me')) return { role: 'workspace_owner', email: 'a@b.c' };
   if (url.includes('/api/creator/programs/')) return { title: 't', description: 'd' };
+  if (url.includes('/api/youtube/publications/pilots/candidates')) return pilotCandidates;
+  if (url.includes('/api/youtube/publications')) return publications;
   return [];
 }
 
 beforeEach(() => {
   assemblyJob = null;
+  publications = [];
+  pilotCandidates = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(respond(url)), { status: 200 })));
   channels.value = respond('/api/channels') as any; channelId.value = 'c1';
   HTMLMediaElement.prototype.pause = () => {};
@@ -92,5 +98,17 @@ describe('every screen renders with data', () => {
     const { container } = render(<App />);
     await waitFor(() => expect(container.textContent).toContain('Versão antiga'));
     expect(container.textContent).not.toContain('Revisar episódio inteiro');
+  });
+
+  it('shows an uploaded approved video in the Library with its YouTube link', async () => {
+    publications = [{ id: 'pub-halloween', channel_id: 'c1', title: 'Halloween na cafeteria — Lofi Jazzhop · 61 min · Full HD',
+      description: 'Rainy Halloween café lofi jazzhop.', privacy: 'public', actual_privacy: 'public', state: 'uploaded',
+      video_id: 'b-oS7AYM8Lk', detail: 'Recebido pelo YouTube', created_at: new Date().toISOString() }];
+    navigate('/biblioteca');
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.textContent).toContain('Halloween na cafeteria'));
+    expect(container.textContent).toContain('No YouTube');
+    expect(container.querySelector('a[href="https://youtu.be/b-oS7AYM8Lk"]')).not.toBeNull();
+    expect(container.textContent).not.toContain('Preparar para publicar');
   });
 });
