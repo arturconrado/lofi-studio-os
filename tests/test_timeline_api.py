@@ -78,7 +78,7 @@ def test_materials_and_render_jobs_are_workspace_private(client):
     client.cookies.clear();_,other=signup(client);other_headers={'X-CSRF-Token':other['csrf_token']}
     assert client.get(base).status_code==404
     assert client.post(base+'/render',json={'request_id':str(uuid.uuid4()),'confirm_local_render':True},headers=other_headers).status_code==404
-    assert client.post(base+'/clips/typing_idle',files={'file':('x.mp4',b'invalid')},headers=other_headers).status_code==404
+    assert client.post(base+'/clips/typing_idle',files={'file':('x.mp4',b'invalid')},data={'revision':'1'},headers=other_headers).status_code==404
 
 
 def test_real_clip_upload_review_and_compatible_reuse_are_separate(client,monkeypatch,tmp_path):
@@ -92,23 +92,34 @@ def test_real_clip_upload_review_and_compatible_reuse_are_separate(client,monkey
     pid,headers,spec,cid=draft(client);base='/api/creator/assembly/plans/'+pid
     video=tmp_path/'idle.mp4'
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=1280x720:rate=24:duration=2','-c:v','libx264','-threads','1','-preset','ultrafast','-pix_fmt','yuv420p',str(video)],check=True)
-    with video.open('rb') as handle:r=client.post(base+'/clips/typing_idle',files={'file':('idle.mp4',handle,'video/mp4')},headers=headers)
+    with video.open('rb') as handle:r=client.post(base+'/clips/typing_idle',files={'file':('idle.mp4',handle,'video/mp4')},data={'revision':'1'},headers=headers)
     assert r.status_code==200,r.text
     clip=r.json();action=next(a for a in client.get(base).json()['actions'] if a['action']=='typing_idle')
+    assert clip['revision']==2
+    assert [entry['revision'] for entry in client.get(f'/api/creator/plans/{pid}/revisions').json()['revisions']]==[2,1]
     assert not action['ready']
     assert action['clips'][0]['origin']=={'kind':'uploaded_to_plan','id':pid}
-    review={'sha256':clip['sha256'],'confirm_identity_props':True,'confirm_motion':True,'confirm_pose_anchors':True}
+    review={'revision':clip['revision'],'sha256':clip['sha256'],'confirm_identity_props':True,'confirm_motion':True,'confirm_pose_anchors':True}
+    stale=dict(review);stale['revision']=1
+    assert client.post(base+'/clips/'+clip['id']+'/review',json=stale,headers=headers).status_code==409
     assert client.post(base+'/clips/'+clip['id']+'/review',json=review,headers=headers).status_code==422
     review['confirm_loop_seam']=True
-    assert client.post(base+'/clips/'+clip['id']+'/review',json=review,headers=headers).status_code==200
+    reviewed=client.post(base+'/clips/'+clip['id']+'/review',json=review,headers=headers)
+    assert reviewed.status_code==200,reviewed.text
+    assert reviewed.json()['revision']==3
+    approved=client.get(f'/api/creator/plans/{pid}/revisions/3').json()
+    assert approved['data']['production_assets'][clip['id']]['status']=='APPROVED_ACTION'
+    assert approved['data']['production_assets'][clip['id']]['human_review_sha256']==clip['sha256']
     new=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers).json()['id']
     newbase='/api/creator/assembly/plans/'+new
     assert client.get(newbase).json()['reusable_clips']==1
-    assert client.post(newbase+'/reuse',json={},headers=headers).json()['reused_clips']==1
-    assert client.post(newbase+'/reuse',json={},headers=headers).json()['reused_clips']==0
+    reused=client.post(newbase+'/reuse',json={'revision':1},headers=headers).json()
+    assert reused['reused_clips']==1 and reused['revision']==2
+    reused=client.post(newbase+'/reuse',json={'revision':2},headers=headers).json()
+    assert reused['reused_clips']==0 and reused['revision']==2
     assert next(a for a in client.get(newbase).json()['actions'] if a['action']=='typing_idle')['ready']
     spec['shirt_color']='pink'
-    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':new,'draft_revision':1,'spec':spec},headers=headers).status_code==200
+    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':new,'draft_revision':2,'spec':spec},headers=headers).status_code==200
     assert not next(a for a in client.get(newbase).json()['actions'] if a['action']=='typing_idle')['ready']
 
 
@@ -244,5 +255,5 @@ def test_baseline_motion_must_come_from_the_scenario_episode(client):
             init_ambient(c)
             c.execute("INSERT INTO ambient_pilots(id,channel_id,title,video_key,silent_key,report,plan) VALUES(%s,%s,'Greenhouse','v','s','{}','{}')",(greenhouse,cid));c.commit()
     finally:WORKSPACE.reset(marker)
-    r=client.post(f'/api/creator/assembly/plans/{pid}/baseline-motion',json={'source_pilot_id':greenhouse},headers=headers)
+    r=client.post(f'/api/creator/assembly/plans/{pid}/baseline-motion',json={'source_pilot_id':greenhouse,'revision':1},headers=headers)
     assert r.status_code==409 and 'cenário' in r.text

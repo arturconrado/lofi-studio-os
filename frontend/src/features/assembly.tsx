@@ -107,7 +107,7 @@ export function Assembly({ id }: { id: string }) {
 
   const upload = async (action: string, file?: File) => {
     if (!file) return;
-    const form = new FormData(); form.append('file', file);
+    const form = new FormData(); form.append('file', file); form.append('revision', String(data?.revision || 0));
     const result = await attempt(() => api(base + '/clips/' + encodeURIComponent(action), { method: 'POST', body: form }), 'Clipe enviado para revisão');
     if (result) resource.reload();
   };
@@ -117,7 +117,7 @@ export function Assembly({ id }: { id: string }) {
     const pixelStyle = ['pixel_art_original', 'pixel_art_reviewed'].includes(data.required_visual_variant);
     if (!flags?.identity || !flags?.motion || !flags?.poses || (action.action === 'typing_idle' && !flags.loop) || (pixelStyle && !flags.visual)) return;
     const result = await attempt(() => post(`${base}/clips/${clip.id}/review`, {
-      sha256: clip.sha256, confirm_identity_props: true, confirm_motion: true,
+      revision: data.revision, sha256: clip.sha256, confirm_identity_props: true, confirm_motion: true,
       confirm_pose_anchors: true, confirm_loop_seam: flags.loop, confirm_visual_style: flags.visual,
     }), 'Clipe aprovado para esta versão do roteiro');
     if (result) resource.reload();
