@@ -166,7 +166,7 @@ DB=pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable
 
 
 @DB
-def test_cancel_video_is_local_before_submit_and_reconciles_submitting_job(client):
+def test_cancel_video_is_local_before_submit_and_confirms_same_remote_job(client,monkeypatch):
     from test_authentication import signup
     from studio.core import db
     from studio.tenancy import WORKSPACE
@@ -196,15 +196,32 @@ def test_cancel_video_is_local_before_submit_and_reconciles_submitting_job(clien
     assert response.status_code==200,response.text
     assert response.json()['status']=='RUNNING' and response.json()['cancel_state']=='requested'
     assert response.json()['reserved_usd']==pytest.approx(.08)
+    from studio import workshop_provider
+    queried=[]
+    class Response:
+        def raise_for_status(self):pass
+        def json(self):return {'status':'cancelled','usage':{'cost':.03}}
+    class ProviderClient:
+        def __init__(self,**kwargs):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def get(self,url,**kwargs):queried.append(url);return Response()
+    monkeypatch.setattr(workshop_provider.httpx,'Client',ProviderClient)
+    response=cl.post(f'{root}/{running_id}/refresh')
+    assert response.status_code==200,response.text
+    assert response.json()['status']=='FAILED' and response.json()['cancel_state']=='confirmed'
+    assert queried==[workshop_provider.BASE+'/videos/private-job-id']
     marker=WORKSPACE.set(workspace)
     try:
         with db() as c:
             queued=c.execute('SELECT status,reserved_cost FROM factory_tasks WHERE id=%s',(queued_id,)).fetchone()
             running=c.execute('SELECT status,reserved_cost,payload FROM factory_tasks WHERE id=%s',(running_id,)).fetchone()
             assert queued['status']=='CANCELLED' and queued['reserved_cost']==0
-            assert running['status']=='RUNNING' and running['reserved_cost']==Decimal('.08')
+            assert running['status']=='FAILED' and running['reserved_cost']==Decimal('.08')
             assert running['payload'].get('cancel_requested_at')
             assert running['payload']['provider_job_id']=='private-job-id'
+            assert running['payload']['provider_terminal_status']=='cancelled'
+            assert running['payload']['provider_usage']=={'cost':.03}
     finally:WORKSPACE.reset(marker)
 
 
