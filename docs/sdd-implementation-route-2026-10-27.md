@@ -268,3 +268,12 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 - Em #72, a regressão HTTP `test_paid_http_route_rejects_non_admin_roles_before_reserving` percorre `POST /api/tracks/{id}/generate`: `viewer`, `creator` e `operator` recebem 403; `workspace_admin` alcança o bloqueio de chave ausente; a contagem de jobs permanece zero. Head `60d0a5e90f3af423aeb7a79236d858b1b83bf26b`, Checks run `40768357896` aprovado.
 - Estes resultados fecham evidência automatizada específica para TEST-41 e reforçam a autorização de gasto em TEST-37/G4-02. Não fecham WP-02: G4-04 ainda precisa de limites agregados por ação/entrega/campanha e equivalência nos demais motores; operações legadas incertas ainda não têm confirmação terminal.
 - TEST-37/WP-00 permanecem parciais: falta executar a matriz completa de papéis e escopos nos endpoints, revisar registros com valores identificáveis e demonstrar as regras contra a revisão efetivamente instalada. Testes de integração locais não substituem homologação no runtime.
+
+## Revalidação de CI e proteção de logs — 28/10/2026
+
+- PR #71 head `887e0dfd7c62bee33958596cd2caf839e5b54c35` passou no Checks run `40768890226`; a atualização inclui testes HTTP/autorização e evidência de cancelamento/reconciliação sem chamada paga.
+- PR #66 head `3ceda0da4e60a6a5fb371067a1f311f6cfd75000` passou no run `40768916446`, sincronizado com o head acima. A fatia WP-01 permanece parcial e condicionada a WP-00.
+- PR #72 head `e2b32422f8348581a9ef848bbdcc11643d8916f0` passou no run `40769238542`. A nova regressão injeta um texto sentinela na exceção simulada do worker e confirma que não é copiado para o log nem para o detalhe persistido.
+- Estes resultados comprovam CI e regressões automatizadas específicas, não a matriz completa de autorização ou revisão de logs no runtime; TEST-37/WP-00 continuam parciais.
+- O alias SSH `lofi_vps` continua sem resolver hostname. A tentativa foi somente de conexão não interativa com comando de leitura e falhou antes de abrir sessão; nenhuma operação foi executada na VPS. A auditoria remota e TEST-27 seguem pendentes.
+- Os três PRs permanecem abertos e sem merge; nenhuma mudança foi feita em `main`, VPS, produção, mídia, publicação ou provedores pagos.
