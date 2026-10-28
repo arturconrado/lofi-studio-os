@@ -167,6 +167,44 @@ def test_provider_callback_recovers_uncertain_video_job_and_deduplicates(client,
 
 
 @DB
+def test_cancelled_provider_terminal_event_keeps_original_job_and_financial_reservation(client,monkeypatch):
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio.workshop_provider import VIDEO_MODEL
+    d,media=fixture();url,identity=seed_project(client,d,media)
+    workspace=identity['workspace_id'];token='c'*48;task_id=uuid.uuid4()
+    monkeypatch.setenv('OPENROUTER_VIDEO_WEBHOOK_SECRET','test-callback-secret')
+    payload={'project_id':url.rsplit('/',1)[-1],'clip_id':str(d.clips[0].id),'operation':'video',
+             'callback_workspace':workspace,'callback_token':token,'prompt':'test','seconds':8,
+             'resolution':'720p','references':[]}
+    marker=WORKSPACE.set(workspace)
+    try:
+        with db() as c:
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,'visual_workshop_v1',%s,%s,.08,'UNCERTAIN')",
+                      (task_id,VIDEO_MODEL,json.dumps(payload)));c.commit()
+    finally:WORKSPACE.reset(marker)
+    event={'type':'video.generation.cancelled','data':{'id':'job-cancelled','status':'cancelled','model':VIDEO_MODEL,'usage':{'cost':.03}}}
+    raw=json.dumps(event,separators=(',',':')).encode();timestamp=str(int(time.time()))
+    digest=hmac.new(b'test-callback-secret',timestamp.encode()+b','+raw,hashlib.sha256).hexdigest()
+    endpoint=f'/api/creator/workshop/provider-callback/{workspace}/{token}'
+    headers={'X-OpenRouter-Idempotency-Key':'job-cancelled-terminal',
+             'X-OpenRouter-Signature':f't={timestamp},v1={digest}'}
+    response=client.post(endpoint,content=raw,headers=headers)
+    assert response.status_code==200,response.text
+    marker=WORKSPACE.set(workspace)
+    try:
+        with db() as c:
+            task=c.execute('SELECT status,reserved_cost,payload FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
+            from studio.financial import total_usage
+            assert task['status']=='FAILED' and task['reserved_cost']==Decimal('.08')
+            assert task['payload']['provider_job_id']=='job-cancelled'
+            assert task['payload']['provider_terminal_status']=='cancelled'
+            assert task['payload']['provider_usage']=={'cost':.03}
+            assert total_usage(c)==Decimal('.08')
+    finally:WORKSPACE.reset(marker)
+
+
+@DB
 def test_paid_video_timeout_callback_and_poll_reconcile_same_attempt_without_resubmit(client,monkeypatch):
     """A provider can accept a paid job, lose the POST response, then reconcile by callback and poll."""
     from studio.core import db
