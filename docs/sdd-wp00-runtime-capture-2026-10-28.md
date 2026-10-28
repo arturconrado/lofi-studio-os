@@ -98,3 +98,13 @@ A consulta foi somente leitura: nenhum serviço, arquivo, dado ou configuração
 `docker inspect` somente de leitura registrou o comando principal dos sete containers Lo-Fi. O Studio executa `uvicorn studio.api:app` na porta 8787. Os demais executam workers/serviços dedicados: `studio.creator_service`, `studio.exports`, `studio.youtube_publish`, `studio.radio`, `studio.channel_radio` e `studio.worker`. Assim, os outros seis containers não apresentam um entrypoint HTTP independente na configuração do container observada; o inventário de 223 operações refere-se ao servidor FastAPI do Studio, e a inspeção de rotas foi corretamente limitada a ele. Isso não exclui portas auxiliares iniciadas por subprocessos ou integrações externas, mas não há entrypoint HTTP adicional declarado nos containers consultados.
 
 Nenhuma configuração ou serviço foi alterado.
+
+## Estado read-only das tarefas pagas incertas — 28/10/2026, 05:49 UTC
+
+Conectei ao droplet pela API autenticada da DigitalOcean e SSH com validação estrita da host key; o alias local `lofi_vps` continua sem resolução. `docker ps` mostrou sete serviços Lo-Fi em execução e o Studio saudável. Em seguida, uma transação PostgreSQL explicitamente read-only consultou somente contagens e agregados de `factory_tasks`, lotes, exports, uploads e lives, e terminou com `ROLLBACK`.
+
+Há **3 tarefas `UNCERTAIN`**, com reserva agregada de **US$ 0,05**; foram criadas entre 27/10 01:52 UTC e atualizadas até 27/10 03:10 UTC. Nenhuma contém `callback_token`, `webhook_event_key`, `provider_job_id` ou `provider_terminal_status`. Isso demonstra que o callback introduzido no PR #71 não consegue reconciliar essas tarefas legadas: ele só poderá ajudar novas solicitações que persistirem o token. Não consultei nem registrei IDs, payloads, prompts, credenciais ou dados de mídia.
+
+Na mesma transação, lotes ativos, exports ativos, uploads em andamento, canais de rádio ao vivo e broadcasts ativos retornaram zero. Isso não prova ausência de trabalho em andamento no provedor para os três pedidos incertos. Por essa razão, **não desliguei o droplet nem iniciei snapshot com janela de manutenção**. A janela previamente autorizada continua condicionada a reconciliar essas reservas ou obter evidência suficiente de que elas não têm pedido externo ativo. Nenhum dado, serviço ou configuração foi alterado.
+
+O gate de deploy no PR #63 foi atualizado para contar `UNCERTAIN`, evitando que releases futuros ignorem este estado. Essa barreira protege releases posteriores; não resolve os três registros atuais nem autoriza edição direta no banco de produção.
