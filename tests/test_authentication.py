@@ -9,7 +9,6 @@ from studio.tenancy import ScopedStorage
 
 pytestmark=pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
 
-
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv('DATABASE_URL',os.environ['LOFI_TEST_DATABASE_URL'])
@@ -78,7 +77,6 @@ def test_viewer_and_wrong_origin_denied(client):
     assert client.post('/api/auth/logout',headers=headers|{'Origin':'https://evil.test'}).status_code==403
     assert client.get('/api/settings').status_code==200
     assert client.put('/api/settings',json={},headers=headers).status_code==403
-
 
 def test_legacy_admin_remains_separate(client):
     assert client.get('/api/tracks',auth=('legacy-admin','legacy-local-test-password')).status_code==200
