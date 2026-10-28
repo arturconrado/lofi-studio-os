@@ -111,4 +111,15 @@ describe('every screen renders with data', () => {
     expect(container.querySelector('a[href="https://youtu.be/b-oS7AYM8Lk"]')).not.toBeNull();
     expect(container.textContent).not.toContain('Preparar para publicar');
   });
+
+  it('shows explicitly approved pilots as Library candidates without starting upload', async () => {
+    pilotCandidates = [{ pilot_id: 'pilot-1', channel_id: 'c1', title: 'Halloween Café Focus', seconds: 3660,
+      thumbnail_url: '/thumb', video_url: '/pilot-video', approved_at: new Date().toISOString(), created_at: new Date().toISOString() }];
+    navigate('/biblioteca');
+    const { container, getByText } = render(<App />);
+    await waitFor(() => expect(container.textContent).toContain('Halloween Café Focus'));
+    expect(container.textContent).toContain('Vídeos aprovados para preparar publicação');
+    expect(container.textContent).toContain('Isso ainda não envia o arquivo ao YouTube.');
+    expect(getByText('Preparar para publicar')).not.toBeNull();
+  });
 });

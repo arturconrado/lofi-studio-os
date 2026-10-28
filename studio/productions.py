@@ -242,7 +242,7 @@ def create_block(c,p,k):
     budget=min(BLOCK_CAP,(left/(p['hours']-k)).quantize(Decimal('.01'),rounding=ROUND_DOWN))
     c.execute("INSERT INTO creator_plans(id,request_id,theme,minutes,data,status,reserved,channel_id) VALUES(%s,%s,%s,60,%s,'draft',0,%s)",
               (pid,pid,plan['theme'][:200],json.dumps(plan,ensure_ascii=False),p['channel_id']))
-    bid=authorize_batch(c,pid,plan,60,p['channel_id'],budget)
+    bid=authorize_batch(c,pid,plan,60,p['channel_id'],budget,covered_by_production_id=p['id'])
     c.execute('INSERT INTO production_blocks(production_id,hour_index,plan_id,program_id,budget) VALUES(%s,%s,%s,%s,%s)',(p['id'],k,pid,bid,budget))
     audit(c,'PRODUCTION_BLOCK_BOOKED',str(p['id']),f'{bid}; hour {k+1}/{p["hours"]}; ceiling USD{budget}')
     return bid
