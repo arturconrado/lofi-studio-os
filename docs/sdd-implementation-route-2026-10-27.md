@@ -29,12 +29,20 @@ A evidência anterior de recuperação em `docs/audit-2026-10-15/evidence` confi
 
 **Implicação:** WP-00 ainda precisa classificar os 31 + 22 arquivos divergentes e os 19 caminhos ausentes do publisher, e revisar os 55 itens de cache sem correspondência. Não copiar nenhum desses arquivos para caminhos executáveis até atribuir função, origem, dependências, teste, dono e rollback. Contagens são evidência de divergência, não decisão de canonicalidade.
 
+## Verificação read-only do runtime (27/10/2026)
+
+Uma nova consulta somente de leitura ao host e aos metadados das imagens confirmou sete containers Lo-Fi em execução. Creator, Studio e export-worker usam imagem identificada pela revisão `cb369c9` (baseline atual de `main`). Publisher está identificado como `1789d4d`; rádio e channel-radio como `be426a8`; music-worker usa tag `d877875`, mas o rótulo OCI de revisão informa apenas `development`. Os três primeiros SHAs de serviço são ancestrais de `main`; isso não prova que os conteúdos efetivos das imagens sejam byte a byte iguais ao código atual. O rótulo do music-worker tampouco identifica uma revisão Git verificável.
+
+A DigitalOcean também informa que há um snapshot do host, disponível, criado em 24/10/2026. Por ser anterior à observação atual, e sem restauração isolada exercitada, ele não comprova backup atual, consistência de banco/volumes, recuperação sem perda ou fechamento do TEST-27. Nenhum serviço, banco, volume, arquivo ou configuração foi alterado nesta consulta.
+
+**Ação WP-00 derivada:** reconciliar publisher, rádio, channel-radio e music-worker com os artefatos versionados e com o mecanismo de release, registrando revisão de origem, hash/digest da imagem, arquivos divergentes e o caminho de implantação. Para music-worker, estabelecer uma identidade de build rastreável. Não reconstruir nem trocar imagens até a comparação e os gates de recuperação estarem documentados.
+
 ## Sequência ajustada
 
 ### Etapa 1 — fechar WP-00 antes de expandir mudanças estruturais
 
 1. Usar `main` atual como baseline e cruzar cada snapshot dos PRs #67–#69 com o código canônico. Classificar cada divergência como ativa, histórica, configuração, artefato gerado ou ainda indeterminada; não promover snapshots recuperados automaticamente para código executável.
-2. Completar os mapas exigidos pelo SDD: rotas reais e permissões, entidades/dados, serviços/workers/provedores, compositor, versão implantada e dependências entre portais. Manter detalhes operacionais/segredos em evidência privada; publicar apenas resumo sanitizado.
+2. Completar os mapas exigidos pelo SDD: rotas reais e permissões, entidades/dados, serviços/workers/provedores, compositor, versão implantada e dependências entre portais. Incorporar a reconciliação atualizada dos sete containers e das imagens mencionadas acima. Manter detalhes operacionais/segredos em evidência privada; publicar apenas resumo sanitizado.
 3. Reproduzir os relatos funcionais com dados e publicador simulados, ligando resultado à versão e às rotas observadas.
 4. Fechar TEST-27 em ambiente isolado: verificar cópia/backup, restaurar em destino descartável, exercitar falha e reversão, e provar qual revisão/scripts a rotina de deploy realmente instala. Não usar uma listagem de dump como prova de restore.
 5. Registrar lacuna, causa demonstrada, evidência, migração/reversão e teste de saída. WP-00 só fecha quando o inventário e o plano de migração estiverem completos; merge de #65 ou snapshots não bastam.
