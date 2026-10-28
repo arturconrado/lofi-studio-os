@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel,Field
 from .core import db,queue,storage,init_db,audit
+from .permissions import require_spend_permission
 
 app=FastAPI(title='Lo-Fi Vibe Coding Cloud',version='1.5.0')
 from fastapi.exceptions import RequestValidationError
@@ -68,6 +69,7 @@ async def auth(req:Request,call_next):
             from fastapi.responses import RedirectResponse
             return RedirectResponse('/login')
         return JSONResponse({'detail':'Autenticação necessária'},status_code=401)
+    req.state.identity={'role':'platform_admin','workspace_id':None}
     scope=WORKSPACE.set(None)
     try:return await call_next(req)
     finally:WORKSPACE.reset(scope)
@@ -165,7 +167,7 @@ class RequestGeneration(BaseModel):
     confirm_cost:bool=False
     requested_seconds:float|None=Field(default=None,ge=10,le=180)
 
-@app.post('/api/tracks/{tid}/generate')
+@app.post('/api/tracks/{tid}/generate',dependencies=[Depends(require_spend_permission)])
 def request_generation(tid:str,body:RequestGeneration):
     from .runtime import key,reserve,availability
     if not body.confirm_cost:raise HTTPException(400,'Confirme o custo desta geração')

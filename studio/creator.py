@@ -2,12 +2,13 @@
 import json,uuid
 from decimal import Decimal
 import httpx
-from fastapi import APIRouter,HTTPException
+from fastapi import APIRouter,Depends,HTTPException
 from typing import Any,Literal
 from pydantic import BaseModel,Field
 from .core import db,audit
 from . import runtime
 from .youtube_metadata import editorial_phrase, metadata_guidelines, validate_metadata
+from .permissions import require_spend_permission
 router=APIRouter(prefix='/api/creator')
 MODEL='google/gemini-2.5-flash-lite'
 @router.get('/plans')
@@ -54,7 +55,7 @@ class PlanRequest(BaseModel):
  recipe_id:uuid.UUID|None=None
  intent:str=Field(default='coding_focus',max_length=100)
  search_signals:list[str]=Field(default_factory=list,max_length=12)
-@router.post('/plan')
+@router.post('/plan',dependencies=[Depends(require_spend_permission)])
 def plan(body:PlanRequest):
  if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva de até US$0,10 para o plano de IA')
  token=runtime.key()
@@ -154,7 +155,7 @@ class CreateRequest(BaseModel):
  budget:Decimal=Field(default=12,ge=Decimal('.08'),le=12)
  confirm_cost:bool=False
  visual_source_pilot_id:uuid.UUID|None=None
-@router.post('/produce')
+@router.post('/produce',dependencies=[Depends(require_spend_permission)])
 def produce(body:CreateRequest):
  if body.plan.production_spec is not None:
   raise HTTPException(409,'Storyboard salvo, mas os clipes de ações e o motor de animação com referências ainda precisam ser integrados e revisados. Nenhuma geração foi cobrada.')
@@ -211,14 +212,14 @@ def save_metadata(bid:str,body:Metadata):
 class PackagingRequest(BaseModel):
  request_id:uuid.UUID
  confirm_cost:bool=False
-@router.post('/programs/{bid}/suggest')
+@router.post('/programs/{bid}/suggest',dependencies=[Depends(require_spend_permission)])
 def suggest_metadata(bid:str,body:PackagingRequest):
  with db() as c:
   b=c.execute('SELECT * FROM production_batches WHERE id=%s',(bid,)).fetchone()
   if not b:raise HTTPException(404,'Programa não encontrado')
   m=c.execute('SELECT title,theme,intent,description FROM program_metadata WHERE program_id=%s',(bid,)).fetchone() or {'title':bid,'theme':'Warm cozy lo-fi for coding and studying','intent':'coding_focus','description':''}
  return plan(PlanRequest(request_id=body.request_id,channel_id=b['channel_id'],theme=(m['title']+'; '+m['theme']+'; factual context: '+m.get('description',''))[:1500],minutes=min(240,max(2,int(b['target_seconds']/60))),confirm_cost=body.confirm_cost,intent=m.get('intent') or 'coding_focus'))
-@router.post('/tracks/{tid}/suggest')
+@router.post('/tracks/{tid}/suggest',dependencies=[Depends(require_spend_permission)])
 def suggest_track(tid:str,body:PackagingRequest):
  with db() as c:
   t=c.execute('SELECT title,prompt,channel_id FROM tracks WHERE id=%s',(tid,)).fetchone()

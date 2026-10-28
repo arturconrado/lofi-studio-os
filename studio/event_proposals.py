@@ -8,11 +8,12 @@ gesture the library lacks go to the backlog as NEW_ASSET_REQUIRED.
 """
 import json,uuid
 from typing import Literal
-from fastapi import APIRouter,HTTPException
+from fastapi import APIRouter,Depends,HTTPException
 from pydantic import BaseModel,Field,ConfigDict,ValidationError
 from .production_harness import ProductionSpec,compile_spec,PRESETS
 from .action_states import SEQUENCES,OCCASIONAL,CONTEXTUAL,SequenceName,ContextualAction,sequence_seconds,missing_props
 from .scene_profiles import resolve
+from .permissions import require_spend_permission
 
 router=APIRouter(prefix='/event-proposals')
 KIND='event_proposals_20261015'
@@ -102,7 +103,7 @@ def clean(raw):
     return items
 
 
-@router.post('')
+@router.post('',dependencies=[Depends(require_spend_permission)])
 def propose(body:ProposalRequest):
     if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva de até US$0,10 para as sugestões')
     from .form_assistant import bounded_json_call

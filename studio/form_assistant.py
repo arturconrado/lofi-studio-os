@@ -3,13 +3,14 @@ import json,uuid
 from decimal import Decimal,ROUND_CEILING
 from typing import Literal
 import httpx
-from fastapi import APIRouter,HTTPException
+from fastapi import APIRouter,Depends,HTTPException
 from pydantic import BaseModel,Field,ConfigDict
 from .core import db,audit
 from . import runtime
 from .production_harness import ProductionSpec,ShirtColor,COLORS
 from .music_styles import DIRECTIONS,MusicStyle
 from .scene_profiles import Scenario
+from .permissions import require_spend_permission
 router=APIRouter(prefix='/form-assist')
 MODEL='google/gemini-2.5-flash-lite'
 KIND='form_assist_20261014'
@@ -92,7 +93,7 @@ def bounded_json_call(request_id,channel_id,kind,meta,system,user,transform,resu
         raise HTTPException(502,'Não foi possível concluir a sugestão; confira o pedido antes de tentar novamente') from None
 
 
-@router.post('')
+@router.post('',dependencies=[Depends(require_spend_permission)])
 def suggest(body:AssistRequest):
     if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva de até US$0,10 para a sugestão')
     context={k:v for k,v in body.current.model_dump().items() if k in FIELDS}
