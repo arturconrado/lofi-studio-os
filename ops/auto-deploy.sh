@@ -99,6 +99,7 @@ healthy() {
     [ "$(docker inspect lofi-vibe-coding-$s-1 --format '{{.State.Running}}')" = "true" ] || return 1
     [ "$(docker inspect lofi-vibe-coding-$s-1 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$FULL_SHA" ] || return 1
   done
+  docker exec lofi-vibe-coding-youtube-publisher-1 python -c 'from studio.youtube_publish import deployment_ready; deployment_ready()' 2>/dev/null || return 1
   docker exec lofi-vibe-coding-studio-1 python -c "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=5).status==200 else 1)" 2>/dev/null
 }
 ok=0
