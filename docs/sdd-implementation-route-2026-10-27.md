@@ -303,3 +303,10 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 - A `main` em `7966a93dfb0761046fe858c44dce413626499012` passou no Checks run `40778344097`. O workflow Deploy `40778828549` falhou na verificação do protocolo antes da transferência: o log confirma que nenhum arquivo de release foi enviado.
 - O shell do host não encontrou `lofi-deploy-protocol` no PATH. Isso, isoladamente, não descreve toda a regra SSH forçada. A captura datada em [sdd-wp00-runtime-recheck-2026-10-28.md](sdd-wp00-runtime-recheck-2026-10-28.md) registra os hashes e limites observados.
 - A consulta não alterou serviços ou dados. TEST-27, matriz de autorização em runtime, atribuição dos escritores de tabelas e paridade operacional seguem pendentes; a captura não fecha WP-00 nem autoriza bootstrap/deploy.
+
+## WP-00 — inventário estático de escritores candidatos — 28/10/2026
+
+- A busca textual nos 383 arquivos de código preservados em `/cache` encontrou 52 caminhos/cópias em seis grupos com SQL de escrita em `factory_tasks`; nove módulos de aplicação repetem-se nas famílias `continuity-test`, `continuity-test-v2`, `validation45` e `fresh-hd-test`. Outros hits aparecem em ferramentas de recuperação/teste, variantes Halloween e dois scripts `seven-hours`.
+- Inventário e método estão em [sdd-wp00-cache-factory-task-writers-2026-10-28.md](sdd-wp00-cache-factory-task-writers-2026-10-28.md). A busca foi estática e não executou/importou os arquivos; path hit não prova uso nem autoria.
+- As três tarefas visuais `UNCERTAIN` ainda não foram correlacionadas: a consulta de runtime preservou somente agregados, sem IDs ou payloads. Não atribuir essas tarefas a nenhuma variante ou ferramenta arquivada.
+- Este resultado avança a catalogação, mas WP-00, TEST-27 e TEST-37 permanecem abertos. Nenhum script foi executado e nenhum dado, serviço ou mídia da VPS foi alterado.
