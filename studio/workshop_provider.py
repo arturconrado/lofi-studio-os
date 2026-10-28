@@ -146,7 +146,9 @@ def submit(tid):
                 job = r.json()['id']
                 if not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', job): raise ValueError('Invalid provider job')
                 with db() as c:
-                    c.execute("UPDATE factory_tasks SET status='RUNNING',payload=payload||%s::jsonb,detail='Animando trecho; consulte o andamento',updated_at=now() WHERE id=%s",
+                    # A terminal callback may win the race with this HTTP response.
+                    # Preserve its terminal status and payload if it already arrived.
+                    c.execute("UPDATE factory_tasks SET status='RUNNING',payload=payload||%s::jsonb,detail='Animando trecho; consulte o andamento',updated_at=now() WHERE id=%s AND status='SUBMITTING'",
                               (json.dumps({'provider_job_id': job}), tid)); c.commit()
     except Exception:
         with db() as c:

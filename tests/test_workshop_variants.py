@@ -167,6 +167,62 @@ def test_provider_callback_recovers_uncertain_video_job_and_deduplicates(client,
 
 
 @DB
+def test_terminal_callback_wins_race_with_successful_provider_post_response(client,monkeypatch):
+    """A callback received before the POST response must keep the terminal state."""
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio import workshop_provider as provider
+    d,media=fixture();url,identity=seed_project(client,d,media)
+    workspace=identity['workspace_id'];token='d'*48;task_id=uuid.uuid4()
+    monkeypatch.setenv('STUDIO_PUBLIC_ORIGIN','https://testserver')
+    monkeypatch.setenv('OPENROUTER_VIDEO_WEBHOOK_SECRET','test-callback-secret')
+    monkeypatch.setattr(provider.runtime,'key',lambda:'provider-test-key')
+    monkeypatch.setattr(provider,'reference_data',lambda _: 'data:image/png;base64,AA==')
+    payload={'project_id':url.rsplit('/',1)[-1],'clip_id':str(d.clips[0].id),'operation':'video',
+             'callback_workspace':workspace,'callback_token':token,'prompt':'test','seconds':8,
+             'resolution':'720p','references':[{'key':'ref','sha256':'a'*64,'mime':'image/png'}]}
+    marker=WORKSPACE.set(workspace)
+    try:
+        with db() as c:
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,'visual_workshop_v1',%s,%s,.08,'SUBMITTING')",
+                      (task_id,provider.VIDEO_MODEL,json.dumps(payload)));c.commit()
+    finally:WORKSPACE.reset(marker)
+    event={'type':'video.generation.failed','data':{'id':'job-failed-race','status':'failed','model':provider.VIDEO_MODEL}}
+    raw=json.dumps(event,separators=(',',':')).encode();timestamp=str(int(time.time()))
+    signature=hmac.new(b'test-callback-secret',timestamp.encode()+b','+raw,hashlib.sha256).hexdigest()
+    headers={'X-OpenRouter-Idempotency-Key':'job-failed-race-terminal',
+             'X-OpenRouter-Signature':f't={timestamp},v1={signature}'}
+    endpoint=f'/api/creator/workshop/provider-callback/{workspace}/{token}'
+
+    class Response:
+        def raise_for_status(self):return None
+        def json(self):return {'id':'job-failed-race'}
+
+    class FakeProviderClient:
+        def __init__(self,*_,**__):pass
+        def __enter__(self):return self
+        def __exit__(self,*_):return None
+        def post(self,*_,**__):
+            # The provider webhook reaches the app before the POST response.
+            callback=client.post(endpoint,content=raw,headers=headers)
+            assert callback.status_code==200,callback.text
+            return Response()
+
+    monkeypatch.setattr(provider.httpx,'Client',FakeProviderClient)
+    marker=WORKSPACE.set(workspace)
+    try:provider.submit(task_id)
+    finally:WORKSPACE.reset(marker)
+    marker=WORKSPACE.set(workspace)
+    try:
+        with db() as c:
+            task=c.execute('SELECT status,reserved_cost,payload FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
+            assert task['status']=='FAILED' and task['reserved_cost']==Decimal('.08')
+            assert task['payload']['provider_job_id']=='job-failed-race'
+            assert task['payload']['provider_terminal_status']=='failed'
+    finally:WORKSPACE.reset(marker)
+
+
+@DB
 def test_cancelled_provider_terminal_event_keeps_original_job_and_financial_reservation(client,monkeypatch):
     from studio.core import db
     from studio.tenancy import WORKSPACE
