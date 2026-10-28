@@ -173,7 +173,11 @@ def test_cancel_video_is_local_before_submit_and_reconciles_submitting_job(clien
     cl=client;_,identity=signup(cl);cl.headers.update({'X-CSRF-Token':identity['csrf_token']})
     cid=cl.get('/api/channels').json()[0]['id']
     d,_=fixture()
-    project_id=cl.post('/api/creator/workshop/projects',json={'channel_id':cid,'data':d.model_dump(mode='json')}).json()['id']
+    d.base.image_id=d.base.video_id=None
+    for clip in d.clips:clip.image_id=clip.video_id=None
+    created=cl.post('/api/creator/workshop/projects',json={'channel_id':cid,'data':d.model_dump(mode='json')})
+    assert created.status_code==200,created.text
+    project_id=created.json()['id']
     workspace=identity['workspace_id'];marker=WORKSPACE.set(workspace)
     queued_id,running_id=uuid.uuid4(),uuid.uuid4()
     try:
