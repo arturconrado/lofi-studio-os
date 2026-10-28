@@ -142,6 +142,8 @@ def test_unscheduled_continuation_does_not_remove_the_return_from_a_scheduled_ac
 import os
 import io
 import json
+import subprocess
+import sys
 from PIL import Image
 from test_authentication import client,signup
 DB=pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
@@ -562,6 +564,40 @@ def test_paid_attempt_cycle_persists_across_reload_splits_and_project_duplicates
     assert client.put(url,json={'revision':state['revision'],'data':state['data']}).status_code==200
     exhausted=client.get(url+f'/clips/{clip.id}/quote/video').json()
     assert exhausted['attempt']['allowed'] is False and exhausted['attempt']['attempts_used']==2
+
+    # A distinct application process must recover the durable cap and refuse a retry.
+    from studio.authentication import COOKIE
+    restart_payload={'database_url':os.environ['LOFI_TEST_DATABASE_URL'],'workspace_id':identity['workspace_id'],
+        'cookie':client.cookies.get(COOKIE),'csrf':identity['csrf_token'],'project_url':url,
+        'clip_id':str(clip.id),'variant_key':first_key,'request_id':str(uuid.uuid4())}
+    restart_script='''
+import json,os,sys
+payload=json.loads(sys.argv[1])
+os.environ['DATABASE_URL']=payload['database_url']
+os.environ['STUDIO_PUBLIC_ORIGIN']='https://testserver'
+from fastapi.testclient import TestClient
+from studio.api import app
+from studio import workshop_provider
+workshop_provider.quote=lambda kind,seconds:{'model':'test','usd':.1,'seconds':seconds,'last_frame_supported':True}
+calls=[]
+workshop_provider.submit=lambda task_id:calls.append(str(task_id))
+with TestClient(app,base_url='https://testserver') as fresh:
+    fresh.cookies.set('lofi_session',payload['cookie'])
+    project=fresh.get(payload['project_url'])
+    assert project.status_code==200,project.text
+    quote=fresh.get(payload['project_url']+f"/clips/{payload['clip_id']}/quote/video?variant_key={payload['variant_key']}")
+    assert quote.status_code==200,quote.text
+    assert quote.json()['attempt']['allowed'] is False
+    retry=fresh.post(payload['project_url']+f"/clips/{payload['clip_id']}/generate/video",json={
+        'request_id':payload['request_id'],'revision':project.json()['revision'],'max_usd':.1,
+        'confirm_cost':True,'variant_key':payload['variant_key']},headers={'X-CSRF-Token':payload['csrf']})
+    assert retry.status_code==409,retry.text
+    assert calls==[],calls
+'''
+    env=os.environ.copy();env.pop('LOFI_WORKSPACE_ID',None)
+    restarted=subprocess.run([sys.executable,'-c',restart_script,json.dumps(restart_payload)],env=env,
+        capture_output=True,text=True,timeout=45)
+    assert restarted.returncode==0,restarted.stdout+'\n'+restarted.stderr
 
 
 @DB
