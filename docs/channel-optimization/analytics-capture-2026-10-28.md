@@ -74,7 +74,7 @@ These are observed traffic neighbors, not evidence that one video's title or con
 
 ## Halloween upload: `b-oS7AYM8Lk`
 
-Studio Content listed *Lo-Fi Jazzhop for Coding and Study | Halloween Café Focus Music* as **Publicado** and **Público**, published 2026-10-27, duration **1:01:01**. At capture, the channel overview showed **11 views**, **1.5 hours** watch time, and no subscriber change figure yet. Video analytics showed **38 impressions**, **5.3% CTR**, **11 views**, and **4 unique viewers** (one day still processing). The latest-upload card showed a rounded age of 12 h 33 min, 11 views, CTR **6.3%**, and average view duration **11:01**. These cards are separate snapshots and are retained as displayed.
+Studio Content listed *Lo-Fi Jazzhop for Coding and Study | Halloween Café Focus Music* as **Publicado** and **Público**, published 2026-10-27, duration **1:01:01**. The channel overview top-content table listed **10 views**. The video analytics page showed **38 impressions**, **5.3% CTR**, **11 views**, **1.5 hours** watch time, and **4 unique viewers** (one day still processing). The latest-upload card showed a rounded age of 12 h 33 min, 11 views, CTR **6.3%**, and average view duration **11:01**. Preserve the 10-versus-11 view discrepancy as displayed; the cards may be on different refresh cycles.
 
 Since-publication traffic sources in the video reach report:
 
