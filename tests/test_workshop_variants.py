@@ -577,6 +577,64 @@ def test_creative_attempt_limit_is_scoped_to_channel_even_when_clip_ids_repeat(c
     assert quoted.json()['attempt']['stage']=='initial'
 
 
+@DB
+def test_delivery_attempt_scope_freezes_paid_action_inventory(client):
+    """Adding another action after paid work requires a reviewed delivery scope."""
+    from studio import workshop_api as api
+    from studio.core import db
+    from studio.tenancy import WORKSPACE, schema_name
+    from psycopg import sql
+    draft,media=fixture();url,identity=seed_project(client,draft,media)
+    pid=url.rsplit('/',1)[-1];marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+            row=api.project(c,pid);api.ensure(c);clip=draft.base
+            decision=api.attempt_decision(c,draft,clip,'image','720p',[None],media,pid,row['channel_id'])
+            assert decision['allowed'] is True
+            assert decision['delivery_scope']=={'locked':False,'initial_used':0,'initial_limit':2,'correction_used':0,'correction_limit':2}
+            api.reserve_attempt(c,decision,'image',draft=draft,project_id=pid)
+            c.commit()
+
+        continuation=Clip(name='Continuation',motion='Return to the original pose',seconds=2,continues_from=draft.clips[0].id)
+        expanded=Draft.model_validate({**draft.model_dump(mode='json'),
+            'clips':[*draft.model_dump(mode='json')['clips'],continuation.model_dump(mode='json')]})
+        assert len(api.creative_unit_inventory(expanded))==2
+
+        new_action=Clip(name='New action',motion='Open a notebook',seconds=4)
+        expanded=Draft.model_validate({**expanded.model_dump(mode='json'),
+            'clips':[*expanded.model_dump(mode='json')['clips'],new_action.model_dump(mode='json')]})
+        with db() as c:
+            c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+            decision=api.attempt_decision(c,expanded,new_action,'image','720p',[None],media,pid,row['channel_id'])
+        assert decision['allowed'] is False
+        assert decision['delivery_scope']['locked'] is True
+        assert decision['delivery_scope']['initial_used']==1
+        assert 'Revise o escopo' in decision['message']
+
+        with db() as c:
+            c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+            decision=api.attempt_decision(c,expanded,new_action,'video','720p',[None],media,pid,row['channel_id'])
+        assert decision['allowed'] is False
+        assert decision['delivery_scope']['locked'] is True
+
+        with db() as c:
+            c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+            c.execute('UPDATE visual_projects SET data=%s,revision=revision+1 WHERE id=%s',
+                      (json.dumps(expanded.model_dump(mode='json')),pid));c.commit()
+        reviewed=client.post(f'{url}/attempt-scope/review',json={'request_id':str(uuid.uuid4()),'revision':2,
+            'reason':'Adicionar uma ação planejada após revisar a nova entrega narrativa.',
+            'confirm_current_actions':True})
+        assert reviewed.status_code==200,reviewed.text
+        assert reviewed.json()=={'reviewed':True,'reused':False,'unit_count':3,'paid_calls':0}
+        with db() as c:
+            c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+            decision=api.attempt_decision(c,expanded,new_action,'video','720p',[None],media,pid,row['channel_id'])
+        assert decision['allowed'] is True
+        assert decision['delivery_scope']['initial_limit']==3
+    finally:WORKSPACE.reset(marker)
+
+
 def mock_generation(monkeypatch):
     from studio import workshop_api as api,workshop_provider as provider,financial
     from studio.core import db
