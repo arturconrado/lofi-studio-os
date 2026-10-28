@@ -29,7 +29,7 @@ export function RecipeCard({ r, pressed, onClick, isDefault }: { r: Recipe; pres
 type Quote = { recipe: { name: string; sha256: string }; scenario: string; scene_label: string; reference: { title: string }; estimate_usd: number; estimate_per_block_usd: number;
   suggested_ceiling_usd: number; remaining_usd: number; paid_enabled: boolean; audio_prompt: string; copy: { title: string; description: string }; visual: VisualPlan;
   spec: Record<string, unknown>; whole_episode_export_available: boolean; episode_export_blocker: string | null };
-type GrowthPackage = { title:string; description:string; primary_phrase:string; primary_phrase_source:string; search_phrase_options:any[]; historical_context:any; reference_editorial_leads:any[]; request_id:string; cost_usd?:number };
+type GrowthPackage = { title:string; description:string; primary_phrase:string; primary_phrase_source:string; search_phrase_options:any[]; historical_context:any; reference_editorial_leads:any[]; channel_memory?:{version:string;items:any[];auto_refreshed_from_saved_observations:boolean}; request_id:string; cost_usd?:number };
 
 export function Produce() {
   const cid = channel.value?.id;
@@ -84,7 +84,9 @@ export function Produce() {
     const p = await attempt(() => post('/api/creator/productions', { request_id: requestId.current, channel_id: cid, recipe_id: recipe!.id, hours, idea, scenario, ceiling_usd: ceiling, confirm_ceiling: true,
       youtube_metadata: { title: growthPackage.title, description: growthPackage.description, primary_phrase: growthPackage.primary_phrase, intent: growthIntent,
         native_growth: { generated: true, request_id: growthPackage.request_id, primary_phrase_source: growthPackage.primary_phrase_source,
-          search_phrase_options: growthPackage.search_phrase_options, historical_context: growthPackage.historical_context, reference_editorial_leads: growthPackage.reference_editorial_leads, cost_usd: growthPackage.cost_usd ?? null, generated_at: new Date().toISOString() },
+          search_phrase_options: growthPackage.search_phrase_options, historical_context: growthPackage.historical_context, reference_editorial_leads: growthPackage.reference_editorial_leads,
+          channel_memory_version: growthPackage.channel_memory?.version || null, channel_memory_source_ids: [...new Set((growthPackage.channel_memory?.items || []).flatMap((item:any) => item.source_ids || []))],
+          cost_usd: growthPackage.cost_usd ?? null, generated_at: new Date().toISOString() },
         growth_context: { idea, scenario, recipe: recipe?.name || '', duration_hours: String(hours), visual_scene: scenario || '', musical_direction: quote.audio_prompt } },
     }), 'Produção autorizada. Acompanhe por aqui.');
     setBusy(false);
@@ -110,7 +112,7 @@ export function Produce() {
           session_length: `${hours} hour long-form instrumental session`,
         }, primary_phrase: '', confirm_cost: true,
       });
-      setGrowthPackage({ ...generated, request_id: requestId }); setGrowthNote(`Pacote pronto para revisão · frase: ${generated.primary_phrase_source === 'observed_youtube_studio_contextual' ? 'sinal contextual do Studio' : generated.primary_phrase_source === 'user_selected' ? 'seleção contextual' : 'intenção editorial do canal'}${generated.reference_editorial_leads?.length ? ` · ${generated.reference_editorial_leads.length} referência(s) comparável(is) usada(s) como inspiração editorial` : ''}${generated.cost_usd != null ? ` · custo US$ ${Number(generated.cost_usd).toFixed(4)}` : ''}.`);
+      setGrowthPackage({ ...generated, request_id: requestId }); setGrowthNote(`Pacote pronto para revisão · frase: ${generated.primary_phrase_source === 'observed_youtube_studio_contextual' ? 'sinal contextual do Studio' : generated.primary_phrase_source === 'user_selected' ? 'seleção contextual' : 'intenção editorial do canal'}${generated.channel_memory?.items?.length ? ` · memória deste canal: ${generated.channel_memory.items.length} evidência(s) consultada(s)` : ''}${generated.cost_usd != null ? ` · custo US$ ${Number(generated.cost_usd).toFixed(4)}` : ''}.`);
     } catch (e:any) { setGrowthNote(e.message || 'Não foi possível gerar o pacote. Confira o histórico antes de tentar de novo.'); }
     finally { setGrowthCostConfirmed(false); setGrowthBusy(false); }
   };
@@ -130,6 +132,7 @@ export function Produce() {
         primary_phrase: growthPackage.primary_phrase,
         native_growth: { generated: true, request_id: growthPackage.request_id, primary_phrase_source: growthPackage.primary_phrase_source,
           search_phrase_options: growthPackage.search_phrase_options, historical_context: growthPackage.historical_context, reference_editorial_leads: growthPackage.reference_editorial_leads,
+          channel_memory_version: growthPackage.channel_memory?.version || null, channel_memory_source_ids: [...new Set((growthPackage.channel_memory?.items || []).flatMap((item:any) => item.source_ids || []))],
           cost_usd: growthPackage.cost_usd ?? null, generated_at: new Date().toISOString() },
         growth_context: { idea, scenario, recipe: recipe?.name || '', duration_hours: String(hours), visual_scene: scenario || '', musical_direction: quote.audio_prompt },
       },
@@ -189,6 +192,7 @@ export function Produce() {
           <Field label="Título em inglês"><input class="input" maxLength={100} value={growthPackage.title} onInput={e => setGrowthPackage({ ...growthPackage, title: (e.target as HTMLInputElement).value })} /></Field>
           <Field label="Descrição contextual em inglês"><textarea class="textarea" rows={8} maxLength={5000} value={growthPackage.description} onInput={e => setGrowthPackage({ ...growthPackage, description: (e.target as HTMLTextAreaElement).value })} /></Field>
           <p class="faint">Revise o texto. Para salvar no harness, o título deve começar com a frase principal e a primeira frase da descrição deve usá-la naturalmente.</p>
+          {!!growthPackage.channel_memory?.items?.length && <p class="faint">Evidências consultadas neste canal: {growthPackage.channel_memory.items.map((item:any) => item.kind).filter((kind:string, i:number, all:string[]) => all.indexOf(kind) === i).join(', ')}. Fontes registradas nos metadados para revisão.</p>}
         </div>}
       </section>
 
