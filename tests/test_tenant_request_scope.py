@@ -106,11 +106,15 @@ def test_provider_callback_is_public_but_signature_and_public_scope_are_enforced
     raw=json.dumps(event,separators=(',',':')).encode()
     timestamp=str(int(time.time()))
     signature=hmac.new(b'test-webhook-secret',timestamp.encode()+b','+raw,hashlib.sha256).hexdigest()
-    response=client.post(
-        '/api/creator/workshop/provider-callback/public/unrecognized-token',
+    url='/api/creator/workshop/provider-callback/public/unrecognized-token'
+    headers={'X-OpenRouter-Idempotency-Key':'evt-callback-test'}
+    rejected=client.post(
+        url,
         content=raw,
-        headers={'X-OpenRouter-Signature':f't={timestamp},v1={signature}',
-                 'X-OpenRouter-Idempotency-Key':'evt-callback-test'},
+        headers=headers|{'X-OpenRouter-Signature':f't={timestamp},v1=invalid'},
     )
+    assert rejected.status_code==401 and rejected.json()['detail']=='Assinatura do callback inválida'
+    assert seen_workspaces==[]
+    response=client.post(url,content=raw,headers=headers|{'X-OpenRouter-Signature':f't={timestamp},v1={signature}'})
     assert response.status_code==404,response.text
     assert seen_workspaces==[None]
