@@ -3,13 +3,18 @@ from contextvars import ContextVar
 from uuid import UUID
 import os
 
-WORKSPACE = ContextVar('lofi_workspace', default=None)
+_UNBOUND = object()
+WORKSPACE = ContextVar('lofi_workspace', default=_UNBOUND)
 
 def schema_name(workspace):
     return 'ws_' + UUID(str(workspace)).hex
 
 def active_workspace():
-    value=WORKSPACE.get() or os.getenv('LOFI_WORKSPACE_ID')
+    # Worker processes may inherit their workspace from the environment when no
+    # request/task context is bound. An explicit None means public scope and must
+    # never fall through to that worker-only default.
+    value=WORKSPACE.get()
+    if value is _UNBOUND:value=os.getenv('LOFI_WORKSPACE_ID')
     return str(UUID(str(value))) if value else None
 
 class ScopedStorage:
