@@ -25,23 +25,37 @@ def test_paid_routes_declare_backend_spend_permission():
     from studio.api import app
     from studio.permissions import require_spend_permission
 
-    paid_paths = {
-        '/api/tracks/{tid}/generate',
-        '/api/creator/plan',
-        '/api/creator/produce',
-        '/api/creator/programs/{bid}/suggest',
-        '/api/creator/tracks/{tid}/suggest',
-        '/api/creator/form-assist',
-        '/api/creator/event-proposals',
-        '/api/creator/motion-validation',
-        '/api/creator/productions',
-        '/api/creator/productions/{pid}/advance',
-        '/api/creator/productions/{pid}/resume',
-        '/api/creator/workshop/projects/{pid}/clips/{cid}/generate/{kind}',
-        '/api/growth/{cid}/package-suggestion',
-        '/api/autopilot/start',
+    def all_routes(routes, seen=None):
+        seen = seen if seen is not None else set()
+        for route in routes:
+            if isinstance(route, APIRoute):
+                yield route
+            elif hasattr(route, 'original_router'):
+                router = route.original_router
+                if id(router) not in seen:
+                    seen.add(id(router))
+                    yield from all_routes(router.routes, seen)
+
+    paid_handlers = {
+        ('api', 'request_generation'),
+        ('autopilot', 'start'),
+        ('creator', 'plan'),
+        ('creator', 'produce'),
+        ('creator', 'suggest_metadata'),
+        ('creator', 'suggest_track'),
+        ('event_proposals', 'propose'),
+        ('form_assistant', 'suggest'),
+        ('growth', 'package_suggestion'),
+        ('motion_validation', 'submit'),
+        ('productions', 'create'),
+        ('productions', 'advance_now'),
+        ('productions', 'resume'),
+        ('workshop_api', 'generate'),
     }
-    routes = {route.path: route for route in app.routes if isinstance(route, APIRoute) and route.methods == {'POST'}}
-    missing = sorted(path for path in paid_paths if path not in routes or
-                     require_spend_permission not in {item.call for item in routes[path].dependant.dependencies})
-    assert missing == []
+    guarded_handlers = {
+        (route.endpoint.__module__.rsplit('.', 1)[-1], route.endpoint.__name__)
+        for route in all_routes(app.routes)
+        if route.methods == {'POST'} and
+        require_spend_permission in {item.call for item in route.dependant.dependencies}
+    }
+    assert paid_handlers <= guarded_handlers
