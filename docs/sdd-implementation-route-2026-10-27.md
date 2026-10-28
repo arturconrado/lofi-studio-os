@@ -261,3 +261,10 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 - A tentativa de abrir `/openapi.json` no navegador foi bloqueada antes de retornar dados. Não houve validação do catálogo dinâmico, códigos HTTP ou permissões das rotas implantadas.
 - A matriz por papéis continua pendente: não foram exercitados `viewer`, `creator`, `operator`, `workspace_admin` e Basic admin. WP-00 e TEST-37 permanecem abertos; não se presume que a interface acessível prove autorização correta por endpoint.
 - Evidência detalhada registrada em `docs/sdd-wp00-runtime-capture-2026-10-28.md`. Nenhuma mutação foi realizada.
+
+## Novas evidências de G4-02, G4-05 e TEST-37/41 — 28/10/2026
+
+- Em #71, a regressão `test_cancel_video_survives_worker_restart_and_reconciles_same_remote_job_and_cost` foi incluída no head `47c3e0ac80c122de0a89480dd1a13aa72423f512`, aprovado no Checks run `40767324317`. Ela cobre cancelamento antes do envio, pedido de cancelamento em tarefa já aceita, perda da conexão, reinício em outro processo, consulta do mesmo ID remoto e conciliação do custo terminal, sem reenviar a geração. Não houve chamada real paga.
+- Em #72, a regressão HTTP `test_paid_http_route_rejects_non_admin_roles_before_reserving` percorre `POST /api/tracks/{id}/generate`: `viewer`, `creator` e `operator` recebem 403; `workspace_admin` alcança o bloqueio de chave ausente; a contagem de jobs permanece zero. Head `60d0a5e90f3af423aeb7a79236d858b1b83bf26b`, Checks run `40768357896` aprovado.
+- Estes resultados fecham evidência automatizada específica para TEST-41 e reforçam a autorização de gasto em TEST-37/G4-02. Não fecham WP-02: G4-04 ainda precisa de limites agregados por ação/entrega/campanha e equivalência nos demais motores; operações legadas incertas ainda não têm confirmação terminal.
+- TEST-37/WP-00 permanecem parciais: falta executar a matriz completa de papéis e escopos nos endpoints, revisar registros com valores identificáveis e demonstrar as regras contra a revisão efetivamente instalada. Testes de integração locais não substituem homologação no runtime.
