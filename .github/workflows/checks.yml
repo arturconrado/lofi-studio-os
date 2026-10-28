@@ -27,14 +27,6 @@ jobs:
         working-directory: frontend
       - run: npx tsc --noEmit && npx vitest run && npx vite build
         working-directory: frontend
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: short-track-build-${{ github.run_id }}
-          path: |
-            web/app/index.html
-            web/app/assets/*
-          if-no-files-found: error
       # The deploy copies web/ as-is, so the committed bundle must match the source.
       - run: git diff --exit-code -- web/app
       - run: pip install -r requirements.txt pytest
