@@ -35,12 +35,15 @@ def ensure(c):
     c.execute('''CREATE TABLE IF NOT EXISTS visual_library(
       id UUID PRIMARY KEY, channel_id UUID NOT NULL REFERENCES radio_channels(id),
       name TEXT NOT NULL, data JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+    # A creative unit's cap intentionally follows copies within one channel;
+    # channel_id prevents client-supplied clip UUIDs from crossing channels.
     c.execute('''CREATE TABLE IF NOT EXISTS visual_creative_attempts(
+      channel_id UUID NOT NULL REFERENCES radio_channels(id),
       creative_unit_id UUID NOT NULL, operation TEXT NOT NULL CHECK(operation IN ('image','video')),
       initial_signature TEXT NOT NULL, initial_variant_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
       correction_signature TEXT, correction_reason TEXT,
       correction_variant_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(creative_unit_id,operation))''')
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(channel_id,creative_unit_id,operation))''')
 
 
 def ready():
@@ -179,14 +182,15 @@ def attempt_alternatives(stage, allowed):
     return options
 
 
-def attempt_decision(c, draft, clip, operation, resolution, groups, media, project_id):
+def attempt_decision(c, draft, clip, operation, resolution, groups, media, project_id, channel_id):
     unit=creative_unit(draft,clip);spec=creative_spec_signature(draft,clip,operation,resolution,media)
     keys=attempt_keys(clip,groups)
     history=attempt_history(c,unit,operation,project_id)
     def decision(values):
-        return {**values,'history':history,'alternatives':attempt_alternatives(values.get('stage'),values.get('allowed',False))}
-    row=c.execute('SELECT * FROM visual_creative_attempts WHERE creative_unit_id=%s AND operation=%s',
-                  (unit,operation)).fetchone()
+        return {'channel_id':str(channel_id),**values,'history':history,
+                'alternatives':attempt_alternatives(values.get('stage'),values.get('allowed',False))}
+    row=c.execute('SELECT * FROM visual_creative_attempts WHERE channel_id=%s AND creative_unit_id=%s AND operation=%s',
+                  (channel_id,unit,operation)).fetchone()
     if not row:
         return decision({'allowed':True,'stage':'initial','requires_reason':False,'attempts_used':0,
                 'unit_id':str(unit),'signature':spec,'keys':keys})
@@ -220,23 +224,23 @@ def reserve_attempt(c, decision, operation, correction_reason=None):
         raise HTTPException(422,'Explique a causa e a mudança concreta antes do único ciclo de correção.')
     if not decision['requires_reason'] and correction_reason:
         raise HTTPException(422,'A justificativa só se aplica ao ciclo de correção.')
-    unit=decision['unit_id'];spec=decision['signature'];keys=decision['keys']
+    channel=decision['channel_id'];unit=decision['unit_id'];spec=decision['signature'];keys=decision['keys']
     if decision['stage']=='initial' and decision['attempts_used']==0:
-        c.execute('''INSERT INTO visual_creative_attempts(creative_unit_id,operation,initial_signature,initial_variant_keys)
-                     VALUES(%s,%s,%s,%s::jsonb)''',(unit,operation,spec,json.dumps(keys)))
+        c.execute('''INSERT INTO visual_creative_attempts(channel_id,creative_unit_id,operation,initial_signature,initial_variant_keys)
+                     VALUES(%s,%s,%s,%s,%s::jsonb)''',(channel,unit,operation,spec,json.dumps(keys)))
     elif decision['stage']=='initial':
-        row=c.execute('SELECT initial_variant_keys FROM visual_creative_attempts WHERE creative_unit_id=%s AND operation=%s FOR UPDATE',(unit,operation)).fetchone()
-        c.execute('UPDATE visual_creative_attempts SET initial_variant_keys=%s::jsonb,updated_at=now() WHERE creative_unit_id=%s AND operation=%s',
-                  (json.dumps([*(row['initial_variant_keys'] or []),*keys]),unit,operation))
+        row=c.execute('SELECT initial_variant_keys FROM visual_creative_attempts WHERE channel_id=%s AND creative_unit_id=%s AND operation=%s FOR UPDATE',(channel,unit,operation)).fetchone()
+        c.execute('UPDATE visual_creative_attempts SET initial_variant_keys=%s::jsonb,updated_at=now() WHERE channel_id=%s AND creative_unit_id=%s AND operation=%s',
+                  (json.dumps([*(row['initial_variant_keys'] or []),*keys]),channel,unit,operation))
     elif decision['stage']=='correction':
         if decision['requires_reason']:
             c.execute('''UPDATE visual_creative_attempts SET correction_signature=%s,correction_reason=%s,
-                         correction_variant_keys=%s::jsonb,updated_at=now() WHERE creative_unit_id=%s AND operation=%s''',
-                      (spec,correction_reason.strip(),json.dumps(keys),unit,operation))
+                         correction_variant_keys=%s::jsonb,updated_at=now() WHERE channel_id=%s AND creative_unit_id=%s AND operation=%s''',
+                      (spec,correction_reason.strip(),json.dumps(keys),channel,unit,operation))
         else:
-            row=c.execute('SELECT correction_variant_keys FROM visual_creative_attempts WHERE creative_unit_id=%s AND operation=%s FOR UPDATE',(unit,operation)).fetchone()
-            c.execute('UPDATE visual_creative_attempts SET correction_variant_keys=%s::jsonb,updated_at=now() WHERE creative_unit_id=%s AND operation=%s',
-                      (json.dumps([*(row['correction_variant_keys'] or []),*keys]),unit,operation))
+            row=c.execute('SELECT correction_variant_keys FROM visual_creative_attempts WHERE channel_id=%s AND creative_unit_id=%s AND operation=%s FOR UPDATE',(channel,unit,operation)).fetchone()
+            c.execute('UPDATE visual_creative_attempts SET correction_variant_keys=%s::jsonb,updated_at=now() WHERE channel_id=%s AND creative_unit_id=%s AND operation=%s',
+                      (json.dumps([*(row['correction_variant_keys'] or []),*keys]),channel,unit,operation))
     return decision['stage']
 
 
@@ -531,7 +535,7 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'Gere diretamente o vídeo da inserção')
         groups=generation_targets(draft,clip,media,variant_key,resolution) if kind=='video' else [None]
-        attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media,pid)
+        attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media,pid,row['channel_id'])
     q=(provider_quote(kind,clip.seconds,resolution) if resolution!='720p' else provider_quote(kind,clip.seconds)) if groups else {'usd':0,'seconds':clip.seconds}
     return {**q,'unit_usd':q['usd'],'usd':round(q['usd']*len(groups),6),'new_clips':len(groups),
             'attempt':{key:attempt[key] for key in ('allowed','stage','requires_reason','attempts_used','message','history','alternatives') if key in attempt},
@@ -574,7 +578,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if q['seconds']!=clip.seconds: raise HTTPException(409,'A duração mudou; consulte o custo novamente')
         groups=generation_targets(draft,clip,media,body.variant_key,body.resolution) if kind=='video' else [None]
         if not groups: raise HTTPException(409,'Os vídeos já estão disponíveis para revisão')
-        decision=attempt_decision(c,draft,clip,kind,body.resolution,groups,media,pid)
+        decision=attempt_decision(c,draft,clip,kind,body.resolution,groups,media,pid,row['channel_id'])
         if not decision['allowed']:raise HTTPException(409,decision['message'])
         if decision['requires_reason'] and len((body.correction_reason or '').strip())<12:
             raise HTTPException(422,'Explique a causa e a mudança concreta antes do único ciclo de correção.')
