@@ -4,6 +4,8 @@
 
 A extração estática registrou **223 rotas HTTP declaradas em 25 módulos**. Os prefixos dos routers foram combinados com os caminhos das funções e os routers aninhados do Creator foram expandidos. O inventário abaixo é reproduzível a partir do código; não representa uma captura dinâmica de OpenAPI nem prova que cada rota esteja ativa na imagem implantada.
 
+Verificação estrutural read-only: a contagem AST dos decorators HTTP no baseline encontrou 223 operações em 25 módulos e coincide com as 223 linhas do inventário. Isso valida quantidade e cobertura dos decorators, mas não valida por si só os caminhos concatenados nem a imagem implantada.
+
 ## Regras de acesso encontradas no código
 
 - O middleware HTTP global de `studio/api.py` exige sessão válida ou autenticação Basic de administrador da plataforma em rotas privadas; sem sessão, páginas web redirecionam para login e APIs respondem 401.
