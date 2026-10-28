@@ -168,3 +168,10 @@ Sem merge, aprovação formal, deploy, escrita na VPS, publicação ou geração
 - No teto financeiro configurado por projeto visual, o uso agora considera a cobrança final conciliada quando disponível; custo desconhecido conserva a reserva. Adicionada regressão PostgreSQL que valida a liberação do excedente e a retenção da reserva incerta. `py_compile` e `git diff --check` também passaram localmente.
 - Esta alteração cobre a conciliação financeira do teto existente por projeto. Não cria ainda relações explícitas de campanha/entrega nem contadores agregados por ação, entrega e campanha; portanto G4-04 e WP-02 continuam parciais.
 - PR #71 segue aberto e sem merge. O alias SSH ainda não resolve um hostname; a auditoria read-only da VPS não foi repetida. Sem alteração na VPS, `main`, produção ou dados externos.
+
+## Revalidação WP-05 / Shorts — 28/10/2026 10:08 UTC
+
+- PR #74 head `e0876d4ce094ab47a1a63f3610dcdefbf5955b71`; CI `Checks` run `40669061373` passou: 290 testes Python, 34 testes Vitest e verificações de typecheck/build/interface.
+- O recibo do Short agora identifica hash e janela da trilha aprovada de origem, programa e revisão, além da política de uma única faixa de áudio sem trilha musical, voz ou efeitos sobrepostos. A regressão inspeciona a saída e confirma uma faixa de áudio.
+- A mudança melhora proveniência e comprova a composição atual, que reutiliza um trecho da trilha do vídeo longo. Não implementa direção sonora própria para Shorts, novas músicas/efeitos/voz nem revisão auditiva final; G5-06 e WP-05 seguem parciais.
+- PR #74 permanece aberto. Sem merge, publicação, geração paga ou alteração na VPS/`main`.
