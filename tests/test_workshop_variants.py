@@ -1,4 +1,9 @@
 import uuid
+import json
+import hmac
+import hashlib
+import time
+from decimal import Decimal
 import pytest
 from studio.visual_workshop import (Clip, Insertion, Draft, signature, digest, status, assemble,
     variant_plan, seam_binding, split_durations, split_proposal, apply_split, prompt, validate_continuations)
@@ -112,6 +117,53 @@ import json
 from PIL import Image
 from test_authentication import client,signup
 DB=pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
+
+
+@DB
+def test_provider_callback_recovers_uncertain_video_job_and_deduplicates(client,monkeypatch):
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio.workshop_provider import callback_url,video_body,VIDEO_MODEL
+    d,media=fixture();url,identity=seed_project(client,d,media)
+    workspace=identity['workspace_id'];token='a'*48;task_id=uuid.uuid4()
+    monkeypatch.setenv('STUDIO_PUBLIC_ORIGIN','https://testserver')
+    monkeypatch.setenv('OPENROUTER_VIDEO_WEBHOOK_SECRET','test-callback-secret')
+    payload={'project_id':url.rsplit('/',1)[-1],'clip_id':str(d.clips[0].id),'operation':'video',
+             'callback_workspace':workspace,'callback_token':token,'prompt':'test','seconds':8,
+             'resolution':'720p','references':[]}
+    marker=WORKSPACE.set(workspace)
+    try:
+        with db() as c:
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,'visual_workshop_v1',%s,%s,.08,'UNCERTAIN')",
+                      (task_id,VIDEO_MODEL,json.dumps(payload)));c.commit()
+    finally:WORKSPACE.reset(marker)
+    expected_url=f'https://testserver/api/creator/workshop/provider-callback/{workspace}/{token}'
+    assert callback_url(payload)==expected_url
+    request_body={'model':VIDEO_MODEL,'prompt':'test','seconds':8,'resolution':'720p','callback_token':token,
+                  'callback_workspace':workspace}
+    assert video_body(request_body,['data:image/png;base64,AA=='],callback_url(request_body))['callback_url']==expected_url
+
+    event={'type':'video.generation.completed','data':{'id':'job-abc123','status':'completed','model':VIDEO_MODEL,'usage':{'cost':.06}}}
+    raw=json.dumps(event,separators=(',',':')).encode();timestamp=str(int(time.time()))
+    digest=hmac.new(b'test-callback-secret',timestamp.encode()+b','+raw,hashlib.sha256).hexdigest()
+    headers={'X-OpenRouter-Idempotency-Key':'job-abc123-completed',
+             'X-OpenRouter-Signature':f't={timestamp},v1={digest}'}
+    endpoint=f'/api/creator/workshop/provider-callback/{workspace}/{token}'
+    invalid=client.post(endpoint,content=raw,headers=headers|{'X-OpenRouter-Signature':'t=1,v1=bad'})
+    assert invalid.status_code==401
+    recovered=client.post(endpoint,content=raw,headers=headers)
+    assert recovered.status_code==200,recovered.text
+    duplicate=client.post(endpoint,content=raw,headers=headers)
+    assert duplicate.status_code==200 and duplicate.json()['duplicate'] is True
+    marker=WORKSPACE.set(workspace)
+    try:
+        with db() as c:
+            task=c.execute('SELECT status,reserved_cost,payload FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
+            assert task['status']=='RUNNING' and task['reserved_cost']==Decimal('.08')
+            assert task['payload']['provider_job_id']=='job-abc123'
+            assert task['payload']['provider_usage']=={'cost':.06}
+            assert task['payload']['webhook_event_key']=='job-abc123-completed'
+    finally:WORKSPACE.reset(marker)
 
 
 def seed_project(cl,draft,media):

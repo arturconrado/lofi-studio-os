@@ -2,8 +2,13 @@
 import io
 import json
 import os
+import re
+import secrets
 import tempfile
 import uuid
+import hmac
+import hashlib
+import time
 from pathlib import Path
 from typing import Literal
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -474,7 +479,9 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                             media[str(rid)]=return_frame
                     selected.append(return_frame)
             if len(selected)>14: raise HTTPException(422,'Use até 14 referências por imagem')
+            from .tenancy import active_workspace
             payload={'project_id':str(pid),'clip_id':str(cid),'operation':kind,
+                'callback_workspace':active_workspace() or 'public','callback_token':secrets.token_urlsafe(32),
                 'variant_key':group['key'] if group else None,'requested_variant_key':body.variant_key,
                 'occurrence_ids':group['event_ids'] if group else [],'batch_ids':[str(t) for t in tids],
                 'signature':signature(draft,effective,kind,image['sha256'] if kind=='video' else None),
@@ -490,6 +497,61 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
     if not queued:
         for tid in tids:submit(tid)
     with db() as c: return public_task(task(c,body.request_id,pid))
+
+
+@router.post('/provider-callback/{workspace}/{token}')
+async def provider_callback(workspace: str, token: str, request: Request):
+    """Recover terminal job IDs when the accepted POST response was lost."""
+    raw=await request.body()
+    if len(raw)>32*1024:raise HTTPException(413,'Callback excede o limite')
+    secret=os.getenv('OPENROUTER_VIDEO_WEBHOOK_SECRET','')
+    if secret:
+        signature_header=request.headers.get('X-OpenRouter-Signature','')
+        fields=dict(part.split('=',1) for part in signature_header.split(',') if '=' in part)
+        timestamp=fields.get('t','');given=fields.get('v1','')
+        try:age=abs(time.time()-int(timestamp))
+        except (TypeError,ValueError):raise HTTPException(401,'Assinatura do callback inválida') from None
+        expected=hmac.new(secret.encode(),timestamp.encode()+b','+raw,hashlib.sha256).hexdigest()
+        if age>300 or not hmac.compare_digest(expected,given):raise HTTPException(401,'Assinatura do callback inválida')
+    event_key=request.headers.get('X-OpenRouter-Idempotency-Key','')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',event_key):raise HTTPException(400,'Identificador de evento inválido')
+    try:event=json.loads(raw)
+    except (json.JSONDecodeError,UnicodeDecodeError):raise HTTPException(400,'Callback inválido') from None
+    data=event.get('data') if isinstance(event,dict) else None
+    statuses={'video.generation.completed':'completed','video.generation.failed':'failed',
+              'video.generation.cancelled':'cancelled','video.generation.expired':'expired'}
+    terminal=statuses.get(event.get('type')) if isinstance(event,dict) else None
+    job_id=data.get('id') if isinstance(data,dict) else None
+    if not terminal or not isinstance(job_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',job_id) or data.get('status')!=terminal:
+        raise HTTPException(422,'Evento terminal inválido')
+    from uuid import UUID
+    from .tenancy import WORKSPACE
+    if workspace=='public':workspace_id=None
+    else:
+        try:workspace_id=str(UUID(workspace))
+        except ValueError:raise HTTPException(404,'Tarefa não encontrada') from None
+    scope=WORKSPACE.set(workspace_id)
+    try:
+        with db() as c:
+            row=c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'callback_token'=%s FOR UPDATE",(KIND,token)).fetchone()
+            if not row:raise HTTPException(404,'Tarefa não encontrada')
+            payload=row['payload']
+            if payload.get('callback_workspace','public')!=workspace:raise HTTPException(404,'Tarefa não encontrada')
+            if payload.get('webhook_event_key')==event_key:return {'received':True,'duplicate':True}
+            if payload.get('provider_job_id') and payload['provider_job_id']!=job_id:raise HTTPException(409,'Callback não corresponde ao pedido original')
+            if data.get('model') and data['model']!=row['model']:raise HTTPException(409,'Modelo do callback não corresponde ao pedido')
+            payload.update(provider_job_id=job_id,provider_terminal_status=terminal,
+                           provider_usage=data.get('usage'),webhook_event_key=event_key)
+            if terminal=='completed':
+                # The job ID is now durable. The normal refresh path downloads
+                # that exact result; it never creates a replacement generation.
+                status='RUNNING';detail='Resultado recuperado pelo callback; consulte para baixar o mesmo pedido'
+            else:
+                status='FAILED';detail='O provedor encerrou o pedido: '+terminal+'. A reserva permanece registrada.'
+            c.execute('UPDATE factory_tasks SET status=%s,payload=%s,detail=%s,updated_at=now() WHERE id=%s',
+                      (status,json.dumps(payload,ensure_ascii=False),detail,row['id']));c.commit()
+        return {'received':True,'duplicate':False}
+    finally:WORKSPACE.reset(scope)
 
 
 @router.post('/projects/{pid}/jobs/{tid}/refresh')

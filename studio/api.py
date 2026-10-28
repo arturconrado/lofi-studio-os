@@ -32,7 +32,8 @@ async def auth(req:Request,call_next):
             return JSONResponse({'detail':'Origem da requisição não autorizada'},status_code=403)
     public=req.url.path in ('/health','/login','/admin/login') or req.url.path.startswith('/static/') or req.url.path in (
         '/api/auth/capabilities','/api/auth/register','/api/auth/login','/api/auth/admin-login',
-        '/api/auth/verify','/api/auth/forgot-password','/api/auth/reset-password')
+        '/api/auth/verify','/api/auth/forgot-password','/api/auth/reset-password') or req.url.path.startswith(
+        '/api/creator/workshop/provider-callback/')
     if public:return await call_next(req)
     identity=session(req.cookies.get(COOKIE))
     if identity:

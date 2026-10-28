@@ -7,6 +7,7 @@ import re
 import tempfile
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlsplit
 import httpx
 from fastapi import HTTPException
 from .core import db, storage
@@ -94,16 +95,31 @@ def complete(c, task, raw, mime, seconds=None):
               (json.dumps(p), 'Pronto para aprovação' if attached else 'Arquivo preservado; o roteiro mudou durante a geração', task['id']))
 
 
-def video_body(payload, references):
+def video_body(payload, references, callback_url=None):
     if payload.get('resolution', '720p') not in ('720p', '1080p'):
         raise ValueError('Unsupported video resolution')
     frames = [{'type': 'image_url', 'image_url': {'url': references[0]}, 'frame_type': 'first_frame'}]
     if payload.get('last_frame'):
         if len(references) < 2: raise ValueError('Return frame missing')
         frames.append({'type': 'image_url', 'image_url': {'url': references[1]}, 'frame_type': 'last_frame'})
-    return {'model': VIDEO_MODEL, 'prompt': payload['prompt'], 'duration': payload['seconds'],
+    body={'model': VIDEO_MODEL, 'prompt': payload['prompt'], 'duration': payload['seconds'],
             'resolution': payload.get('resolution', '720p'), 'aspect_ratio': '16:9', 'generate_audio': False,
             'frame_images': frames, 'provider': {'allow_fallbacks': False}}
+    if callback_url:body['callback_url']=callback_url
+    return body
+
+
+def callback_url(payload):
+    origin=os.getenv('STUDIO_PUBLIC_ORIGIN','').rstrip('/')
+    parsed=urlsplit(origin)
+    token=payload.get('callback_token');workspace=payload.get('callback_workspace','public')
+    if parsed.scheme!='https' or not parsed.netloc or parsed.path not in ('','/') or parsed.query or parsed.fragment:return None
+    if not isinstance(token,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}',token):return None
+    if workspace!='public':
+        from uuid import UUID
+        try:workspace=str(UUID(workspace))
+        except (ValueError,TypeError):return None
+    return origin+'/api/creator/workshop/provider-callback/'+workspace+'/'+token
 
 
 def submit(tid):
@@ -125,7 +141,7 @@ def submit(tid):
                 raw = image_bytes(base64.b64decode(encoded, validate=True))
                 with db() as c: complete(c, t, raw, 'image/png'); c.commit()
             else:
-                body = video_body(p, refs)
+                body = video_body(p, refs, callback_url(p))
                 r = client.post(BASE + '/videos', headers=headers, json=body); r.raise_for_status()
                 job = r.json()['id']
                 if not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', job): raise ValueError('Invalid provider job')
@@ -134,7 +150,7 @@ def submit(tid):
                               (json.dumps({'provider_job_id': job}), tid)); c.commit()
     except Exception:
         with db() as c:
-            c.execute("UPDATE factory_tasks SET status='UNCERTAIN',detail='Envio sem conclusão confirmada. Reserva mantida; confira com o provedor antes de gerar novamente.',updated_at=now() WHERE id=%s", (tid,)); c.commit()
+            c.execute("UPDATE factory_tasks SET status='UNCERTAIN',detail='Envio sem conclusão confirmada. Reserva mantida; aguardando callback ou reconciliação.',updated_at=now() WHERE id=%s AND status IN ('SUBMITTING','QUEUED')", (tid,)); c.commit()
 
 
 def refresh(tid):
