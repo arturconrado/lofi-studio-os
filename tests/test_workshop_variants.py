@@ -28,6 +28,16 @@ def test_uncertain_public_task_explains_reconciliation_without_leaking_provider_
     assert 'private-provider-id' not in json.dumps(polling,default=str)
 
 
+def test_continuation_parts_share_the_original_creative_attempt_unit():
+    from studio.workshop_api import creative_unit
+    d,_=fixture();root=d.clips[0]
+    child=Clip(name='Part 2',motion='Return to the base pose',seconds=2,continues_from=root.id)
+    d.clips.append(child)
+    copied=Draft.model_validate(d.model_dump())
+    assert creative_unit(d,child)==root.id
+    assert creative_unit(copied,copied.clips[1])==root.id
+
+
 def bind_variants(draft,media,clip,approved=True):
     for n,group in enumerate(variant_plan(draft,clip,media)):
         image_id=uuid.uuid4();video_id=uuid.uuid4();image_sha=digest(['image',group['key']]);video_sha=digest(['video',group['key']])
@@ -488,6 +498,64 @@ def test_http_queued_stale_variant_is_cancelled_without_provider_charge(client,m
             assert all(j['status']=='FAILED' and j['reserved_cost']==0 for j in jobs)
     finally:WORKSPACE.reset(token)
     assert not calls
+
+
+@DB
+def test_paid_attempt_cycle_survives_restart_like_reloads_splits_and_project_duplicates(client,monkeypatch):
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    d,media=fixture();clip=d.clips[0];clip.image_id=clip.video_id=None;d.insertions[1].minute=19/60
+    media={key:value for key,value in media.items() if key in (str(d.base.image_id),str(d.base.video_id))}
+    url,identity=seed_project(client,d,media);calls,reservations=mock_generation(monkeypatch)
+    groups=variant_plan(d,clip,media);first_key=groups[0]['key'];second_key=groups[1]['key']
+    quote=client.get(url+f'/clips/{clip.id}/quote/video?variant_key={first_key}').json()
+    assert quote['attempt']=={'allowed':True,'stage':'initial','requires_reason':False,'attempts_used':0}
+    first=client.post(url+f'/clips/{clip.id}/generate/video',json={'request_id':str(uuid.uuid4()),'revision':1,
+        'max_usd':quote['usd'],'confirm_cost':True,'variant_key':first_key})
+    assert first.status_code==200,first.text
+    assert first.json()['attempt_stage']=='initial'
+    assert len(calls)==1
+
+    # A new request UUID and a project copy cannot buy the same already-used variant.
+    repeated=client.get(url+f'/clips/{clip.id}/quote/video?variant_key={first_key}').json()
+    assert repeated['attempt']['allowed'] is False
+    copied_id=client.post(url+'/duplicate').json()['id'];copied_url='/api/creator/workshop/projects/'+copied_id
+    copied=client.get(copied_url).json();copied_draft=Draft.model_validate(copied['data'])
+    copied_groups=variant_plan(copied_draft,copied_draft.clips[0],copied['media'])
+    copied_key=next(g['key'] for g in copied_groups if g['minutes']==groups[0]['minutes'])
+    copied_quote=client.get(copied_url+f'/clips/{clip.id}/quote/video?variant_key={copied_key}').json()
+    assert copied_quote['attempt']['allowed'] is False
+
+    # The second unspent frame remains within the original initial cycle.
+    state=client.get(url).json();quote=client.get(url+f'/clips/{clip.id}/quote/video?variant_key={second_key}').json()
+    assert quote['attempt']['allowed'] is True and quote['attempt']['stage']=='initial' and quote['attempt']['attempts_used']==1
+    second=client.post(url+f'/clips/{clip.id}/generate/video',json={'request_id':str(uuid.uuid4()),'revision':state['revision'],
+        'max_usd':quote['usd'],'confirm_cost':True,'variant_key':second_key})
+    assert second.status_code==200,second.text
+    assert len(calls)==2
+
+    # A changed spec can use one reasoned correction cycle; a later changed spec is blocked.
+    state=client.get(url).json();state['data']['clips'][0]['motion']='Ajuste claro: pegar a caneca e devolvê-la ao mesmo lugar'
+    assert client.put(url,json={'revision':state['revision'],'data':state['data']}).status_code==200
+    state=client.get(url).json();quote=client.get(url+f'/clips/{clip.id}/quote/video').json()
+    assert quote['attempt']['allowed'] is True and quote['attempt']['stage']=='correction' and quote['attempt']['requires_reason'] is True
+    correction_body={'request_id':str(uuid.uuid4()),'revision':state['revision'],'max_usd':quote['usd'],'confirm_cost':True}
+    assert client.post(url+f'/clips/{clip.id}/generate/video',json=correction_body).status_code==422
+    correction_body['correction_reason']='A mão encobriu o gato; simplifiquei o gesto e tornei o retorno explícito.'
+    correction=client.post(url+f'/clips/{clip.id}/generate/video',json=correction_body)
+    assert correction.status_code==200,correction.text
+    assert correction.json()['attempt_stage']=='correction'
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            rows=c.execute("SELECT payload FROM factory_tasks WHERE payload->>'project_id'=%s AND payload->>'attempt_stage'='correction'",(url.rsplit('/',1)[-1],)).fetchall()
+            assert len(rows)==2 and all(r['payload']['correction_reason']==correction_body['correction_reason'] for r in rows)
+            c.execute("UPDATE factory_tasks SET status='FAILED' WHERE payload->>'project_id'=%s AND payload->>'attempt_stage'='correction'",(url.rsplit('/',1)[-1],));c.commit()
+    finally:WORKSPACE.reset(marker)
+    state=client.get(url).json();state['data']['clips'][0]['motion']='Outra revisão da mesma unidade'
+    assert client.put(url,json={'revision':state['revision'],'data':state['data']}).status_code==200
+    exhausted=client.get(url+f'/clips/{clip.id}/quote/video').json()
+    assert exhausted['attempt']['allowed'] is False and exhausted['attempt']['attempts_used']==2
 
 
 @DB
