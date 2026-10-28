@@ -84,3 +84,23 @@ def test_public_reference_outlier_requires_three_comparable_videos():
     assert references
     assert all(item['evidence']['comparable_reference_videos'] == 3 for item in references)
     assert all(item['evidence']['relative_pace_in_reference_channel'] is not None for item in references)
+
+
+def test_newer_equal_relevance_observations_win_the_memory_limit():
+    snapshots = []
+    for day in range(1, 11):
+        snapshots.append({
+            'channel_id': 'channel-a', 'id': f'snapshot-{day}',
+            'video_url': f'https://youtube.com/watch?v={day}',
+            'observed_date': date(2026, 10, day), 'window': '28d', 'video_age_days': 28,
+            'content_format': 'long_form', 'intent': 'coding_focus',
+            'metrics': {'video_title': 'Rainy coding desk', 'content_theme': 'Rainy coding focus'},
+        })
+    cursor = MemoryCursor({'reference_observations': [], 'analytics_snapshots': snapshots,
+                           'growth_experiments': []})
+
+    memory = retrieve_channel_memory(cursor, 'channel-a', 'rainy', intent='coding_focus',
+                                     content_format='long_form', limit=8)
+
+    selected = [item['source_ids'][0] for item in memory['items']]
+    assert selected == [f'snapshot-{day}' for day in range(10, 2, -1)]

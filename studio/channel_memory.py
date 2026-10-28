@@ -175,7 +175,11 @@ def retrieve_channel_memory(c, channel_id, query, *, intent, content_format='lon
             'retrieval_reason': 'brief_match',
         })
 
-    candidates.sort(key=lambda item: (-item['relevance'], item['kind'], item.get('observed_at') or ''))
+    # Prefer newer evidence when lexical relevance ties. The first stable sort also
+    # makes recency deterministic across memory kinds without allowing a category
+    # name to outrank a newer saved observation.
+    candidates.sort(key=lambda item: item.get('observed_at') or '', reverse=True)
+    candidates.sort(key=lambda item: -item['relevance'])
     selected = candidates[:max(0, min(int(limit), MAX_MEMORY_ITEMS))]
     return {
         'version': 'channel-memory-v1',
