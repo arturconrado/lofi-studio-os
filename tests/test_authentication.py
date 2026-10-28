@@ -1,5 +1,6 @@
 import os
 import uuid
+import json
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -77,6 +78,61 @@ def test_viewer_and_wrong_origin_denied(client):
     assert client.post('/api/auth/logout',headers=headers|{'Origin':'https://evil.test'}).status_code==403
     assert client.get('/api/settings').status_code==200
     assert client.put('/api/settings',json={},headers=headers).status_code==403
+
+
+def test_approved_pilot_reappears_as_library_candidate_and_prepare_is_recoverable(client):
+    """Review approval surfaces the same pilot in Library; retries never upload."""
+    _,identity=signup(client)
+    headers={'X-CSRF-Token':identity['csrf_token']}
+    channel_id=client.get('/api/channels').json()[0]['id']
+    pilot_id=uuid.uuid4()
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio.ambient_api import init as init_ambient
+    from studio.youtube_publish import ensure as ensure_publications
+
+    report={
+        'duration_seconds':3600,'audio_seconds':3600,'technical_integrity':True,'full_decode_pass':True,
+        'artifact_sha256':{'video':'a'*64},
+    }
+    token=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as conn:
+            init_ambient(conn);ensure_publications(conn)
+            conn.execute('''INSERT INTO ambient_pilots(id,channel_id,title,video_key,silent_key,report,plan)
+              VALUES(%s,%s,'Test pilot','ambient-pilots/test/video.mp4','ambient-pilots/test/silent.mp4',%s::jsonb,%s::jsonb)''',
+              (pilot_id,channel_id,json.dumps(report),json.dumps({'intent':'coding_focus','theme':'Rainy coding'})))
+            conn.commit()
+    finally:
+        WORKSPACE.reset(token)
+
+    candidates_url=f'/api/youtube/publications/pilots/candidates?channel_id={channel_id}'
+    assert all(row['pilot_id']!=str(pilot_id) for row in client.get(candidates_url).json())
+
+    approval=client.post(f'/api/ambient/pilots/{pilot_id}/approve',json={'confirm_visual':True},headers=headers)
+    assert approval.status_code==200 and approval.json()['broadcast_started'] is False
+    assert [row['pilot_id'] for row in client.get(candidates_url).json()].count(str(pilot_id))==1
+    repeated=client.post(f'/api/ambient/pilots/{pilot_id}/approve',json={'confirm_visual':True},headers=headers)
+    assert repeated.status_code==200
+    assert [row['pilot_id'] for row in client.get(candidates_url).json()].count(str(pilot_id))==1
+
+    first=client.post(f'/api/youtube/publications/pilots/{pilot_id}/prepare',
+        json={'request_id':str(uuid.uuid4()),'channel_id':channel_id},headers=headers)
+    retry=client.post(f'/api/youtube/publications/pilots/{pilot_id}/prepare',
+        json={'request_id':str(uuid.uuid4()),'channel_id':channel_id},headers=headers)
+    assert first.status_code==retry.status_code==200
+    assert first.json()['id']==retry.json()['id']
+    assert first.json()['state']==retry.json()['state']=='ready'
+    assert first.json()['bytes_sent']==retry.json()['bytes_sent']==0
+    assert first.json()['video_id'] is retry.json()['video_id'] is None
+    assert all(row['pilot_id']!=str(pilot_id) for row in client.get(candidates_url).json())
+    token=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as conn:
+            saved=conn.execute('SELECT pilot_sha256 FROM youtube_publications WHERE id=%s',(first.json()['id'],)).fetchone()
+    finally:
+        WORKSPACE.reset(token)
+    assert saved['pilot_sha256']==report['artifact_sha256']['video']
 
 def test_legacy_admin_remains_separate(client):
     assert client.get('/api/tracks',auth=('legacy-admin','legacy-local-test-password')).status_code==200
