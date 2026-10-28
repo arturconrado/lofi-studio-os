@@ -16,8 +16,8 @@ Em PostgreSQL descartável, criei um registro privado em um workspace, configure
 ## Evidência automatizada
 
 - Regressão integrada: sessão de workspace vê o próprio registro; `platform_admin` e Basic admin não herdam um workspace apenas por variável de processo.
-- Regressão unitária: worker sem contexto herda o valor padrão; contexto público explícito não herda.
-- Suíte `tests/` em PostgreSQL descartável: 281 testes aprovados, 3 avisos de depreciação.
+- Regressões unitárias: worker sem contexto herda o valor padrão; contexto público explícito não herda; a API não recebe fila nem cliente de armazenamento com prefixo de tenant, enquanto o contexto de worker continua recebendo ambos isolados.
+- Suíte `tests/` em PostgreSQL descartável: 282 testes aprovados, 3 avisos de depreciação.
 
 ## Limites
 
