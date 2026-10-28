@@ -18,7 +18,7 @@ Os sete containers Lo-Fi estavam em execução. Studio estava marcado como healt
 
 ## Caminho de implantação
 
-A chave de deploy configurada no `authorized_keys` executa um caminho fixo no host. O hash SHA-256 do script instalado começa por `4b97425d`; o script `ops/auto-deploy.sh` do PR #63 começa por `803d0961`. São arquivos diferentes. O cabeçalho do script instalado declara que atualiza Studio, creator e export-worker; não inclui publisher, rádio, channel-radio nem music-worker. O workflow do PR #63 não envia nem instala o script executado pela chave. Portanto, o PR #63 ainda não prova que a mudança de deploy proposta será executada.
+A chave de deploy configurada no `authorized_keys` executa um caminho fixo no host. O SHA-256 completo do script instalado foi comparado com o arquivo versionado em `origin/main` (`cb369c9`): os bytes correspondem exatamente (`4b97425d…`). Portanto, o código do script que está instalado permanece recuperável na `main`. O script `ops/auto-deploy.sh` proposto no head do PR #63 tem hash diferente (`803d0961…`). O script atualmente instalado declara que atualiza Studio, creator e export-worker; não inclui publisher, rádio, channel-radio nem music-worker. O workflow do PR #63 empacota `studio/`, `web/` e `requirements.txt`, mas não instala o novo `ops/auto-deploy.sh` no caminho fixo chamado pela chave. Assim, o script antigo está preservado em `main`, mas o PR #63 ainda não prova que o publicador ou a nova rotina de deploy serão ativados.
 
 ## Comparação dos arquivos das imagens com Git
 
