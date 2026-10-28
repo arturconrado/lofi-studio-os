@@ -277,3 +277,10 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 - Estes resultados comprovam CI e regressões automatizadas específicas, não a matriz completa de autorização ou revisão de logs no runtime; TEST-37/WP-00 continuam parciais.
 - O alias SSH `lofi_vps` continua sem resolver hostname. A tentativa foi somente de conexão não interativa com comando de leitura e falhou antes de abrir sessão; nenhuma operação foi executada na VPS. A auditoria remota e TEST-27 seguem pendentes.
 - Os três PRs permanecem abertos e sem merge; nenhuma mudança foi feita em `main`, VPS, produção, mídia, publicação ou provedores pagos.
+
+## Rechecagem do runtime e do deploy — 28/10/2026 às 22:21 UTC
+
+- A leitura somente de leitura confirmou sete containers Lo-Fi: Studio, creator e export-worker na revisão OCI `cb369c9`; publisher na `1789d4d`; rádio e channel-radio na `be426a8-radio`; music-worker na tag `d877875` com label OCI `development`. O Studio estava saudável.
+- A `main` em `7966a93dfb0761046fe858c44dce413626499012` passou no Checks run `40778344097`. O workflow Deploy `40778828549` falhou na verificação do protocolo antes da transferência: o log confirma que nenhum arquivo de release foi enviado.
+- O shell do host não encontrou `lofi-deploy-protocol` no PATH. Isso, isoladamente, não descreve toda a regra SSH forçada. A captura datada em [sdd-wp00-runtime-recheck-2026-10-28.md](sdd-wp00-runtime-recheck-2026-10-28.md) registra os hashes e limites observados.
+- A consulta não alterou serviços ou dados. TEST-27, matriz de autorização em runtime, atribuição dos escritores de tabelas e paridade operacional seguem pendentes; a captura não fecha WP-00 nem autoriza bootstrap/deploy.
