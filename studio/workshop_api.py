@@ -133,18 +133,67 @@ def attempt_keys(clip, groups):
             for group in groups]
 
 
-def attempt_decision(c, draft, clip, operation, resolution, groups, media):
+def attempt_history(c, unit, operation, project_id):
+    """Summarize durable requests for this creative unit without exposing provider internals."""
+    rows=c.execute('''SELECT t.id,t.payload->>'attempt_stage' stage,t.status,t.created_at,t.reserved_cost,
+             t.payload->>'variant_key' variant_key,t.payload->'batch_ids' batch_ids,
+             t.payload->>'correction_reason' correction_reason
+      FROM factory_tasks t JOIN visual_projects source_project
+        ON source_project.id::text=t.payload->>'project_id'
+      WHERE t.kind=%s AND t.payload->>'creative_unit_id'=%s AND t.payload->>'operation'=%s
+        AND t.payload->>'attempt_stage' IS NOT NULL
+        AND source_project.channel_id=(SELECT channel_id FROM visual_projects WHERE id=%s)
+      ORDER BY t.created_at''',(KIND,str(unit),operation,project_id)).fetchall()
+    grouped={}
+    for row in rows:
+        stage=row['stage'];item=grouped.setdefault(stage,{'request_signatures':set(),'variant_keys':set(),
+            'reserved_usd':0.0,'statuses':set(),'recorded_at':row['created_at'].isoformat() if row['created_at'] else None})
+        # A single user request can reserve one factory_tasks row per selected
+        # variant. Count the shared batch once, while still summing each row's
+        # reserved amount and reporting the number of distinct variants.
+        batch_ids=row.get('batch_ids') or [str(row['id'])]
+        item['request_signatures'].add(tuple(sorted(str(value) for value in batch_ids)))
+        item['reserved_usd']+=float(row['reserved_cost'] or 0)
+        item['statuses'].add(row['status'])
+        if row['variant_key']:item['variant_keys'].add(row['variant_key'])
+        if row['correction_reason']:item['correction_reason']=row['correction_reason']
+    order={'initial':0,'correction':1}
+    result=[]
+    for stage,item in sorted(grouped.items(),key=lambda pair:order.get(pair[0],9)):
+        entry={'stage':stage,'request_count':len(item['request_signatures']),
+            'variant_count':len(item['variant_keys']),'reserved_usd':round(item['reserved_usd'],6),
+            'statuses':sorted(item['statuses'])}
+        if item.get('correction_reason'):entry['correction_reason']=item['correction_reason']
+        result.append(entry)
+    return result
+
+
+def attempt_alternatives(stage, allowed):
+    options=['Reaproveitar um material aprovado que já atenda ao trecho.',
+             'Ajustar a agenda ou o roteiro para retirar este trecho sem apagar os demais materiais.',
+             'Pedir uma revisão humana da ação e das referências antes de decidir.']
+    if allowed and stage=='correction':
+        options.insert(0,'Usar o único ciclo de correção, informando a falha observada e a mudança concreta.')
+    elif allowed and stage=='initial':
+        options.insert(0,'Fazer a tentativa inicial com as variantes distintas já previstas para esta unidade.')
+    return options
+
+
+def attempt_decision(c, draft, clip, operation, resolution, groups, media, project_id):
     unit=creative_unit(draft,clip);spec=creative_spec_signature(draft,clip,operation,resolution,media)
     keys=attempt_keys(clip,groups)
+    history=attempt_history(c,unit,operation,project_id)
+    def decision(values):
+        return {**values,'history':history,'alternatives':attempt_alternatives(values.get('stage'),values.get('allowed',False))}
     row=c.execute('SELECT * FROM visual_creative_attempts WHERE creative_unit_id=%s AND operation=%s',
                   (unit,operation)).fetchone()
     if not row:
-        return {'allowed':True,'stage':'initial','requires_reason':False,'attempts_used':0,
-                'unit_id':str(unit),'signature':spec,'keys':keys}
+        return decision({'allowed':True,'stage':'initial','requires_reason':False,'attempts_used':0,
+                'unit_id':str(unit),'signature':spec,'keys':keys})
     correction=row.get('correction_signature')
     if correction and spec!=correction:
-        return {'allowed':False,'stage':'blocked','requires_reason':False,'attempts_used':2,
-                'message':'Esta unidade criativa já usou a tentativa inicial e seu único ciclo de correção. Revise o material existente.'}
+        return decision({'allowed':False,'stage':'blocked','requires_reason':False,'attempts_used':2,
+                'message':'Esta unidade criativa já usou a tentativa inicial e seu único ciclo de correção. Revise o material existente.'})
     if spec==row['initial_signature'] and not correction:
         used=set(row['initial_variant_keys'] or [])
         stage='initial';attempts=1
@@ -152,16 +201,16 @@ def attempt_decision(c, draft, clip, operation, resolution, groups, media):
         used=set(row['correction_variant_keys'] or [])
         stage='correction';attempts=2
     elif not correction:
-        return {'allowed':True,'stage':'correction','requires_reason':True,'attempts_used':1,
-                'unit_id':str(unit),'signature':spec,'keys':keys}
+        return decision({'allowed':True,'stage':'correction','requires_reason':True,'attempts_used':1,
+                'unit_id':str(unit),'signature':spec,'keys':keys})
     else:
         used=set();stage='blocked';attempts=2
     repeated=used.intersection(keys)
     if repeated:
-        return {'allowed':False,'stage':'blocked','requires_reason':False,'attempts_used':attempts,
-                'message':'Esta versão já foi enviada para estes trechos. Alterar a identificação do pedido não cria uma nova tentativa.'}
-    return {'allowed':True,'stage':stage,'requires_reason':False,'attempts_used':attempts,
-            'unit_id':str(unit),'signature':spec,'keys':keys}
+        return decision({'allowed':False,'stage':'blocked','requires_reason':False,'attempts_used':attempts,
+                'message':'Esta versão já foi enviada para estes trechos. Alterar a identificação do pedido não cria uma nova tentativa.'})
+    return decision({'allowed':True,'stage':stage,'requires_reason':False,'attempts_used':attempts,
+            'unit_id':str(unit),'signature':spec,'keys':keys})
 
 
 def reserve_attempt(c, decision, operation, correction_reason=None):
@@ -482,10 +531,10 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'Gere diretamente o vídeo da inserção')
         groups=generation_targets(draft,clip,media,variant_key,resolution) if kind=='video' else [None]
-        attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media)
+        attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media,pid)
     q=(provider_quote(kind,clip.seconds,resolution) if resolution!='720p' else provider_quote(kind,clip.seconds)) if groups else {'usd':0,'seconds':clip.seconds}
     return {**q,'unit_usd':q['usd'],'usd':round(q['usd']*len(groups),6),'new_clips':len(groups),
-            'attempt':{key:attempt[key] for key in ('allowed','stage','requires_reason','attempts_used','message') if key in attempt},
+            'attempt':{key:attempt[key] for key in ('allowed','stage','requires_reason','attempts_used','message','history','alternatives') if key in attempt},
             'reused_occurrences':sum(len(g['event_ids']) for g in variant_plan(draft,clip,media) if _status(draft,occurrence_clip(draft,clip,g,media),media,g)['video_ready']) if clip.id!=draft.base.id else 0,
             'waiting_variants':sum(not g['source_ready'] for g in variant_plan(draft,clip,media)) if clip.id!=draft.base.id else 0,
             'variants':[{'key':g['key'],'minutes':g['minutes']} for g in groups if g]}
@@ -525,7 +574,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if q['seconds']!=clip.seconds: raise HTTPException(409,'A duração mudou; consulte o custo novamente')
         groups=generation_targets(draft,clip,media,body.variant_key,body.resolution) if kind=='video' else [None]
         if not groups: raise HTTPException(409,'Os vídeos já estão disponíveis para revisão')
-        decision=attempt_decision(c,draft,clip,kind,body.resolution,groups,media)
+        decision=attempt_decision(c,draft,clip,kind,body.resolution,groups,media,pid)
         if not decision['allowed']:raise HTTPException(409,decision['message'])
         if decision['requires_reason'] and len((body.correction_reason or '').strip())<12:
             raise HTTPException(422,'Explique a causa e a mudança concreta antes do único ciclo de correção.')

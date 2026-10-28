@@ -203,3 +203,24 @@ it('keeps legacy projects in manual approval mode when the continuity setting is
   await view.findByText('Adicionar trecho');
   await waitFor(() => expect((view.getByLabelText('Preparar continuidade automaticamente sem aprovar cada trecho') as HTMLInputElement).checked).toBe(false));
 });
+
+it('shows durable attempt history and non-paid alternatives when a creative unit is exhausted', async () => {
+  const draft=initialDraft();
+  const detail={id:'p',revision:1,data:draft,media:{},states:{[draft.base.id]:{image_approved:true,video_approved:false}},jobs:[],library:[],music:[]};
+  const attempt={allowed:false,stage:'blocked',attempts_used:2,requires_reason:false,
+    message:'Esta unidade criativa já usou a tentativa inicial e seu único ciclo de correção.',
+    history:[{stage:'initial',request_count:1,variant_count:1,reserved_usd:.1,statuses:['FAILED']},
+      {stage:'correction',request_count:1,variant_count:1,reserved_usd:.1,statuses:['FAILED'],correction_reason:'Simplifiquei o gesto e ajustei a posição da caneca.'}],
+    alternatives:['Reaproveitar um material aprovado que já atenda ao trecho.','Ajustar a agenda sem gerar novamente.']};
+  const fetcher=vi.fn(async(url:string)=>new Response(JSON.stringify(url.endsWith('/capabilities')?{durations:[8]}:url.includes('/quote/video')?{new_clips:1,usd:.1,attempt}:detail),{status:200}));
+  vi.stubGlobal('fetch',fetcher);const view=render(<Workshop id="p" />);
+  await waitFor(()=>expect((view.getByText('Gerar vídeo') as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(view.getByText('Gerar vídeo'));
+  await waitFor(()=>expect(view.getByRole('alert').textContent).toContain('Histórico persistido'));
+  const alert=view.getByRole('alert');
+  expect(alert.textContent).toContain('Correção única');
+  expect(alert.textContent).toContain('US$');
+  expect(alert.textContent).toContain('Simplifiquei o gesto');
+  expect(alert.textContent).toContain('Reaproveitar um material aprovado');
+  expect(fetcher.mock.calls.some(call=>call[0].includes('/generate/'))).toBe(false);
+});
