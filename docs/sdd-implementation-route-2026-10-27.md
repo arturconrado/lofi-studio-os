@@ -2,6 +2,25 @@
 
 **Atualizado em 28/10/2026.** Documento de acompanhamento derivado do SDD v1.0 e do estado dos PRs no GitHub. É aditivo: não altera o SDD original, não afirma homologação e não autoriza deploy, escrita na VPS, publicação ou geração paga.
 
+## Estado atual verificado em 28/10/2026 às 22:25 UTC
+
+| Frente | Estado confirmado agora | Gate para avançar |
+|---|---|---|
+| WP-00 | Parcial. A captura read-only de 22:21 confirma sete containers e revisões distintas; Checks da main passaram, mas o Deploy parou no preflight e não enviou pacote. | TEST-37 em runtime, autoria dos escritores de tabelas sem DDL rastreado, paridade operacional e TEST-27 (restore e rollback isolados). |
+| WP-01 | PR #66 aberto; Checks run 40775922180 passou. Fatia de versionamento, ainda incompleta. | WP-00 concluído, revisão independente e aceites restantes de versão, isolamento e proveniência. |
+| WP-02 | PR #71 mergeado; PR #72 aberto e Checks run 40776063645 passou. A autorização de gasto e escopo avançam, mas o pacote não está completo. | WP-00 e WP-01; TEST-37 completo em runtime e G4-04 nos motores/campanhas restantes. |
+| WP-03 | PR #63 mergeado. A main atual não está implantada: o Deploy run 40778828549 encerrou no preflight de protocolo antes da transferência. | Bootstrap autorizado do deployer, TEST-27 e validação da revisão instalada. |
+| WP-04 | PRs #62 e #70 mergeados; a presença das capacidades no código não representa aceite completo da qualidade/referências. | Dependências de WP-01/02 e referência funcional de WP-03, depois calibração e evidências dos testes do SDD. |
+| WP-05 | PR #74 aberto; Checks run 40776529473 passou. O pacote continua parcial. | WP-01/02; demonstrar nova composição (TEST-16) e revisão auditiva do áudio final/hash (TEST-17). Pode avançar em paralelo a WP-04 quando as dependências estiverem atendidas. |
+| WP-06/07 | Não há aceite integral evidenciado. | WP-00; execução real de WP-06 depende de WP-01…05; WP-07 aguarda os testes de homologação/escala e recuperação. |
+| WP-08/09 | PRs #75 e #76 abertos, empilhados sobre #74 e entre si; Checks 40776613000 e 40776691196 passaram. Implementação parcial, sem publicação real. | Núcleo aprovado e regras G4 ativas; #74 → #75 → #76, depois validar campanha e autorização humana. |
+| FUT-01…05 | Fora do caminho crítico do núcleo. | Começar após os gates e dependências previstos no SDD. |
+
+**Integração:** #66 aguarda WP-00; #72 aguarda WP-00/#66; #74 aguarda WP-01/02; #75 aguarda #74 e o gate do núcleo; #76 aguarda #75. O PR #78 é somente documental e aguarda a esteira; ele não fecha os gates acima.
+
+## Evidência histórica e base do diagnóstico
+
+A tabela abaixo mantém os registros e comparações das capturas anteriores. Os estados de PR que aparecem nela são históricos; para integração, vale o resumo atual acima.
 ## Estado confirmado
 
 | Frente | Evidência atual | Situação |
@@ -277,3 +296,10 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 - Estes resultados comprovam CI e regressões automatizadas específicas, não a matriz completa de autorização ou revisão de logs no runtime; TEST-37/WP-00 continuam parciais.
 - O alias SSH `lofi_vps` continua sem resolver hostname. A tentativa foi somente de conexão não interativa com comando de leitura e falhou antes de abrir sessão; nenhuma operação foi executada na VPS. A auditoria remota e TEST-27 seguem pendentes.
 - Os três PRs permanecem abertos e sem merge; nenhuma mudança foi feita em `main`, VPS, produção, mídia, publicação ou provedores pagos.
+
+## Rechecagem do runtime e do deploy — 28/10/2026 às 22:21 UTC
+
+- A leitura somente de leitura confirmou sete containers Lo-Fi: Studio, creator e export-worker na revisão OCI `cb369c9`; publisher na `1789d4d`; rádio e channel-radio na `be426a8-radio`; music-worker na tag `d877875` com label OCI `development`. O Studio estava saudável.
+- A `main` em `7966a93dfb0761046fe858c44dce413626499012` passou no Checks run `40778344097`. O workflow Deploy `40778828549` falhou na verificação do protocolo antes da transferência: o log confirma que nenhum arquivo de release foi enviado.
+- O shell do host não encontrou `lofi-deploy-protocol` no PATH. Isso, isoladamente, não descreve toda a regra SSH forçada. A captura datada em [sdd-wp00-runtime-recheck-2026-10-28.md](sdd-wp00-runtime-recheck-2026-10-28.md) registra os hashes e limites observados.
+- A consulta não alterou serviços ou dados. TEST-27, matriz de autorização em runtime, atribuição dos escritores de tabelas e paridade operacional seguem pendentes; a captura não fecha WP-00 nem autoriza bootstrap/deploy.
