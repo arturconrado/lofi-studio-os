@@ -34,7 +34,7 @@ def test_structured_proposal_keeps_valid_schedule_and_actions():
 def test_structured_proposal_drops_invalid_schedule_with_creator_question():
     current=ProductionSpec(hours=1)
     patch=filter_patch({'cadence':'custom_markers',
-        'markers':[{'minute':59,'sequence':'phone_check'}], 'scene_brief':'Late-night coding',
+        'markers':[{'minute':15,'sequence':'phone_check'},{'minute':15,'sequence':'stretch_break'}], 'scene_brief':'Late-night coding',
         'open_questions':[]},'proposal',current)
     assert 'cadence' not in patch and 'markers' not in patch
     assert any('agenda proposta' in question.lower() for question in patch['open_questions'])
