@@ -2,21 +2,21 @@
 
 **Atualizado em 28/10/2026.** Documento de acompanhamento derivado do SDD v1.0 e do estado dos PRs no GitHub. É aditivo: não altera o SDD original, não afirma homologação e não autoriza deploy, escrita na VPS, publicação ou geração paga.
 
-## Estado atual verificado em 28/10/2026 às 22:25 UTC
+## Estado atual verificado em 28/10/2026 às 23:46 UTC
 
 | Frente | Estado confirmado agora | Gate para avançar |
 |---|---|---|
-| WP-00 | Parcial. A captura read-only de 22:21 confirma sete containers e revisões distintas; Checks da main passaram, mas o Deploy parou no preflight e não enviou pacote. | TEST-37 em runtime, autoria dos escritores de tabelas sem DDL rastreado, paridade operacional e TEST-27 (restore e rollback isolados). |
-| WP-01 | PR #66 aberto; Checks run 40775922180 passou. Fatia de versionamento, ainda incompleta. | WP-00 concluído, revisão independente e aceites restantes de versão, isolamento e proveniência. |
-| WP-02 | PR #71 mergeado; PR #72 aberto e Checks run 40776063645 passou. A autorização de gasto e escopo avançam, mas o pacote não está completo. | WP-00 e WP-01; TEST-37 completo em runtime e G4-04 nos motores/campanhas restantes. |
-| WP-03 | PR #63 mergeado. A main atual não está implantada: o Deploy run 40778828549 encerrou no preflight de protocolo antes da transferência. | Bootstrap autorizado do deployer, TEST-27 e validação da revisão instalada. |
-| WP-04 | PRs #62 e #70 mergeados; a presença das capacidades no código não representa aceite completo da qualidade/referências. | Dependências de WP-01/02 e referência funcional de WP-03, depois calibração e evidências dos testes do SDD. |
-| WP-05 | PR #74 aberto; Checks run 40776529473 passou. O pacote continua parcial. | WP-01/02; demonstrar nova composição (TEST-16) e revisão auditiva do áudio final/hash (TEST-17). Pode avançar em paralelo a WP-04 quando as dependências estiverem atendidas. |
-| WP-06/07 | Não há aceite integral evidenciado. | WP-00; execução real de WP-06 depende de WP-01…05; WP-07 aguarda os testes de homologação/escala e recuperação. |
-| WP-08/09 | PRs #75 e #76 abertos, empilhados sobre #74 e entre si; Checks 40776613000 e 40776691196 passaram. Implementação parcial, sem publicação real. | Núcleo aprovado e regras G4 ativas; #74 → #75 → #76, depois validar campanha e autorização humana. |
+| WP-00 | Parcial. A captura read-only de 22:21 confirma sete containers e revisões distintas; o Deploy da `main` parou no preflight e não enviou pacote. PRs #80 e #82 acrescentam evidência autenticada da tela de diagnóstico e inventário estático dos possíveis escritores; #82 está aberto, mergeável, com CI run 40788172490 verde. | TEST-37 por papel/endpoint no runtime, autoria dos escritores de tabelas sem DDL rastreado, paridade operacional e TEST-27 (restore e rollback isolados). |
+| WP-01 | PR #66 aberto, mergeável; head `bfa803859eee29e69cd48fa73bba022d74b13a47`, CI run 40789130252 verde. Fatia de versão/hash e concorrência ajustada para manter estados de assets fora da revisão editorial; WP-01 continua incompleto. | WP-00, revisão humana, migração/proveniência integral, vínculo de aprovação a artefato e aceites restantes de versão/isolamento. |
+| WP-02 | PR #71 mergeado; PR #72 aberto, mergeável, CI run 40776063645 verde. Autorização de gasto e escopo avançam, mas não completam o pacote. | WP-00/WP-01; TEST-37 completo em runtime e G4-04 nos motores/campanhas restantes. |
+| WP-03 | PR #63 mergeado. A revisão atual da `main` ainda não está implantada: Deploy run 40778828549 encerrou no preflight de protocolo antes da transferência. PR #79 prepara um bootstrap protegido, está aberto/mergeável com CI run 40784010110 verde e ainda não foi executado. | Configurar o Environment e a aprovação humana exigida, executar bootstrap autorizado, TEST-27 e validar a revisão instalada. |
+| WP-04 | PRs #62 e #70 mergeados; as capacidades de Growth/RAG existem no código, mas não equivalem ao aceite completo de qualidade e referências. | Dependências WP-01/02 e referência funcional WP-03; depois calibração e evidências dos testes do SDD. |
+| WP-05 | PR #74 aberto, mergeável, CI run 40776529473 verde; pacote parcial. | WP-01/02; demonstrar composição nova (TEST-16) e revisão auditiva do áudio final/hash (TEST-17). Pode avançar em paralelo a WP-04 quando dependências atendidas. |
+| WP-06/07 | PR #81 prototipa briefing conversacional, aberto/mergeável, CI run 40786646547 verde; não há aceite integral de WP-06 nem homologação/escala de WP-07. | WP-00; execução real WP-06 depende de WP-01…05; WP-07 aguarda TEST-26/27/29 e evidência de recuperação. |
+| WP-08/09 | PRs #75 e #76 abertos/mergeáveis, CI runs 40776613000 e 40776691196 verdes; empilhados na ordem #74 → #75 → #76. Implementação parcial, sem publicação real nem aceite de campanha. | Núcleo aprovado e regras G4 ativas; validar um Short narrativo, duas histórias distintas, campanha, calendário e autorização humana. |
 | FUT-01…05 | Fora do caminho crítico do núcleo. | Começar após os gates e dependências previstos no SDD. |
 
-**Integração:** #66 aguarda WP-00; #72 aguarda WP-00/#66; #74 aguarda WP-01/02; #75 aguarda #74 e o gate do núcleo; #76 aguarda #75. O PR #78 é somente documental e aguarda a esteira; ele não fecha os gates acima.
+**Integração:** #66/#72 ainda dependem dos gates WP-00 e da revisão humana. #74 segue WP-01/02; #75 depende de #74; #76 depende de #75. #79 não foi executado e depende de configuração/aprovação do Environment e dos gates de backup/rollback. #80/#82 são evidência documental e não fecham WP-00.
 
 ## Evidência histórica e base do diagnóstico
 
