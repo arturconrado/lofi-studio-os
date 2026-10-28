@@ -190,3 +190,18 @@ Sem merge, aprovação formal, deploy, escrita na VPS, publicação ou geração
 - #74 segue aberto, sem merge. A revisão humana final de áudio e a direção sonora própria de Shorts continuam pendentes; WP-05 e G5-06 seguem parciais.
 - O registro deste roteiro está no head #71 `1efec3579f062c702c4ce5a7a7cd22f85fabf599`; Checks run `40670373288` (374) passou. O PR #71 continua aberto e mergeável.
 - Sem merge, deploy, escrita na VPS/`main`, publicação ou geração paga.
+
+## Pesquisa de ferramenta para Shorts — G5-09 — 28/10/2026
+
+Consulta de documentação oficial em 28/10/2026; esta é uma decisão de arquitetura de produto, não um teste de integração:
+
+| Referência | Capacidade relevante | Limite para este projeto |
+|---|---|---|
+| [OpusClip ClipAnything](https://www.opus.pro/clipanything) | Busca momentos com prompts e sinais visuais/sonoros; o fornecedor declara suporte a vídeos com pouco ou nenhum diálogo, ação/personagens e reenquadramento vertical. | É uma ferramenta externa de clipping e análise; seus scores de viralidade não são evidência de demanda nem previsão para nosso canal. Seu uso exigiria enviar a fonte e revisar proveniência/custo fora do pipeline atual. |
+| [WayinVideo — escolher a ferramenta](https://help.wayin.ai/en/articles/16146926-which-wayinvideo-tool-should-i-use) e [editor](https://help.wayin.ai/en/articles/16210969-video-editor-overview) | Distingue busca de momentos visuais, clipping, reframing e edição em timeline; documenta ações mesmo quando há pouca narração. | É uma superfície cloud separada; adicionar integração paralela duplicaria seleção, edição, aprovação e fonte financeira que o SDD quer manter canônicas. |
+| [WayinVideo — música e efeitos](https://help.wayin.ai/en/articles/15692195-how-to-add-music-and-sound-effects) | Editor pode adicionar áudio próprio, biblioteca de música/efeitos ou geração AI de música/efeitos, ajustar tempo/volume e orientar revisão do mix. Disponibilidade depende de plano/workspace. | Demonstra padrões de direção/mix a estudar, mas não prova que seus ativos, licenças ou critérios de revisão atendem ao canal. |
+| [FFmpeg — filtros oficiais](https://ffmpeg.org/ffmpeg-filters.html) | Crop, scale, overlay, split e filtros com linha do tempo permitem reenquadrar e compor localmente em timestamps controlados. | É compositor determinístico, não entende sozinho a semântica de uma cena, escolhe narrativa ou aprova música/efeitos. |
+
+**Decisão: adaptar o fluxo local; dispensar integração com OpusClip/WayinVideo neste marco.** O harness deve analisar materiais aprovados e intervalos reais, propor história e enquadramento vertical, registrar direção sonora e entregar a montagem em Revisão; o compositor existente executa crop/fundo sincronizado e trilhas sem duplicação. Integração futura só será considerada se um gap medido não puder ser coberto localmente, após validar exportação, direitos/proveniência, custo, privacidade, API e experiência de revisão. Nenhuma conta foi conectada, arquivo enviado ou crédito externo consumido.
+
+Esta pesquisa fecha somente a decisão documental de G5-09; não prova implementação de análise visual sem fala, reenquadramento inteligente, direção sonora G5-06, nem os aceites de WP-08/TEST-18/19.
