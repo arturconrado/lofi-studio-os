@@ -10,14 +10,15 @@ Em PostgreSQL descartável, criei um registro privado em um workspace, configure
 
 - O contexto `WORKSPACE` distingue “não vinculado” do escopo público explícito.
 - Processos de worker sem contexto continuam usando `LOFI_WORKSPACE_ID` como padrão.
-- O middleware da API define o workspace a partir da sessão autenticada ou define escopo público explícito para rotas públicas, `platform_admin` sem workspace e Basic admin.
+- A autenticação vincula o workspace da sessão; rotas públicas e o fallback de Basic admin vinculam escopo público explícito.
+- Sessões `platform_admin` sem workspace, Basic admin e rotas públicas ficam no escopo público.
 - Callbacks e rotinas que selecionam um schema explicitamente continuam podendo vincular o workspace correto.
 
 ## Evidência automatizada
 
 - Regressão integrada: sessão de workspace vê o próprio registro; `platform_admin` e Basic admin não herdam um workspace apenas por variável de processo.
 - Regressões unitárias: worker sem contexto herda o valor padrão; contexto público explícito não herda; a API não recebe fila nem cliente de armazenamento com prefixo de tenant, enquanto o contexto de worker continua recebendo ambos isolados.
-- Suíte `tests/` em PostgreSQL descartável: 282 testes aprovados, 3 avisos de depreciação.
+- Suíte `tests/` em PostgreSQL descartável após reorganizar os testes em arquivos independentes: 281 testes aprovados, 3 avisos de depreciação.
 
 ## Limites
 

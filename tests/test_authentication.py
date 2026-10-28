@@ -10,16 +10,6 @@ from studio.tenancy import ScopedStorage
 pytestmark=pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
 
 
-def test_unbound_workers_inherit_default_workspace_but_explicit_public_scope_does_not(monkeypatch):
-    import uuid
-    from studio.tenancy import WORKSPACE,active_workspace
-    workspace=str(uuid.uuid4())
-    monkeypatch.setenv('LOFI_WORKSPACE_ID',workspace)
-    assert active_workspace()==workspace
-    marker=WORKSPACE.set(None)
-    try:assert active_workspace() is None
-    finally:WORKSPACE.reset(marker)
-
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv('DATABASE_URL',os.environ['LOFI_TEST_DATABASE_URL'])
@@ -89,37 +79,6 @@ def test_viewer_and_wrong_origin_denied(client):
     assert client.get('/api/settings').status_code==200
     assert client.put('/api/settings',json={},headers=headers).status_code==403
 
-
-def test_public_admin_requests_do_not_inherit_worker_workspace(client,monkeypatch):
-    """Worker defaults must never choose a tenant for a browser/API request."""
-    from datetime import datetime,timedelta,timezone
-    import base64,secrets
-    from studio.core import init_db
-
-    monkeypatch.delenv('LOFI_WORKSPACE_ID',raising=False)
-    init_db()  # Ensure the public schema exists in this disposable test database.
-    _,identity=signup(client)
-    private={'title':'Tenant-only track','collection':'Private','bpm':70,'prompt':'Private workspace content'}
-    response=client.post('/api/tracks',json=private,headers={'X-CSRF-Token':identity['csrf_token']})
-    assert response.status_code==200,response.text
-    private_id=response.json()['id']
-
-    monkeypatch.setenv('LOFI_WORKSPACE_ID',str(identity['workspace_id']))
-    platform_token=secrets.token_urlsafe(32)
-    with auth.connection() as c:
-        c.execute('INSERT INTO public.os_platform_sessions(token_hash,csrf_hash,expires_at) VALUES(%s,%s,%s)',
-                  (auth.digest(platform_token),auth.digest('platform-csrf'),datetime.now(timezone.utc)+timedelta(hours=1)))
-    client.cookies.clear()
-    client.cookies.set(auth.COOKIE,platform_token)
-    platform_response=client.get('/api/tracks')
-    assert platform_response.status_code==200,platform_response.text
-    assert private_id not in {row['id'] for row in platform_response.json()}
-
-    client.cookies.clear()
-    basic=base64.b64encode(b'legacy-admin:legacy-local-test-password').decode()
-    basic_response=client.get('/api/tracks',headers={'Authorization':'Basic '+basic})
-    assert basic_response.status_code==200,basic_response.text
-    assert private_id not in {row['id'] for row in basic_response.json()}
 
 def test_legacy_admin_remains_separate(client):
     assert client.get('/api/tracks',auth=('legacy-admin','legacy-local-test-password')).status_code==200
