@@ -321,6 +321,12 @@ Essa evidência encerra a dúvida sobre o estado atual desse vídeo específico:
 | `studio/youtube_publish.py` | `POST` | `/api/youtube/publications/{jid}/resume` | 350 | Sessão + CSRF + filtros globais de papel; Basic admin: handler pendente |
 | `studio/youtube_publish.py` | `POST` | `/api/youtube/publications/{jid}/retry` | 330 | Sessão + CSRF + filtros globais de papel; Basic admin: handler pendente |
 
+## Atualização de autorização de gastos — PR #72
+
+No head `2d0b57198e5d3e9db113b491f799f2b655864273` do PR #72, a regressão `test_paid_routes_declare_backend_spend_permission` percorre os routers montados e confirma a dependência de autorização nos 14 handlers HTTP identificados como iniciadores de gasto: `request_generation`, `start`, `plan`, `produce`, `suggest_metadata`, `suggest_track`, `propose`, `suggest`, `package_suggestion`, `submit`, `create`, `advance_now`, `resume` e `generate`. A função `require_spend_permission` permite `workspace_owner`, `workspace_admin` e `platform_admin`; identidade ausente, creator, operator e viewer são negados. O middleware só atribui `platform_admin` ao Basic admin depois de validar as credenciais.
+
+Os pontos de submissão em `creator_service.py`, `batch_factory.py` e `workshop_provider.py` são workers, não rotas HTTP independentes; a auditoria estática os relaciona aos endpoints protegidos que autorizam o trabalho. Isso cobre a declaração dos handlers no código desse PR, mas não prova que essa branch esteja implantada, que todas as chamadas indiretas estejam enumeradas no runtime, nem a matriz de papéis/escopos de leitura, edição, aprovação e publicação. A cobertura completa de G4-02/TEST-37 e a validação dinâmica seguem pendentes em WP-00.
+
 ## Limites e próximos passos
 
 - A auditoria não importou o app nem chamou endpoints: o ambiente de leitura não tem a dependência FastAPI instalada. A extração usa AST da fonte e foi confrontada com as 223 declarações `app/router` encontradas por busca textual.
