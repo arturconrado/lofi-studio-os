@@ -12,6 +12,7 @@ A extração estática registrou **223 rotas HTTP declaradas em 25 módulos**. O
 - O fallback de Basic admin é um caminho distinto: o middleware autoriza a requisição sem definir `req.state.identity` nem o contexto de workspace e não aplica os filtros de papel/CSRF da sessão. Cada handler precisa ser revisado para confirmar como trata esse caminho; o mapa abaixo descreve só a política global, não uma garantia de autorização funcional.
 - Algumas operações verificam autorização adicional dentro dos próprios handlers (por exemplo, gestão/publicação no YouTube e direitos de mídia). O middleware global não substitui a auditoria por endpoint nem demonstra isolamento de cada consulta ao banco.
 - A tentativa read-only sem sessão de obter `/openapi.json` retornou 401; não foi obtido catálogo dinâmico. `GET /health` não foi chamado.
+- A suíte `tests/test_authentication.py` exige `LOFI_TEST_DATABASE_URL` e executa gravações/limpeza no banco configurado. Essa variável não está disponível nesta sessão; não rodei a suíte nem apontei testes para qualquer banco compartilhado. A matriz de papéis precisa de execução em PostgreSQL descartável antes do aceite.
 
 ## Rotas declaradas
 
