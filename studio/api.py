@@ -33,7 +33,10 @@ async def auth(req:Request,call_next):
     public=req.url.path in ('/health','/login','/admin/login') or req.url.path.startswith('/static/') or req.url.path in (
         '/api/auth/capabilities','/api/auth/register','/api/auth/login','/api/auth/admin-login',
         '/api/auth/verify','/api/auth/forgot-password','/api/auth/reset-password')
-    if public:return await call_next(req)
+    if public:
+        scope=WORKSPACE.set(None)
+        try:return await call_next(req)
+        finally:WORKSPACE.reset(scope)
     identity=session(req.cookies.get(COOKIE))
     if identity:
         if mutating and not secrets.compare_digest(digest(req.headers.get('X-CSRF-Token','')),identity['csrf_hash']):
