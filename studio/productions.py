@@ -243,7 +243,7 @@ def create_block(c,p,k):
               (pid,pid,plan['theme'][:200],json.dumps(plan,ensure_ascii=False),p['channel_id']))
     from .creator_plan_versions import append
     append(c,pid,1,plan)
-    bid=authorize_batch(c,pid,plan,60,p['channel_id'],budget)
+    bid=authorize_batch(c,pid,plan,60,p['channel_id'],budget,covered_by_production_id=p['id'])
     c.execute('INSERT INTO production_blocks(production_id,hour_index,plan_id,program_id,budget) VALUES(%s,%s,%s,%s,%s)',(p['id'],k,pid,bid,budget))
     audit(c,'PRODUCTION_BLOCK_BOOKED',str(p['id']),f'{bid}; hour {k+1}/{p["hours"]}; ceiling USD{budget}')
     return bid

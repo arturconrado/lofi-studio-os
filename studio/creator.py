@@ -137,7 +137,7 @@ def recipe_prompt(prompt,recipe):
   ref=reference_brief(v.get('default_scenario'))
   if ref:prompt+='. Keep the canonical identity exactly: '+ref['identity']['girl']+' '+ref['identity']['cat']
  return prompt+'. Channel recipe: '+recipe['copy']['style_title']+'. Musical direction: '+(m.get('bible') or DIRECTIONS[m['style_id']])+(' Instruments: '+', '.join(m['instruments'])+'.' if m.get('instruments') else '')
-def authorize_batch(c,plan_id,plan_data,minutes,channel_id,budget):
+def authorize_batch(c,plan_id,plan_data,minutes,channel_id,budget,covered_by_production_id=None):
  """Book one bounded music batch for a plan. Caller holds lock 192837467 and checked paid generation."""
  if c.execute("SELECT 1 FROM production_batches WHERE channel_id=%s AND state IN ('producing','waiting','queued')",(channel_id,)).fetchone():raise HTTPException(409,'Este canal já tem um lote em produção ou na fila. Aguarde antes de criar outro para ele.')
  image_reserve=Decimal('0') if plan_data.get('visual_reference') else Decimal('.15')
@@ -146,6 +146,14 @@ def authorize_batch(c,plan_id,plan_data,minutes,channel_id,budget):
  if budget<estimate:raise HTTPException(422,'O teto precisa cobrir as músicas e o visual escolhido; a duração real pode exigir faixas adicionais.')
  from .financial import total_usage
  remaining=Decimal(runtime.settings(c)['total_limit'])-total_usage(c)
+ # Multi-hour productions reserve their full ceiling before creating blocks.
+ # Converting part of that ceiling into a batch reservation must not count the
+ # same dollars twice while the production row is still locked by its caller.
+ if covered_by_production_id:
+  coverage=c.execute('''SELECT GREATEST(p.cost_ceiling_usd-COALESCE(
+      (SELECT sum(budget) FROM production_blocks WHERE production_id=p.id),0),0) n
+      FROM productions p WHERE p.id=%s''',(covered_by_production_id,)).fetchone()
+  if coverage:remaining+=Decimal(coverage['n'] or 0)
  if Decimal(budget)>remaining:raise HTTPException(409,f'O teto de US${Decimal(budget):.2f} supera o saldo global disponível de US${max(remaining,Decimal(0)):.2f}. Ajuste o limite em Ajustes.')
  bid='LOFI-'+str(plan_id).split('-')[0].upper()
  c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,detail,channel_id) VALUES(%s,'queued',%s,%s,'Aguardando produção autorizada pelo usuário',%s)",(bid,minutes*60,budget,channel_id))
