@@ -50,3 +50,13 @@ Esta captura atualiza a evidência do WP-00 sobre serviços, identidade das imag
 ## Checagem de autenticação do runtime
 
 Uma requisição GET local ao endpoint OpenAPI do Studio retornou HTTP 401 (`Autenticação necessária`). Isso comprova que o endpoint de documentação está atrás do middleware de sessão; não revela a lista de rotas nem comprova as permissões específicas de cada endpoint. A aba da plataforma estava em `/login`, então a matriz runtime de permissões segue pendente de uma sessão autenticada.
+
+## Revalidação read-only — 28/10/2026, aproximadamente 05:15 UTC
+
+O alias local `lofi_vps` ainda não resolvia. A lista autenticada de droplets da DigitalOcean identificou um único droplet ativo compatível com o servidor; usei o endereço retornado pela API com a chave `lofi_vps`, host-key checking estrito e comandos apenas de leitura. O nome observado pelo SSH corresponde ao droplet. Nenhum endereço IP ou conteúdo de chave foi registrado neste documento.
+
+Nova inspeção de estado confirmou os sete containers Lo-Fi ativos e em execução, com as mesmas tags e revisões OCI descritas acima: core em `cb369c9`, YouTube publisher em `1789d4d`, rádio/channel-radio em `be426a8` e music-worker com rótulo `development`. Isso confirma o estado observado, sem provar saúde funcional ou equivalência dos serviços.
+
+A entrada ativa de deploy em `authorized_keys` continua restrita e chama um comando fixo no host. O SHA-256 do executável chamado continua idêntico ao `ops/auto-deploy.sh` de `origin/main` (`cb369c9`, prefixo `4b97425d`). O `ops/auto-deploy.sh` no head atual do PR #63 continua diferente (prefixo `803d0961`). O PR não instala esse script no caminho fixo; o bloqueio de integração permanece. A leitura não abriu `.env`, valores de segredo, conteúdo de banco, volumes ou mídia.
+
+Resultado: a falha do alias não impede mais a consulta autorizada de leitura enquanto a API da DigitalOcean fornecer o droplet atual, mas o alias local segue sem correção. Nenhum arquivo, serviço, banco, configuração ou dado da VPS foi alterado.
