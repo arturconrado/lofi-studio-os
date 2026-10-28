@@ -102,15 +102,48 @@ jobs:
           printf 'Installed deployer SHA-256: %s\n' "$actual_installed"
           printf 'Protocol self-check: %s\n' "$protocol"
           REMOTE
-      - name: Verify forced-command handshake
+      - name: Verify forced-command handshake and roll back on failure
         env:
           HOST: ${{ secrets.VPS_HOST }}
           KEY: ${{ secrets.VPS_DEPLOY_KEY }}
+          BOOTSTRAP_KEY: ${{ secrets.VPS_BOOTSTRAP_KEY }}
+          EXPECTED_OLD: ${{ inputs.expected_installed_sha256 }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           printf '%s\n' "$KEY" > ~/.ssh/deploy
           chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$BOOTSTRAP_KEY" > ~/.ssh/bootstrap
+          chmod 600 ~/.ssh/bootstrap
+          expected_new=$(sha256sum ops/auto-deploy.sh | awk '{print $1}')
+          set +e
           protocol=$(ssh -i ~/.ssh/deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "root@${HOST}" "lofi-deploy-protocol")
-          test "$protocol" = "LOFI_DEPLOY_PROTOCOL=2"
+            "root@${HOST}" "lofi-deploy-protocol" 2>&1)
+          handshake_status=$?
+          set -e
+          if [ "$handshake_status" -ne 0 ] || [ "$protocol" != "LOFI_DEPLOY_PROTOCOL=2" ]; then
+            echo "Forced-command handshake failed; restoring the previous deployer." >&2
+            ssh -i ~/.ssh/bootstrap -o BatchMode=yes -o StrictHostKeyChecking=yes "root@${HOST}" \
+              "EXPECTED_OLD=${EXPECTED_OLD} EXPECTED_NEW=${expected_new} RUN_ID=${RUN_ID} bash -s" <<'ROLLBACK'
+          set -euo pipefail
+          target=/opt/lofi-studio-os-releases/bin/auto-deploy
+          backup="${target}.pre-protocol2-${RUN_ID}"
+          failed="${target}.failed-protocol2-${RUN_ID}"
+          rollback_stage="${target}.rollback-${RUN_ID}"
+          test -f "$target" && test ! -L "$target"
+          test -f "$backup" && test ! -L "$backup"
+          test ! -e "$failed" && test ! -e "$rollback_stage"
+          current_sha=$(sha256sum "$target" | awk '{print $1}')
+          backup_sha=$(sha256sum "$backup" | awk '{print $1}')
+          test "$current_sha" = "$EXPECTED_NEW"
+          test "$backup_sha" = "$EXPECTED_OLD"
+          cp -a "$target" "$failed"
+          cp -a "$backup" "$rollback_stage"
+          mv -f "$rollback_stage" "$target"
+          restored_sha=$(sha256sum "$target" | awk '{print $1}')
+          test "$restored_sha" = "$EXPECTED_OLD"
+          printf 'Previous deployer restored; failed candidate preserved at %s\n' "$failed"
+          ROLLBACK
+            exit 1
+          fi
           printf 'Forced-command handshake: %s\n' "$protocol"

@@ -19,7 +19,7 @@ Depois do merge deste workflow, abrir Actions → Bootstrap production deployer 
 
 O segundo valor é o hash completo observado na captura read-only do WP-00 em 28/10/2026. Se o script atual no servidor tiver outro hash, o job falha sem substituí-lo; faça nova auditoria antes de qualquer tentativa.
 
-O job copia apenas ops/auto-deploy.sh para o host, confirma o hash esperado do arquivo existente, guarda uma cópia com sufixo .pre-protocol2-<run_id>, instala o novo arquivo atomicamente e confirma o protocolo tanto no script quanto pelo comando SSH forçado. Se a troca falhar após a instalação, tenta restaurar a cópia anterior. O workflow não apaga backups nem versões antigas.
+O job copia apenas ops/auto-deploy.sh para o host, confirma o hash esperado do arquivo existente, guarda uma cópia com sufixo .pre-protocol2-<run_id>, instala o novo arquivo atomicamente e confirma o protocolo tanto no script quanto pelo comando SSH forçado. Se a troca falhar após a instalação, tenta restaurar a cópia anterior. Se o handshake da chave restrita falhar depois da troca, tenta restaurar atomicamente o backup via chave de bootstrap, desde que os hashes do candidato e do backup ainda correspondam aos esperados; preserva o candidato com falha e não apaga backups nem versões antigas.
 
 ## Limites após o bootstrap
 
