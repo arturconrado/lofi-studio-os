@@ -303,3 +303,11 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 - A `main` em `7966a93dfb0761046fe858c44dce413626499012` passou no Checks run `40778344097`. O workflow Deploy `40778828549` falhou na verificação do protocolo antes da transferência: o log confirma que nenhum arquivo de release foi enviado.
 - O shell do host não encontrou `lofi-deploy-protocol` no PATH. Isso, isoladamente, não descreve toda a regra SSH forçada. A captura datada em [sdd-wp00-runtime-recheck-2026-10-28.md](sdd-wp00-runtime-recheck-2026-10-28.md) registra os hashes e limites observados.
 - A consulta não alterou serviços ou dados. TEST-27, matriz de autorização em runtime, atribuição dos escritores de tabelas e paridade operacional seguem pendentes; a captura não fecha WP-00 nem autoriza bootstrap/deploy.
+
+## Protótipo conversacional WP-06 / G3-02 — 28/10/2026
+
+- PR #81 implementa uma primeira interação opcional no fluxo atual de Produzir: briefing livre → sugestão de cena → edição/revisão → aplicação explícita à ideia e ao `ProductionSpec` do storyboard. A etapa exige confirmação de custo máximo de US$ 0,10; não inicia produção.
+- A idempotência da sugestão é vinculada a um hash do briefing e do contexto. A regressão `test_completed_suggestion_reuses_without_provider_or_budget` confirma que a mesma entrada reutiliza a resposta e que o mesmo ID com conteúdo diferente é rejeitado. A UI invalida o Growth após mudanças e impede salvar uma proposta editada sem aplicá-la novamente.
+- CI `verify` passou no head `d4248edbb16334fb8b2b23a375101ee241cb4936`, run `40786192284`. Isso confirma a suíte automatizada da branch, não valida visual, homologação no Studio ou conclusão do requisito.
+- É apenas protótipo. A proposta completa estruturada/crítica, versão canônica consumida por todos os motores e evidência de jornada visual relacionada a TEST-36 continuam pendentes. WP-00 permanece aberto; a execução real de WP-06 também depende de WP-01…05. Não considerar o PR aprovado ou pronto para merge até os gates do SDD serem atendidos.
+- Nenhum provedor foi chamado durante a implementação; sem merge, deploy, escrita na VPS/`main` ou alteração em dados externos.
