@@ -80,3 +80,15 @@ O valor de `studio_schema_state.revision`, consultado com transação read-only,
 ## Estatísticas agregadas das duas tabelas — 28/10/2026, 05:25 UTC
 
 `pg_stat_user_tables` reportou, para cada tabela, um insert, zero updates/deletes e estimativa de uma linha viva; `stats_reset` do banco retornou `NULL`. São contadores agregados, sem conteúdo de linhas, sem autoria de comando/processo e sem intervalo temporal atribuível nesta evidência. Eles confirmam atividade de inserção contabilizada pelas estatísticas atuais, mas não identificam o escritor, nem a criação estrutural, política de retenção ou atualidade exata dos dados. Não usar estes contadores para decidir migração ou exclusão.
+
+## Busca read-only por leitores/escritores das tabelas — 28/10/2026, 05:33 UTC
+
+Pesquisei as referências a `live_motion_studies` e `visual_project_budgets` nos diretórios de aplicação `/app` e `/opt` dos sete containers Lo-Fi ativos, sem importar nem executar código da aplicação. As referências encontradas são:
+
+- `live_motion_studies`: somente `to_regclass` e `SELECT object_key, report` em `studio/live_presentation.py`, arquivo presente no core, publisher e serviços de rádio.
+- `visual_project_budgets`: somente `to_regclass` e `SELECT limit_usd` em `studio/workshop_api.py`, no core e publisher.
+- Nenhuma referência a essas relações foi encontrada na imagem do music-worker.
+
+A busca não encontrou DDL nem comandos `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE` ou `DROP` nessas árvores de aplicação. Portanto, as imagens e versões de aplicação inspecionadas não explicam quem criou as tabelas nem quem inseriu as linhas contabilizadas pelo PostgreSQL. Isso reduz o escopo do código em execução que precisa ser investigado, mas não prova ausência de SQL dinâmico, processos externos, scripts fora de `/app` e `/opt`, jobs históricos ou escritores executados em versões anteriores. Origem, autor, retenção e comportamento de escrita dessas relações continuam sem atribuição demonstrada; não migrar nem remover com base apenas nesta busca.
+
+A consulta foi somente leitura: nenhum serviço, arquivo, dado ou configuração foi alterado. Essa evidência complementa o catálogo e as estatísticas agregadas, mas não fecha esse gate de WP-00.
