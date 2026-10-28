@@ -4,7 +4,7 @@
 
 A extração estática registrou **223 rotas HTTP declaradas em 25 módulos**. Os prefixos dos routers foram combinados com os caminhos das funções e os routers aninhados do Creator foram expandidos. O inventário abaixo é reproduzível a partir do código; não representa uma captura dinâmica de OpenAPI nem prova que cada rota esteja ativa na imagem implantada.
 
-Verificação estrutural read-only: a contagem AST dos decorators HTTP no baseline encontrou 223 operações em 25 módulos e coincide com as 223 linhas do inventário. Isso valida quantidade e cobertura dos decorators, mas não valida por si só os caminhos concatenados nem a imagem implantada.
+Verificação estrutural: a contagem AST dos decorators HTTP no baseline encontrou 223 operações em 25 módulos e coincide com as 223 linhas do inventário. A construção dinâmica local de `app.openapi()` também encontrou 223 operações em 199 caminhos, cobrindo os prefixos e routers montados pelo código. Isso valida o registro local da aplicação, mas não valida a imagem implantada.
 
 ## Regras de acesso encontradas no código
 
@@ -14,7 +14,7 @@ Verificação estrutural read-only: a contagem AST dos decorators HTTP no baseli
 - O fallback de Basic admin é um caminho distinto: o middleware autoriza a requisição sem definir `req.state.identity` nem o contexto de workspace e não aplica os filtros de papel/CSRF da sessão. Cada handler precisa ser revisado para confirmar como trata esse caminho; o mapa abaixo descreve só a política global, não uma garantia de autorização funcional.
 - Algumas operações verificam autorização adicional dentro dos próprios handlers (por exemplo, gestão/publicação no YouTube e direitos de mídia). O middleware global não substitui a auditoria por endpoint nem demonstra isolamento de cada consulta ao banco.
 - A tentativa read-only sem sessão de obter `/openapi.json` retornou 401; não foi obtido catálogo dinâmico. `GET /health` não foi chamado.
-- A suíte `tests/test_authentication.py` exige `LOFI_TEST_DATABASE_URL` e grava/limpa o banco configurado. A variável não estava configurada inicialmente; para validar sem risco apontei as suítes executadas a um PostgreSQL temporário local, isolado e descartável em `127.0.0.1:55439`, sem usar banco compartilhado. `tests/test_authentication.py` passou com 22 testes e `tests/test_youtube_publish.py` com 10; ambas emitiram apenas três avisos de depreciação conhecidos por execução. Esses resultados cobrem somente essas duas suítes, não toda a matriz do SDD nem a paridade com produção.
+- As suítes usam `LOFI_TEST_DATABASE_URL` e gravam/limpam o banco configurado. A variável não estava configurada inicialmente; para validar sem risco apontei os testes a um PostgreSQL temporário local, isolado e descartável em `127.0.0.1:55439`, sem usar banco compartilhado. A suíte de autenticação passou (22 testes), a de publicação YouTube passou (10) e a execução completa de `tests/` passou (280 testes, 3 avisos de depreciação). Isso não equivale a concluir os aceites TEST-01…TEST-41 nem prova paridade com produção ou homologação visual.
 
 ## Revisão estática dos handlers de YouTube/publicação
 
@@ -46,7 +46,7 @@ Todas as rotas acima estão fora da allowlist pública e, portanto, dependem da 
 
 ### Cobertura estática identificada nos testes
 
-`tests/test_authentication.py` passou (22 testes) e cobre lista privada por workspace, criação/idempotência de publicação, tentativas com IDs de outro workspace e leitura de rascunho de piloto entre workspaces. `tests/test_youtube_publish.py` passou (10 testes) e cobre liberação confirmada, recusa de exclusão sem escopo de gerenciamento, exclusão idempotente e atualização do snippet. A nova regressão `test_workspace_admin_cannot_manage_members_or_touch_other_workspace` cobre listagem permitida ao workspace admin, mutações negadas para esse papel e para Basic admin, além de alvo fora do workspace. Ainda não há matriz abrangente `viewer`/`creator`/`operator`/`workspace_admin`/Basic para cada rota listada, nem teste localizado da rota `/prepare`; paridade autenticada com a imagem implantada também segue sem prova.
+`tests/test_authentication.py` passou (22 testes) e cobre lista privada por workspace, criação/idempotência de publicação, tentativas com IDs de outro workspace e leitura de rascunho de piloto entre workspaces. `tests/test_youtube_publish.py` passou (10 testes) e cobre liberação confirmada, recusa de exclusão sem escopo de gerenciamento, exclusão idempotente e atualização do snippet. A suíte completa em `tests/` passou (280 testes, 3 avisos de depreciação). A nova regressão `test_workspace_admin_cannot_manage_members_or_touch_other_workspace` cobre listagem permitida ao workspace admin, mutações negadas para esse papel e para Basic admin, além de alvo fora do workspace. Ainda não há matriz abrangente `viewer`/`creator`/`operator`/`workspace_admin`/Basic para cada rota listada, nem teste localizado da rota `/prepare`; paridade autenticada com a imagem implantada também segue sem prova.
 
 **Resultado WP-00:** a análise estática avançou nos handlers de YouTube/publicação e autenticação/membros; paridade de imagem, autorização dinâmica por endpoint, cobertura completa de papéis, Basic admin e isolamento runtime continuam pendentes. A presença de `profile()`, `management_identity()` ou do middleware não prova sozinha cada autorização em execução.
 
@@ -70,7 +70,7 @@ Escopo desta revisão: handlers de `studio/authentication.py` e testes correspon
 
 ### Resultado desta fatia
 
-A leitura estática identificou checagens de ator e workspace em autenticação/membros; as 22 verificações da suíte autenticada passaram no PostgreSQL temporário. Isso ainda não fecha autorização dinâmica em toda a superfície nem paridade com produção. Próxima validação: cobrir concorrência simultânea do último owner, papel inválido, schema e identidade após troca de workspace, e comparar a matriz por handler com cada imagem/runtime.
+A leitura estática identificou checagens de ator e workspace em autenticação/membros; as 280 verificações automatizadas de `tests/` passaram no PostgreSQL temporário. Isso ainda não fecha autorização dinâmica em toda a superfície nem paridade com produção. Próxima validação: cobrir concorrência simultânea do último owner, papel inválido, schema e identidade após troca de workspace, e comparar a matriz por handler com cada imagem/runtime.
 
 ## Rotas declaradas
 
