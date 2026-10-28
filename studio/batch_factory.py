@@ -26,7 +26,7 @@ def progress(c):
     return c.execute("""SELECT count(*) FILTER(WHERE j.status='COMPLETED') completed,
     COALESCE(sum(a.duration_seconds) FILTER(WHERE j.status='COMPLETED'),0) seconds,
     count(*) FILTER(WHERE j.status='RUNNING') active,
-    COALESCE(sum(GREATEST(j.estimated_cost,COALESCE(j.actual_cost,0))),0) reserved
+    COALESCE(sum(COALESCE(j.actual_cost,j.estimated_cost)),0) reserved
     FROM jobs j LEFT JOIN assets a ON a.id=j.id WHERE j.track_id LIKE %s""",(BATCH+'-%',)).fetchone()
 
 def update(c,state='producing',detail=''):

@@ -1,6 +1,7 @@
 name: Deploy
 # Production deploy after the Checks workflow passes on main. The VPS key is bound to
-# ops/auto-deploy.sh (forced command): it can deploy studio, creator and export-worker, nothing else.
+# ops/auto-deploy.sh (forced command). Check the installed protocol before sending a release;
+# an older forced command must fail closed until it is deliberately bootstrapped.
 on:
   workflow_run:
     workflows: [Checks]
@@ -27,6 +28,15 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
           printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+      - name: Verify installed deployer protocol
+        env:
+          HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          protocol=$(ssh -i ~/.ssh/deploy -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" "lofi-deploy-protocol")
+          if [ "$protocol" != "LOFI_DEPLOY_PROTOCOL=2" ]; then
+            echo "The installed VPS deployer is not protocol 2; no release archive was sent."
+            exit 1
+          fi
       - name: Deploy (waits while production is busy)
         env:
           HOST: ${{ secrets.VPS_HOST }}

@@ -7,6 +7,7 @@ import re
 import tempfile
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlsplit
 import httpx
 from fastapi import HTTPException
 from .core import db, storage
@@ -17,6 +18,16 @@ from .workshop_api import KIND, project, assets, save, store_media, image_bytes
 IMAGE_MODEL = 'bytedance-seed/seedream-4.5'
 VIDEO_MODEL = 'google/veo-3.1-lite'
 BASE = 'https://openrouter.ai/api/v1'
+
+
+def provider_usage_cost(usage):
+    """Return only a finite, nonnegative provider-reported final charge."""
+    from decimal import InvalidOperation
+    if not isinstance(usage, dict) or 'cost' not in usage:return None
+    try:value=Decimal(str(usage['cost']))
+    except (InvalidOperation, TypeError, ValueError):return None
+    if not value.is_finite() or value<0 or value>Decimal('9999.999999'):return None
+    return value
 
 
 def quote(kind, seconds, resolution='720p'):
@@ -94,16 +105,31 @@ def complete(c, task, raw, mime, seconds=None):
               (json.dumps(p), 'Pronto para aprovação' if attached else 'Arquivo preservado; o roteiro mudou durante a geração', task['id']))
 
 
-def video_body(payload, references):
+def video_body(payload, references, callback_url=None):
     if payload.get('resolution', '720p') not in ('720p', '1080p'):
         raise ValueError('Unsupported video resolution')
     frames = [{'type': 'image_url', 'image_url': {'url': references[0]}, 'frame_type': 'first_frame'}]
     if payload.get('last_frame'):
         if len(references) < 2: raise ValueError('Return frame missing')
         frames.append({'type': 'image_url', 'image_url': {'url': references[1]}, 'frame_type': 'last_frame'})
-    return {'model': VIDEO_MODEL, 'prompt': payload['prompt'], 'duration': payload['seconds'],
+    body={'model': VIDEO_MODEL, 'prompt': payload['prompt'], 'duration': payload['seconds'],
             'resolution': payload.get('resolution', '720p'), 'aspect_ratio': '16:9', 'generate_audio': False,
             'frame_images': frames, 'provider': {'allow_fallbacks': False}}
+    if callback_url:body['callback_url']=callback_url
+    return body
+
+
+def callback_url(payload):
+    origin=os.getenv('STUDIO_PUBLIC_ORIGIN','').rstrip('/')
+    parsed=urlsplit(origin)
+    token=payload.get('callback_token');workspace=payload.get('callback_workspace','public')
+    if parsed.scheme!='https' or not parsed.netloc or parsed.path not in ('','/') or parsed.query or parsed.fragment:return None
+    if not isinstance(token,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}',token):return None
+    if workspace!='public':
+        from uuid import UUID
+        try:workspace=str(UUID(workspace))
+        except (ValueError,TypeError):return None
+    return origin+'/api/creator/workshop/provider-callback/'+workspace+'/'+token
 
 
 def submit(tid):
@@ -125,30 +151,48 @@ def submit(tid):
                 raw = image_bytes(base64.b64decode(encoded, validate=True))
                 with db() as c: complete(c, t, raw, 'image/png'); c.commit()
             else:
-                body = video_body(p, refs)
+                body = video_body(p, refs, callback_url(p))
                 r = client.post(BASE + '/videos', headers=headers, json=body); r.raise_for_status()
                 job = r.json()['id']
                 if not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', job): raise ValueError('Invalid provider job')
                 with db() as c:
-                    c.execute("UPDATE factory_tasks SET status='RUNNING',payload=payload||%s::jsonb,detail='Animando trecho; consulte o andamento',updated_at=now() WHERE id=%s",
+                    # A terminal callback may win the race with this HTTP response.
+                    # Preserve its terminal status and payload if it already arrived.
+                    c.execute("UPDATE factory_tasks SET status='RUNNING',payload=payload||%s::jsonb,detail=CASE WHEN payload ? 'cancel_requested_at' THEN 'Cancelamento local solicitado; o pedido original continua em acompanhamento' ELSE 'Animando trecho; consulte o andamento' END,updated_at=now() WHERE id=%s AND status='SUBMITTING'",
                               (json.dumps({'provider_job_id': job}), tid)); c.commit()
     except Exception:
         with db() as c:
-            c.execute("UPDATE factory_tasks SET status='UNCERTAIN',detail='Envio sem conclusão confirmada. Reserva mantida; confira com o provedor antes de gerar novamente.',updated_at=now() WHERE id=%s", (tid,)); c.commit()
+            c.execute("UPDATE factory_tasks SET status='UNCERTAIN',detail=CASE WHEN payload ? 'cancel_requested_at' THEN 'Cancelamento local solicitado, mas o envio pode ter sido aceito. Reserva mantida; reconciliando o pedido original.' ELSE 'Envio sem conclusão confirmada. Reserva mantida; aguardando callback ou reconciliação.' END,updated_at=now() WHERE id=%s AND status IN ('SUBMITTING','QUEUED')", (tid,)); c.commit()
 
 
 def refresh(tid):
     # Lock per task: concurrent refresh clicks must not duplicate media or roll selection back.
     with db() as c:
         t = c.execute('SELECT * FROM factory_tasks WHERE id=%s AND kind=%s FOR UPDATE', (tid, KIND)).fetchone()
-        if not t or t['status'] != 'RUNNING': return
+        if not t or t['status'] not in ('RUNNING','UNCERTAIN') or not t['payload'].get('provider_job_id'): return
         p = t['payload']; headers = {'Authorization': 'Bearer ' + runtime.key()}
         with httpx.Client(timeout=120, follow_redirects=False) as client:
             url = BASE + '/videos/' + p['provider_job_id']
             r = client.get(url, headers=headers); r.raise_for_status(); state = r.json()
-            if state['status'] == 'failed':
-                c.execute("UPDATE factory_tasks SET status='FAILED',detail='Provedor informou falha; sem nova tentativa automática' WHERE id=%s", (tid,)); c.commit(); return
+            if state['status'] in ('failed', 'cancelled', 'expired'):
+                p['provider_terminal_status'] = state['status']
+                if state.get('usage') is not None: p['provider_usage'] = state['usage']
+                actual=provider_usage_cost(state.get('usage'))
+                if actual is not None:
+                    detail='O pedido original terminou no provedor ('+state['status']+'); custo final conciliado: US$'+format(actual,'.6f')+'.'
+                else:
+                    detail=('O provedor confirmou o cancelamento do pedido original; a reserva permanece registrada até conciliar a cobrança.'
+                            if state['status'] == 'cancelled' else
+                            'O pedido original terminou no provedor (' + state['status'] + '); a reserva permanece registrada até conciliar a cobrança.')
+                c.execute("UPDATE factory_tasks SET status='FAILED',actual_cost=COALESCE(actual_cost,%s),payload=%s,detail=%s,updated_at=now() WHERE id=%s",
+                          (actual,json.dumps(p, ensure_ascii=False), detail, tid)); c.commit(); return
             if state['status'] != 'completed': return
+            if state.get('usage') is not None:
+                p['provider_usage']=state['usage']
+                actual=provider_usage_cost(state['usage'])
+                c.execute('UPDATE factory_tasks SET actual_cost=COALESCE(actual_cost,%s),payload=%s,updated_at=now() WHERE id=%s',
+                          (actual,json.dumps(p,ensure_ascii=False),tid));c.commit()
+                t=c.execute('SELECT * FROM factory_tasks WHERE id=%s AND kind=%s',(tid,KIND)).fetchone()
             with tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / 'clip.mp4'; size = 0
                 with client.stream('GET', url + '/content', headers=headers) as response:
@@ -182,7 +226,22 @@ def capabilities():
 
 
 def tick(task_id=None):
-    """Claim an authorized, never-sent reservation once, independently of the page."""
+    """Reconcile cancelled sends, then claim an authorized never-sent reservation once."""
+    # This durable scan is also the recovery path after the worker process restarts:
+    # only the original provider ID is polled, and no generation request is resent.
+    if task_id is None:
+        with db() as c:
+            due=c.execute("""UPDATE factory_tasks SET updated_at=now()
+              WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s
+                AND payload->>'operation'='video' AND status IN ('RUNNING','UNCERTAIN')
+                AND payload ? 'cancel_requested_at' AND payload ? 'provider_job_id'
+                AND NOT (payload ? 'provider_terminal_status')
+                AND updated_at<=now()-interval '30 seconds'
+                ORDER BY updated_at,id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id""",(KIND,)).fetchone()
+            if due:c.commit()
+        if due:
+            refresh(due['id'])
+            return True
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
         if not runtime.settings(c)['enabled']:return False
