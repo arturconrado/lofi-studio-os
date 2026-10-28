@@ -23,6 +23,12 @@ Os 52 caminhos são contagens de caminhos dentro de grupos, não 52 componentes 
 
 - Uma nova consulta read-only em 28/10 leu somente fingerprint MD5 truncado, `kind`, modelo, estado, timestamps, reserva, estágio/operação e presença de identificadores de callback/provedor/solicitação. As três tarefas em `UNCERTAIN` são do tipo `growth_packaging_20261024`, usam `google/gemini-2.5-flash-lite` e somam US$ 0,05 em reservas (duas de US$ 0,02 e uma de US$ 0,01). Os fingerprints registrados são `36da2b2822`, `b270db3b8a` e `7251ac53eb`; UUIDs e conteúdo do payload não foram selecionados nem preservados.
 - Na consulta, nenhuma das três tinha `operation`, `attempt_stage`, token de callback, ID de tarefa do provedor ou `request_id` no payload. Isso restringe a família funcional à geração de embalagem de Growth, mas não identifica a sessão/endpoint que iniciou cada tarefa, nem comprova se o provedor concluiu ou cobrou uma chamada.
+
+| Fingerprint pseudônimo | Criada (UTC) | Atualizada (UTC) | Reserva USD |
+|---|---|---|---:|
+| `36da2b2822` | 2026-10-27 01:52:28.690502 | 2026-10-27 01:52:29.647642 | 0.02 |
+| `b270db3b8a` | 2026-10-27 02:38:32.701398 | 2026-10-27 02:38:34.219722 | 0.02 |
+| `7251ac53eb` | 2026-10-27 03:10:15.206404 | 2026-10-27 03:10:16.971760 | 0.01 |
 - O Studio e os seis outros containers foram identificados por imagem/revisão, mas isso não demonstra que os diretórios de teste dentro do mount `/cache` tenham sido importados ou chamados por esses serviços.
 - A busca estática identifica caminhos candidatos que poderiam escrever estados; não correlaciona nenhum caminho arquivado a uma tarefa real. Não atribuir as tarefas incertas às variantes `continuity`, `fresh-hd`, `Halloween`, `seven-hours` ou `validation45` sem evidência adicional.
 - Capturas arquivísticas continuam preservadas. Nenhum script foi importado, iniciado, copiado para local executável ou usado para alterar banco, mídia ou serviço.
