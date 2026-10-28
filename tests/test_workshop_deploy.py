@@ -23,3 +23,78 @@ PG=fixture
     result=subprocess.run(['bash','-c',stub+check],env=env,capture_output=True,text=True)
     assert (result.returncode==0) is success
     if success: assert Path(str(archive)+'.list').read_text()==output
+
+
+def test_youtube_publisher_deploy_is_versioned_and_upload_safe():
+    script=Path('ops/auto-deploy.sh').read_text()
+    assert 'SERVICES=(studio creator export-worker youtube-publisher)' in script
+    assert "FROM youtube_publications WHERE state='uploading'" in script
+    assert "'youtube-publisher'):d['services'][s]['image']" in script
+    assert 'studio.youtube_publish' in script
+    assert 'for s in "${SERVICES[@]}"; do' in script
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='Production deploy runs Bash on Linux')
+def test_installed_deployer_protocol_probe_is_read_only_and_required_before_release():
+    script=Path('ops/auto-deploy.sh').resolve()
+    env={**os.environ,'SSH_ORIGINAL_COMMAND':'lofi-deploy-protocol'}
+    result=subprocess.run(['bash',str(script)],env=env,capture_output=True,text=True)
+    assert result.returncode==0
+    assert result.stdout.strip()=='LOFI_DEPLOY_PROTOCOL=2'
+
+    workflow=Path('.github/workflows/deploy.yml').read_text()
+    assert 'name: Verify installed deployer protocol' in workflow
+    assert workflow.index('name: Verify installed deployer protocol') < workflow.index('name: Deploy (waits while production is busy)')
+    assert 'no release archive was sent.' in workflow
+
+
+def test_unresolved_paid_jobs_block_deployment(tmp_path):
+    script=Path('ops/auto-deploy.sh').read_text()
+    start=script.index("busy=$(sql <<'EOF'")
+    end=script.index('\ncurrent=',start)
+    gate=script[start:end]
+    assert "status IN ('QUEUED','RUNNING','SUBMITTING','UNCERTAIN')" in gate
+
+    env={**os.environ,'TEST_BUSY_COUNT':'1'}
+    stub='''set -euo pipefail
+sql() { cat >/dev/null; printf '%s' "$TEST_BUSY_COUNT"; }
+fail() { exit "$2"; }
+'''
+    result=subprocess.run(['bash','-c',stub+gate],env=env,capture_output=True,text=True)
+    assert result.returncode==75
+
+
+@pytest.mark.parametrize('failure,success',[('none',True),('service',False),('compose',False)])
+def test_deploy_rollback_restores_and_verifies_previous_services(tmp_path,failure,success):
+    script=Path('ops/auto-deploy.sh').read_text()
+    start=script.index('rollback() {')
+    end=script.index('\nif ! docker compose',start)
+    rollback=script[start:end]
+    previous=tmp_path/'previous.json';previous.write_text('{"version":"old"}')
+    current=tmp_path/'current.json';current.write_text('{"version":"new"}')
+    env={**os.environ,'TEST_FAILURE':failure,'TEST_CURRENT':str(current)}
+    stub='''set -euo pipefail
+say() { :; }
+fail() { exit 1; }
+SERVICES=(studio creator export-worker youtube-publisher)
+previous_images=(old-image old-image old-image old-image)
+previous_revisions=(old-sha old-sha old-sha old-sha)
+rollback_compose="$TEST_PREVIOUS"
+COMPOSE="$TEST_CURRENT"
+PROJECT=fixture
+docker() {
+  if [ "$1" = compose ]; then [ "$TEST_FAILURE" != compose ]; return; fi
+  container="$2"; format="$4"; service=""
+  for name in "${SERVICES[@]}"; do if [[ "$container" == *"$name-1" ]]; then service="$name"; fi; done
+  case "$format" in
+    '{{.State.Running}}') if [ "$TEST_FAILURE" = service ] && [ "$service" = creator ]; then echo false; else echo true; fi ;;
+    '{{.Config.Image}}') echo old-image ;;
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}') echo old-sha ;;
+    *) return 2 ;;
+  esac
+}
+'''
+    env['TEST_PREVIOUS']=str(previous)
+    result=subprocess.run(['bash','-c',stub+rollback+'\nrollback'],env=env,capture_output=True,text=True)
+    assert (result.returncode==0) is success
+    assert current.read_text()==previous.read_text()

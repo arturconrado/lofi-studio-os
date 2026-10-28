@@ -39,6 +39,7 @@ async def auth(req:Request,call_next):
         scope=WORKSPACE.set(None)
         try:return await call_next(req)
         finally:WORKSPACE.reset(scope)
+    if public:return await call_next(req)
     identity=session(req.cookies.get(COOKIE))
     if identity:
         if mutating and not secrets.compare_digest(digest(req.headers.get('X-CSRF-Token','')),identity['csrf_hash']):
