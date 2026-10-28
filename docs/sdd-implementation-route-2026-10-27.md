@@ -17,6 +17,16 @@
 | WP-08/09 — Shorts/campanha | Plano de implementação existe; aceite de um Short narrativo e da campanha não foi demonstrado | Depois de aprovar o núcleo e ativar as regras G4. Manter fluxo, narrativa, duração, som e revisão próprios para Shorts. |
 | WP-10/11 — FUT | Evoluções comerciais e convenção temporal | Fora do caminho crítico; iniciar só após dependências indicadas no SDD. |
 
+## Evidência adicional da comparação de snapshots (somente leitura)
+
+Baseline comparada: `origin/main` no commit `cb369c97e9f9fb175392f4341296b50d3f42476e`. As contagens abaixo comparam SHA-256; igualdade de conteúdo não prova que o arquivo seja executado, e divergência não prova que deva ser promovido.
+
+- **music-worker:** 57 arquivos capturados; 26 têm mesmo caminho e hash em `main`; 31 têm caminho existente com hash diferente.
+- **youtube-publisher:** 128 arquivos; 87 têm mesmo caminho e hash; 22 têm caminho existente com hash diferente; 19 caminhos não existem em `main`.
+- **cache-code:** 383 arquivos capturados. A comparação por conteúdo identificou 55 itens cujo conteúdo não aparece nos arquivos de código rastreados em `main` nem nos snapshots dos dois serviços; a revisão registrada no PR #69 identificou 47 conteúdos Python distintos entre esses itens.
+
+**Implicação:** WP-00 ainda precisa classificar os 31 + 22 arquivos divergentes e os 19 caminhos ausentes do publisher, e revisar os 55 itens de cache sem correspondência. Não copiar nenhum desses arquivos para caminhos executáveis até atribuir função, origem, dependências, teste, dono e rollback. Contagens são evidência de divergência, não decisão de canonicalidade.
+
 ## Sequência ajustada
 
 ### Etapa 1 — fechar WP-00 antes de expandir mudanças estruturais
