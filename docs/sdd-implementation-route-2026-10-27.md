@@ -127,6 +127,18 @@ Esta seção substitui os hashes e estados anteriores somente para os PRs indica
 
 A sincronização preservou os diffs independentes dos três PRs. Nenhum foi aprovado ou mergeado; não houve deploy, escrita na VPS, alteração na `main` ou geração paga.
 
+## Revalidação final dos heads — 28/10/2026
+
+Após a cobertura integrada que confirma a consulta do estado terminal pelo ID remoto original, os heads foram sincronizados e revalidados:
+
+| PR | Head | CI | Estado |
+|---|---|---|---|
+| #71 — WP-02 | `376e97136fe2d872fa4050afde4a2ff15e511818` | Run `40659432492` (350) passou. | Aberto e mergeável; TEST-41 continua parcial. |
+| #66 — WP-01 | `c0f97dd94c46bc1d59525e46d9a3bf1a12d0860e` | Run `40659444424` (351) passou. | Aberto e mergeável, sincronizado com #71. |
+| #72 — autorização/workspace | `3ce9ebf3b86c18b0617d56d27c081b16fb6afa37` | Run `40659457467` (352) passou. | Aberto e mergeável, sincronizado com #71. |
+
+O código de cancelamento mantém reserva e reconcilia o mesmo job após um pedido local; não implementa cancelamento remoto. Ainda faltam o teste de queda/reinício pós-cancelamento e conciliação final verificável do custo. Não houve aprovação formal, merge, deploy, acesso de escrita à VPS ou alteração na `main`.
+
 ### Gates ainda abertos para o plano completo
 
 - **WP-00:** ainda não há nova leitura da VPS nesta rodada porque o alias `lofi_vps` resolve para o literal `lofi_vps`, sem hostname configurado. A auditoria read-only, TEST-27 (restauração isolada) e reconciliação de serviço/dados seguem incompletas. Nenhuma escrita na VPS foi feita.
