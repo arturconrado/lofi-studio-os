@@ -241,3 +241,11 @@ Esta pesquisa fecha somente a decisão documental de G5-09; não prova implement
 - A atualização integra os achados mais recentes de WP-02/WP-00 ao código de contexto de workspace e autorização de gasto; não amplia a cobertura de runtime nem altera as permissões do servidor.
 - WP-01/WP-02 continuam parciais: matriz de autorização por endpoint, TEST-37 em runtime e os aceites restantes dependem da auditoria WP-00. O alias SSH `lofi_vps` ainda não resolve para o hostname configurado, portanto nenhuma conexão foi iniciada.
 - PR #72 segue aberto e mergeável; sem aprovação, merge, deploy, escrita na VPS/`main`, publicação ou geração paga.
+
+## Revalidação dos gates de WP-01/02/03 — 28/10/2026
+
+- PR #66 head `d0e3cc1da963ebd2e6b94a34568fd126d163d2c0`, base documental `4ddba084e6fc2695015b9b8b5abe3375eea4e318`, passou no Checks run `40680226236`. A sincronização apenas incorporou a atualização do roteiro; a fatia WP-01 permanece parcial e condicionada a WP-00.
+- PR #72 head `acabd2f321da0bc86a724651d71d74e5716a2c33`, na mesma base, passou no Checks run `40679519558`. TEST-37 e a matriz autenticada do runtime continuam pendentes.
+- PR #63 head `909ca6f52134a8dffc60e678dbcc962856c04267` passou no Checks run `40724149004`. O workflow agora consulta o protocolo instalado antes de transmitir o arquivo; `ops/auto-deploy.sh` responde `LOFI_DEPLOY_PROTOCOL=2` sem escrita.
+- A captura WP-00 confirma que o deployer atualmente instalado na VPS ainda não reconhece esse protocolo. Com o novo gate, o workflow para antes de enviar qualquer release até que a versão atualizada seja instalada por caminho autorizado. Isso fecha o falso sinal de deploy automático, mas não instala o script, não implanta o publicador e não conclui TEST-27.
+- Os PRs continuam abertos; nenhuma aprovação, merge, deploy, conexão à VPS ou alteração de produção ocorreu.
