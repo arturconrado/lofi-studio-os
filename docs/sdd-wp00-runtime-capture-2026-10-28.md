@@ -92,3 +92,9 @@ Pesquisei as referências a `live_motion_studies` e `visual_project_budgets` nos
 A busca não encontrou DDL nem comandos `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE` ou `DROP` nessas árvores de aplicação. Portanto, as imagens e versões de aplicação inspecionadas não explicam quem criou as tabelas nem quem inseriu as linhas contabilizadas pelo PostgreSQL. Isso reduz o escopo do código em execução que precisa ser investigado, mas não prova ausência de SQL dinâmico, processos externos, scripts fora de `/app` e `/opt`, jobs históricos ou escritores executados em versões anteriores. Origem, autor, retenção e comportamento de escrita dessas relações continuam sem atribuição demonstrada; não migrar nem remover com base apenas nesta busca.
 
 A consulta foi somente leitura: nenhum serviço, arquivo, dado ou configuração foi alterado. Essa evidência complementa o catálogo e as estatísticas agregadas, mas não fecha esse gate de WP-00.
+
+## Processo principal de cada container — 28/10/2026, 05:34 UTC
+
+`docker inspect` somente de leitura registrou o comando principal dos sete containers Lo-Fi. O Studio executa `uvicorn studio.api:app` na porta 8787. Os demais executam workers/serviços dedicados: `studio.creator_service`, `studio.exports`, `studio.youtube_publish`, `studio.radio`, `studio.channel_radio` e `studio.worker`. Assim, os outros seis containers não apresentam um entrypoint HTTP independente na configuração do container observada; o inventário de 223 operações refere-se ao servidor FastAPI do Studio, e a inspeção de rotas foi corretamente limitada a ele. Isso não exclui portas auxiliares iniciadas por subprocessos ou integrações externas, mas não há entrypoint HTTP adicional declarado nos containers consultados.
+
+Nenhuma configuração ou serviço foi alterado.
