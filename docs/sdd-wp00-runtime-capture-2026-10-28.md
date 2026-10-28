@@ -76,3 +76,7 @@ Uma nova listagem autenticada de imagens do usuário na DigitalOcean retornou um
 ## Fingerprint de inicialização do schema — 28/10/2026, 05:24 UTC
 
 O valor de `studio_schema_state.revision`, consultado com transação read-only, coincide com `schema_revision()` calculado dentro do container Studio em execução e com o mesmo cálculo usando o código de `main` no commit `cb369c97e9f9fb175392f4341296b50d3f42476e`: `a644d5c9f624c1203c12a99af9b8764a57b1afe8a6f480b3c4e960d02fae4e21`. Isso confirma que as funções de inicialização incluídas nesse fingerprint coincidem entre runtime, estado registrado no banco e essa revisão da `main`. O fingerprint não identifica a origem de tabelas externas à lista coberta por essas funções, não prova a revisão de cada serviço e não substitui inventário de escritores.
+
+## Estatísticas agregadas das duas tabelas — 28/10/2026, 05:25 UTC
+
+`pg_stat_user_tables` reportou, para cada tabela, um insert, zero updates/deletes e estimativa de uma linha viva; `stats_reset` do banco retornou `NULL`. São contadores agregados, sem conteúdo de linhas, sem autoria de comando/processo e sem intervalo temporal atribuível nesta evidência. Eles confirmam atividade de inserção contabilizada pelas estatísticas atuais, mas não identificam o escritor, nem a criação estrutural, política de retenção ou atualidade exata dos dados. Não usar estes contadores para decidir migração ou exclusão.
