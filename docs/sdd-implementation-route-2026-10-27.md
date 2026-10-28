@@ -148,3 +148,16 @@ O código de cancelamento mantém reserva e reconcilia o mesmo job após um pedi
 - **WP-06 a WP-11:** continuam sem evidência de conclusão integral; FUT permanece fora do caminho crítico do núcleo.
 
 Sem merges, deploys, alterações na VPS, produção, dados ou publicação foram feitos como parte deste snapshot. Como as PRs citadas foram abertas pela conta conectada, a aprovação formal requer uma conta revisora diferente; autoria e CI verde não equivalem a aprovação.
+
+## Revalidação de progresso — 28/10/2026 09:45 UTC
+
+| Frente/PR | Evidência atual | Situação e próximo gate |
+|---|---|---|
+| WP-00 | Captura read-only de 09:23 confirma Studio/creator/export-worker na revisão atual da `main`; publisher e rádio usam revisões ancestrais da `main`. A comparação prévia de 57 arquivos do music-worker corresponde a `d877875`; o rótulo `development` não identifica essa origem por si só. | Parcial. Correspondência de revisão/conteúdo não prova paridade funcional. Atribuição dos escritores externos/históricos, matriz autenticada de permissões, reconciliação das tarefas `UNCERTAIN`, bootstrap de deploy e TEST-27 seguem pendentes. A última captura financeira detalhada registrada continua sendo 08:19 (3 tarefas `UNCERTAIN`, US$ 0,05 agregado); não foi feita nova leitura financeira às 09:23. |
+| #71 — WP-02 | Head `5b6c28219fd4b1c508b837ae0769862f8948c230`, base `main`, aberto e mergeável. CI `Checks` run `40666373862` passou: 307 testes Python; as verificações de frontend, typecheck, build, bundle e interface também passaram. | A fonte de custo usa cobrança final conhecida em vez da reserva maior, e conserva a reserva quando a cobrança é incerta. `/api/budget` consulta o schema ativo e reporta custos conciliados sem duplicar valores de payload. TEST-41 agora simula perda de conexão, reinício em processo novo, consulta do mesmo ID remoto, estado terminal `cancelled` e custo final; não houve chamada paga. WP-02 ainda não fecha G4-04 (limites agregados por ação/entrega/campanha e cobertura equivalente nos demais motores pagos), nem a reconciliação das tarefas legadas sem ID/token. |
+| #66 — WP-01 | Aberto, base `docs/sdd-implementation-route-current`, head `e93756db95281f0d793e48ec0650d7adf1499b41`, mergeável. | Parcial e condicionado à saída de WP-00; a fatia de versionamento não conclui permissões/proveniência e aceite integral do pacote. |
+| #72 — autorização/workspace | Aberto, base `docs/sdd-implementation-route-current`, head `b194d3a8c5950361f38a4dacf0b6e8700bad03b2`, mergeável. | Parcial; matriz autenticada completa e TEST-37 seguem pendentes. |
+| #63 — deploy/publicador | Aberto, base `main`, head `e84af99d7b2441f5857e99d54b052e5702ed2f9f`, mergeável. | CI não comprova instalação: caminho de bootstrap e TEST-27 ainda bloqueiam deploy. |
+| #73/#74 — WP-04/WP-05 | Abertos, mergeáveis; evidências anteriores continuam parciais. | Calibração de referência e avaliação (WP-04), composição nova dirigida pelo harness e revisão auditiva do áudio final (WP-05) permanecem sem aceite. |
+
+Sem merge, aprovação formal, deploy, escrita na VPS, publicação ou geração paga nesta atualização. WP-00 ainda bloqueia o aceite dos pacotes dependentes; WP-03 a WP-09 e FUT-10/11 não estão concluídos.
