@@ -18,6 +18,19 @@ type Detail = { id: string; revision: number; data: Draft; media: Record<string,
   planning_errors?: string[];
   music: { id: string; seconds: number }[]; library: { id: string; name: string }[] };
 const prefix = '/api/creator/workshop';
+
+function attemptContext(attempt: any) {
+  const history = (attempt?.history || []).map((entry: any) => {
+    const stage = entry.stage === 'correction' ? 'Correção única' : 'Tentativa inicial';
+    const reserved = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD' }).format(entry.reserved_usd || 0);
+    const state = (entry.statuses || []).join(', ') || 'reservada';
+    const recorded = entry.recorded_at ? new Date(entry.recorded_at).toLocaleString('pt-BR') : '';
+    return `${stage}${recorded ? ` · ${recorded}` : ''}: ${entry.request_count} solicitação(ões), ${entry.variant_count} variante(s), valor reservado ${reserved}, estado: ${state}${entry.correction_reason ? ` · motivo: ${entry.correction_reason}` : ''}`;
+  });
+  const alternatives = (attempt?.alternatives || []).map((value: string) => `• ${value}`);
+  return [history.length ? `Histórico persistido:\n${history.join('\n')}` : 'Histórico persistido: nenhuma geração reservada para esta unidade.',
+    alternatives.length ? `Alternativas:\n${alternatives.join('\n')}` : ''].filter(Boolean).join('\n\n');
+}
 const newClip = (name: string): Clip => ({ id: uuid(), name, motion: 'Descreva o movimento e a pose de retorno à base.', seconds: 8, references: [], continues_from: null, image_id: null, video_id: null });
 export const initialDraft = (): Draft => ({ automatic_motion: true, name: 'Meu vídeo', minutes: 60, theme: '', scene: 'Descreva o cenário, o estilo e a posição da câmera.',
   scene_motion: '', scene_references: [], characters: [{ name: 'Personagem principal', description: 'Características que devem permanecer iguais.', references: [] }],
@@ -204,15 +217,16 @@ export function Workshop({ id }: { id?: string }) {
     const query = new URLSearchParams(); if (kind === 'video') query.set('resolution', resolution); if (variantKey) query.set('variant_key', variantKey);
     const q = await api(`${prefix}/projects/${id}/clips/${clip.id}/quote/${kind}?${query}`);
     if(q.new_clips===0){setMessage('Os vídeos já estão disponíveis para revisão.');return;}
-    if(q.attempt?.allowed===false){setMessage(q.attempt.message || 'O limite desta unidade criativa foi atingido. Revise o material existente.');return;}
+    const historyAndAlternatives=attemptContext(q.attempt);
+    if(q.attempt?.allowed===false){setMessage([q.attempt.message || 'O limite desta unidade criativa foi atingido.',historyAndAlternatives].filter(Boolean).join('\n\n'));return;}
     let correctionReason: string | undefined;
     if(q.attempt?.requires_reason){
-      const reason=prompt('A tentativa inicial já foi usada. Descreva a falha observada e a mudança concreta que justifica o único ciclo de correção paga.');
+      const reason=prompt(`${historyAndAlternatives}\n\nA tentativa inicial já foi usada. Descreva a falha observada e a mudança concreta que justifica o único ciclo de correção paga.`);
       if(!reason?.trim())return;
       correctionReason=reason.trim();
     }
     const attemptLabel=q.attempt?.stage==='correction'?'Único ciclo de correção':'Tentativa inicial';
-    if (!confirm(`${attemptLabel}: gerar ${kind === 'image' ? 'imagem' : 'vídeo'} de “${clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. ${q.waiting_variants || 0} versão(ões) aguardam o vídeo anterior. Não haverá repetição paga automática.`)) return;
+    if (!confirm(`${historyAndAlternatives}\n\n${attemptLabel}: gerar ${kind === 'image' ? 'imagem' : 'vídeo'} de “${clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. ${q.waiting_variants || 0} versão(ões) aguardam o vídeo anterior. Não haverá repetição paga automática.`)) return;
     await post(`${prefix}/projects/${id}/clips/${clip.id}/generate/${kind}`, { request_id: uuid(), revision: d!.revision, max_usd: q.usd, confirm_cost: true, variant_key:variantKey || null, ...(correctionReason ? {correction_reason:correctionReason} : {}), ...(kind === 'video' ? { resolution } : {}) });
   }); };
   const review = (clip: Clip, kind: 'image' | 'video', approve: boolean, variantKey?: string) => run(async () => {
@@ -248,7 +262,7 @@ export function Workshop({ id }: { id?: string }) {
             <option value="" disabled={!!variant}>Nenhuma selecionada</option>{Object.values(d?.media || {}).filter(a => a.kind === kind && (a.clip_id === clip.id || a.id === aid)).map((a, index) => <option value={a.id}>Versão {index + 1}{a.approved ? ' · revisada' : ''}</option>)}</select></Field>
           {asset && (kind === 'image' ? <img src={asset.url} alt={`Imagem de ${clip.name}`} style={{ width: '100%', borderRadius: '8px' }} /> : <video src={asset.url} controls preload="metadata" style={{ width: '100%' }} />)}
           <button class="btn" disabled={!id || busy || dirty || scheduleIssue || !!pending(clip.id, kind) || (kind === 'video' && (!(base ? state?.image_approved : (variant ? variant.source_ready : sourceApproved) && scheduled) || !capabilities.data?.durations?.includes(clip.seconds)))} onClick={() => generate(clip, kind,variant?.key)}>{pending(clip.id, kind) ? jobLabel(pending(clip.id, kind)!.status) : asset ? 'Gerar outra versão' : kind === 'image' ? 'Gerar imagem' : 'Gerar vídeo'}</button>
-          {actionKey === clip.id + kind && message && <p role="alert" class="notice warn">{message}</p>}
+          {actionKey === clip.id + kind && message && <p role="alert" class="notice warn" style={{whiteSpace:'pre-line'}}>{message}</p>}
           {pending(clip.id, kind) && <p role="status">{pending(clip.id, kind)!.detail} · Pedido {pending(clip.id, kind)!.id.slice(0,8)} · Atualização automática a cada 10 segundos.</p>}
           {dirty && <small>Salve antes de continuar. <button class="btn sm" onClick={save}>Salvar alterações</button></small>}
           {kind === 'video' && asset && <button class="btn" disabled={busy || dirty || !!pending(clip.id,'preview')} onClick={() => run(() => post(`${prefix}/projects/${id}/clips/${clip.id}/preview`, {request_id:uuid(),revision:d!.revision,variant_key:variant?.key || null}), 'Prévia opcional enviada para conferir as emendas com música.')}>Preparar prévia das emendas</button>}

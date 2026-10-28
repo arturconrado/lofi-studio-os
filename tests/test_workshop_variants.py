@@ -511,7 +511,8 @@ def test_paid_attempt_cycle_persists_across_reload_splits_and_project_duplicates
     url,identity=seed_project(client,d,media);calls,reservations=mock_generation(monkeypatch)
     groups=variant_plan(d,clip,media);first_key=groups[0]['key'];second_key=groups[1]['key']
     quote=client.get(url+f'/clips/{clip.id}/quote/video?variant_key={first_key}').json()
-    assert quote['attempt']=={'allowed':True,'stage':'initial','requires_reason':False,'attempts_used':0}
+    assert quote['attempt']['allowed'] and quote['attempt']['stage']=='initial' and quote['attempt']['attempts_used']==0
+    assert quote['attempt']['history']==[] and quote['attempt']['alternatives']
     first=client.post(url+f'/clips/{clip.id}/generate/video',json={'request_id':str(uuid.uuid4()),'revision':1,
         'max_usd':quote['usd'],'confirm_cost':True,'variant_key':first_key})
     assert first.status_code==200,first.text
@@ -527,6 +528,11 @@ def test_paid_attempt_cycle_persists_across_reload_splits_and_project_duplicates
     # A new request UUID and a project copy cannot buy the same already-used variant.
     repeated=client.get(url+f'/clips/{clip.id}/quote/video?variant_key={first_key}').json()
     assert repeated['attempt']['allowed'] is False
+    assert repeated['attempt']['history'][0]['stage']=='initial'
+    assert repeated['attempt']['history'][0]['request_count']==1
+    assert repeated['attempt']['history'][0]['variant_count']==1
+    assert repeated['attempt']['history'][0]['reserved_usd']==.1
+    assert repeated['attempt']['alternatives'] and 'Reaproveitar' in repeated['attempt']['alternatives'][0]
     copied_id=client.post(url+'/duplicate').json()['id'];copied_url='/api/creator/workshop/projects/'+copied_id
     copied=client.get(copied_url).json();copied_draft=Draft.model_validate(copied['data'])
     copied_groups=variant_plan(copied_draft,copied_draft.clips[0],copied['media'])
@@ -553,6 +559,9 @@ def test_paid_attempt_cycle_persists_across_reload_splits_and_project_duplicates
     correction=client.post(url+f'/clips/{clip.id}/generate/video',json=correction_body)
     assert correction.status_code==200,correction.text
     assert correction.json()['attempt_stage']=='correction'
+    correction_history=client.get(url+f'/clips/{clip.id}/quote/video').json()['attempt']['history']
+    assert [item['stage'] for item in correction_history]==['initial','correction']
+    assert correction_history[1]['correction_reason']==correction_body['correction_reason']
     marker=WORKSPACE.set(identity['workspace_id'])
     try:
         with db() as c:
@@ -611,6 +620,9 @@ with TestClient(app,base_url='https://testserver') as fresh:
     quote=fresh.get(payload['project_url']+f"/clips/{payload['clip_id']}/quote/video")
     assert quote.status_code==200,quote.text
     assert quote.json()['attempt']['allowed'] is False
+    assert [item['stage'] for item in quote.json()['attempt']['history']]==['initial','correction']
+    assert quote.json()['attempt']['history'][1]['correction_reason']
+    assert quote.json()['attempt']['alternatives']
     retry=fresh.post(payload['project_url']+f"/clips/{payload['clip_id']}/generate/video",json={
         'request_id':payload['request_id'],'revision':project.json()['revision'],'max_usd':1.0,
         'confirm_cost':True},headers={'X-CSRF-Token':payload['csrf']})
