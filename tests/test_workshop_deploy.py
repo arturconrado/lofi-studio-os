@@ -34,6 +34,22 @@ def test_youtube_publisher_deploy_is_versioned_and_upload_safe():
     assert 'for s in "${SERVICES[@]}"; do' in script
 
 
+def test_unresolved_paid_jobs_block_deployment(tmp_path):
+    script=Path('ops/auto-deploy.sh').read_text()
+    start=script.index("busy=$(sql <<'EOF'")
+    end=script.index('\ncurrent=',start)
+    gate=script[start:end]
+    assert "status IN ('QUEUED','RUNNING','SUBMITTING','UNCERTAIN')" in gate
+
+    env={**os.environ,'TEST_BUSY_COUNT':'1'}
+    stub='''set -euo pipefail
+sql() { cat >/dev/null; printf '%s' "$TEST_BUSY_COUNT"; }
+fail() { exit "$3"; }
+'''
+    result=subprocess.run(['bash','-c',stub+gate],env=env,capture_output=True,text=True)
+    assert result.returncode==75
+
+
 @pytest.mark.parametrize('failure,success',[('none',True),('service',False),('compose',False)])
 def test_deploy_rollback_restores_and_verifies_previous_services(tmp_path,failure,success):
     script=Path('ops/auto-deploy.sh').read_text()

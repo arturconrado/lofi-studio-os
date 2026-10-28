@@ -32,7 +32,7 @@ sql() { docker exec -i "$PG" sh -c 'psql -U "$POSTGRES_USER" -d lofi_studio -tA'
 busy=$(sql <<'EOF'
 SELECT (SELECT count(*) FROM production_batches WHERE state IN ('queued','producing','waiting'))
      + (SELECT count(*) FROM export_jobs WHERE state IN ('queued','running'))
-     + (SELECT count(*) FROM factory_tasks WHERE status IN ('QUEUED','RUNNING','SUBMITTING'))
+     + (SELECT count(*) FROM factory_tasks WHERE status IN ('QUEUED','RUNNING','SUBMITTING','UNCERTAIN'))
      + (SELECT count(*) FROM youtube_publications WHERE state='uploading')
      + (SELECT count(*) FROM radio_channels WHERE desired='live')
      + (SELECT count(*) FROM broadcast_control WHERE desired='live');
