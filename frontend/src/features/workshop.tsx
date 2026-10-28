@@ -13,7 +13,7 @@ type Media = { id: string; url: string; sha256: string; kind: string; approved: 
 type Variant = { key: string; minutes: number[]; event_ids: string[]; image_id: string | null; video_id: string | null; image_approved: boolean; video_ready: boolean; video_approved: boolean; seams_approved: boolean; source_ready: boolean };
 type Detail = { id: string; revision: number; data: Draft; media: Record<string, Media>;
   states: Record<string, { video_ready: boolean; image_approved: boolean; video_approved: boolean; seams_approved?: boolean; variants?: Variant[] }>;
-  jobs: { id: string; status: string; detail: string; operation: string; clip_id?: string; variant_key?: string | null; url?: string; asset_url?: string; asset_id?: string; short_title?: string; created_at?: string; report?: { sha256: string; seconds?: number; width?: number; height?: number }; current?: boolean; preview_range?: [number,number]; approved: boolean }[];
+  jobs: { id: string; status: string; detail: string; operation: string; clip_id?: string; variant_key?: string | null; url?: string; asset_url?: string; asset_id?: string; short_title?: string; created_at?: string; reserved_usd?: number; attempt_stage?: 'initial' | 'correction'; reconciliation_state?: 'provider_polling' | 'callback_pending' | 'manual_reconciliation'; report?: { sha256: string; seconds?: number; width?: number; height?: number }; current?: boolean; preview_range?: [number,number]; approved: boolean }[];
   parent_videos?: { video_id: string; title: string; description: string; pilot_id: string }[];
   planning_errors?: string[];
   music: { id: string; seconds: number }[]; library: { id: string; name: string }[] };
@@ -92,6 +92,11 @@ export function Workshop({ id }: { id?: string }) {
   const visualLocked = !!d && Object.values(d.states).some(s => s.image_approved) && !editVisual;
   const pending = (clipId: string, kind: string) => d?.jobs.find(j => j.clip_id === clipId && j.operation === kind && ['SUBMITTING', 'RUNNING', 'UNCERTAIN', 'QUEUED'].includes(j.status));
   const jobLabel = (status: string) => ({ SUBMITTING: 'Enviando pedido', RUNNING: 'Montando', QUEUED: 'Na fila', UNCERTAIN: 'Verificando envio — não gere novamente', COMPLETED: 'Pronto para revisão', FAILED: 'Falhou', INTERRUPTED: 'Interrompido' }[status] || status);
+  const reconciliationMessage = (state?: string) => ({
+    provider_polling: 'O acompanhamento continuará no mesmo pedido. Não envie outra geração.',
+    callback_pending: 'Aguardando a confirmação do pedido original. Não envie outra geração.',
+    manual_reconciliation: 'Esta tarefa não tem uma referência persistida do provedor. Confirme o estado do pedido original antes de qualquer nova geração; a reserva permanece mantida.'
+  }[state || 'manual_reconciliation']);
   useEffect(() => {
     if (!id) return;
     const timer = window.setInterval(async () => {
@@ -199,8 +204,16 @@ export function Workshop({ id }: { id?: string }) {
     const query = new URLSearchParams(); if (kind === 'video') query.set('resolution', resolution); if (variantKey) query.set('variant_key', variantKey);
     const q = await api(`${prefix}/projects/${id}/clips/${clip.id}/quote/${kind}?${query}`);
     if(q.new_clips===0){setMessage('Os vídeos já estão disponíveis para revisão.');return;}
-    if (!confirm(`Gerar ${kind === 'image' ? 'imagem' : 'vídeo'} de “${clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. ${q.waiting_variants || 0} versão(ões) aguardam o vídeo anterior. Sem repetição paga automática.`)) return;
-    await post(`${prefix}/projects/${id}/clips/${clip.id}/generate/${kind}`, { request_id: uuid(), revision: d!.revision, max_usd: q.usd, confirm_cost: true, variant_key:variantKey || null, ...(kind === 'video' ? { resolution } : {}) });
+    if(q.attempt?.allowed===false){setMessage(q.attempt.message || 'O limite desta unidade criativa foi atingido. Revise o material existente.');return;}
+    let correctionReason: string | undefined;
+    if(q.attempt?.requires_reason){
+      const reason=prompt('A tentativa inicial já foi usada. Descreva a falha observada e a mudança concreta que justifica o único ciclo de correção paga.');
+      if(!reason?.trim())return;
+      correctionReason=reason.trim();
+    }
+    const attemptLabel=q.attempt?.stage==='correction'?'Único ciclo de correção':'Tentativa inicial';
+    if (!confirm(`${attemptLabel}: gerar ${kind === 'image' ? 'imagem' : 'vídeo'} de “${clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. ${q.waiting_variants || 0} versão(ões) aguardam o vídeo anterior. Não haverá repetição paga automática.`)) return;
+    await post(`${prefix}/projects/${id}/clips/${clip.id}/generate/${kind}`, { request_id: uuid(), revision: d!.revision, max_usd: q.usd, confirm_cost: true, variant_key:variantKey || null, ...(correctionReason ? {correction_reason:correctionReason} : {}), ...(kind === 'video' ? { resolution } : {}) });
   }); };
   const review = (clip: Clip, kind: 'image' | 'video', approve: boolean, variantKey?: string) => run(async () => {
     const asset = d!.media[String(kind === 'image' ? clip.image_id : clip.video_id)];
@@ -345,7 +358,7 @@ export function Workshop({ id }: { id?: string }) {
       </div>)}
     </details>}
     {d && <section class="card stack"><div class="row"><h3 class="grow">Montagens do vídeo longo</h3><button class="btn" disabled={busy || dirty} onClick={() => run(async () => { for (const j of d.jobs.filter(j => ['QUEUED','RUNNING'].includes(j.status) && j.operation === 'video')) await post(`${prefix}/projects/${id}/jobs/${j.id}/refresh`); })}>Atualizar andamento</button></div>
-      {d.jobs.filter(j=>j.operation!=='short_render').map(j => <div class="card stack" key={j.id} id={`job-${j.id}`}><b>{j.operation === 'preview' ? 'Prévia das emendas' : j.operation === 'render' ? 'Vídeo completo' : j.operation === 'image' ? 'Imagem' : 'Animação'} · {jobLabel(j.status)}</b><p>{j.detail}</p>{j.preview_range && <p>{draft.clips.find(c=>c.id===j.clip_id)?.name || draft.base.name} · {formatTime(j.preview_range[0]/60)} a {formatTime((j.preview_range[0]+j.preview_range[1])/60)}{j.current === false && " · Agenda alterada: prepare outra prévia"}</p>}{j.asset_url && <a class="btn" href={j.asset_url} target="_blank">Abrir material concluído</a>}
+      {d.jobs.filter(j=>j.operation!=='short_render').map(j => <div class="card stack" key={j.id} id={`job-${j.id}`}><b>{j.operation === 'preview' ? 'Prévia das emendas' : j.operation === 'render' ? 'Vídeo completo' : j.operation === 'image' ? 'Imagem' : 'Animação'} · {jobLabel(j.status)}</b><p>{j.detail}</p>{j.attempt_stage && <p>{j.attempt_stage==='correction'?'Ciclo único de correção':'Tentativa inicial'} · limite aplicado à ação e suas continuações</p>}{j.status === 'UNCERTAIN' && <div class="notice" role="status"><b>Reconciliação necessária</b><p>{reconciliationMessage(j.reconciliation_state)}</p><p>Valor reservado: {new Intl.NumberFormat('pt-BR', {style:'currency',currency:'USD'}).format(j.reserved_usd || 0)}{j.created_at ? ` · Criado em ${new Date(j.created_at).toLocaleString('pt-BR')}` : ''}</p></div>}{j.preview_range && <p>{draft.clips.find(c=>c.id===j.clip_id)?.name || draft.base.name} · {formatTime(j.preview_range[0]/60)} a {formatTime((j.preview_range[0]+j.preview_range[1])/60)}{j.current === false && " · Agenda alterada: prepare outra prévia"}</p>}{j.asset_url && <a class="btn" href={j.asset_url} target="_blank">Abrir material concluído</a>}
         {j.operation === 'render' && ['FAILED','INTERRUPTED'].includes(j.status) && <button class="btn" disabled={busy || dirty} onClick={() => run(() => post(`${prefix}/projects/${id}/jobs/${j.id}/retry-render`, {}), 'Montagem retomada com os mesmos clipes. Nenhuma geração paga.')}>Retomar montagem</button>}
         {j.url && <><video src={j.url} controls preload="metadata" style={{ width: j.operation === 'short_render' ? 'min(100%, 420px)' : '100%', maxHeight: j.operation === 'short_render' ? '75vh' : undefined }} /><a class="btn" href={j.url} download>Baixar vídeo</a>{j.operation === 'short_render' && <><Pill tone={j.approved ? 'ok' : 'warn'}>{j.approved ? 'Short aprovado na revisão' : 'Avaliação humana pendente'}</Pill>{!j.approved && <a class="btn primary" href={href('/revisao?item=' + encodeURIComponent('workshop_short_review:' + j.id))}>Abrir na Caixa de Revisão</a>}</>}{j.operation === 'render' && <><Pill tone={j.approved ? 'ok' : 'warn'}>{j.approved ? 'Revisão final aprovada' : 'Revisão final pendente'}</Pill>
           <label><input type="checkbox" checked={!!reviewed[j.id]} onChange={e => setReviewed({ ...reviewed, [j.id]: e.currentTarget.checked })} /> Conferi a música, todos os horários e o retorno à base</label>
@@ -367,7 +380,7 @@ export function Workshop({ id }: { id?: string }) {
       </> : <div class="notice"><b>Short ainda não disponível neste projeto.</b><p>Prepare e aprove os movimentos do vídeo longo e vincule uma publicação do canal. Depois, o fluxo de Shorts poderá montar uma história vertical com esses materiais.</p></div>}
       <section class="card stack"><h3>Shorts e revisão independente</h3>
         {d.jobs.filter(j=>j.operation==='short_render').length===0 && <p>Nenhum Short montado neste projeto ainda.</p>}
-        {d.jobs.filter(j=>j.operation==='short_render').map(j => <div class="card stack" key={j.id} id={`job-${j.id}`}><b>Short vertical · {jobLabel(j.status)}</b><p>{j.detail}</p>
+        {d.jobs.filter(j=>j.operation==='short_render').map(j => <div class="card stack" key={j.id} id={`job-${j.id}`}><b>Short vertical · {jobLabel(j.status)}</b><p>{j.detail}</p>{j.status === 'UNCERTAIN' && <div class="notice" role="status"><b>Reconciliação necessária</b><p>{reconciliationMessage(j.reconciliation_state)}</p><p>Valor reservado: {new Intl.NumberFormat('pt-BR', {style:'currency',currency:'USD'}).format(j.reserved_usd || 0)}{j.created_at ? ` · Criado em ${new Date(j.created_at).toLocaleString('pt-BR')}` : ''}</p></div>}
           {j.url && <><video src={j.url} controls preload="metadata" style={{width:'min(100%, 420px)',maxHeight:'75vh'}} /><a class="btn" href={j.url} download>Baixar Short</a><Pill tone={j.approved ? 'ok' : 'warn'}>{j.approved ? 'Short aprovado na revisão' : 'Avaliação humana pendente'}</Pill>{!j.approved && <a class="btn primary" href={href('/revisao?item=' + encodeURIComponent('workshop_short_review:' + j.id))}>Abrir na Caixa de Revisão</a>}</>}
         </div>)}
       </section>

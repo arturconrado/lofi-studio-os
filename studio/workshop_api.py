@@ -35,6 +35,12 @@ def ensure(c):
     c.execute('''CREATE TABLE IF NOT EXISTS visual_library(
       id UUID PRIMARY KEY, channel_id UUID NOT NULL REFERENCES radio_channels(id),
       name TEXT NOT NULL, data JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+    c.execute('''CREATE TABLE IF NOT EXISTS visual_creative_attempts(
+      creative_unit_id UUID NOT NULL, operation TEXT NOT NULL CHECK(operation IN ('image','video')),
+      initial_signature TEXT NOT NULL, initial_variant_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+      correction_signature TEXT, correction_reason TEXT,
+      correction_variant_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(creative_unit_id,operation))''')
 
 
 def ready():
@@ -74,15 +80,115 @@ def public_task(t):
             'asset_url': f'/api/creator/workshop/projects/{p["project_id"]}/media/{p["asset_id"]}' if p.get('asset_id') else None,
             'variant_key': p.get('variant_key'), 'batch_ids': p.get('batch_ids'),
             'operation': p['operation'], 'clip_id': p.get('clip_id'), 'reserved_usd': t['reserved_cost'],
+            'attempt_stage': p.get('attempt_stage'),
             'current': p.get('current', True),
             'preview_range': p.get('preview_range'),
             'report': p.get('report'), 'approved': p.get('approved', False),
             'url': f'/api/creator/workshop/projects/{p["project_id"]}/renders/{t["id"]}' if p.get('video_key') else None}
+    if t['status'] == 'UNCERTAIN':
+        # Never expose callback tokens or provider IDs. Tell the user which safe
+        # reconciliation path is available for this persisted attempt.
+        out['reconciliation_state'] = ('provider_polling' if p.get('provider_job_id') else
+                                       'callback_pending' if p.get('callback_token') else
+                                       'manual_reconciliation')
     if p.get('operation') == 'short_render':
         out.update(short_title=p.get('spec', {}).get('title'), short_story=p.get('spec', {}).get('story_title'),
                    parent_video_id=p.get('spec', {}).get('parent_video_id'),
                    url=f'/api/creator/workshop/projects/{p["project_id"]}/shorts/{t["id"]}/video' if p.get('video_key') else None)
     return out
+
+
+def creative_unit(draft, clip):
+    by_id={str(item.id):item for item in clips(draft)}
+    while clip.continues_from:
+        clip=by_id[str(clip.continues_from)]
+    return clip.id
+
+
+def creative_spec_signature(draft, clip, operation, resolution, media):
+    unit=creative_unit(draft,clip)
+    by_id={str(item.id):item for item in clips(draft)}
+    parts=[];frontier=[by_id[str(unit)]]
+    while frontier:
+        current=frontier.pop(0);parts.append(current)
+        frontier.extend(sorted((item for item in draft.clips if item.continues_from==current.id),key=lambda item:str(item.id)))
+    ref_sha=lambda ids:[(media.get(str(aid)) or {}).get('sha256','unavailable') for aid in ids]
+    context={'theme':draft.theme,'scene':draft.scene,
+             'scene_motion':draft.scene_motion if operation=='video' else None,
+             'scene_references':ref_sha(draft.scene_references),
+             'characters':[{'name':ch.name,'description':ch.description,'references':ref_sha(ch.references)} for ch in draft.characters]}
+    part_ids={item.id for item in parts}
+    schedule=[{'clip_id':str(event.clip_id),'minute':round(event.minute*60*24)} for event in sorted(draft.insertions,key=lambda item:item.minute) if event.clip_id in part_ids]
+    return digest({'version':1,'operation':operation,'resolution':resolution,'context':context,'schedule':schedule,
+                   'base_image_sha256':(media.get(str(draft.base.image_id)) or {}).get('sha256'),
+                   'base_video_sha256':(media.get(str(draft.base.video_id)) or {}).get('sha256') if operation=='video' else None,
+                   'parts':[{'id':str(item.id),'motion':item.motion,'action_goal':item.action_goal,
+                             'seconds':item.seconds,'references':ref_sha(item.references),
+                             'continues_from':str(item.continues_from) if item.continues_from else None} for item in parts]})
+
+
+def attempt_keys(clip, groups):
+    return [f'{clip.id}:'+ (digest({'clip_id':str(clip.id),'source_sha256':group['source'].get('sha256'),
+                    'source_kind':group['source_kind'],'frame':group['frame'],'minutes':group['minutes']}) if group else 'base')
+            for group in groups]
+
+
+def attempt_decision(c, draft, clip, operation, resolution, groups, media):
+    unit=creative_unit(draft,clip);spec=creative_spec_signature(draft,clip,operation,resolution,media)
+    keys=attempt_keys(clip,groups)
+    row=c.execute('SELECT * FROM visual_creative_attempts WHERE creative_unit_id=%s AND operation=%s',
+                  (unit,operation)).fetchone()
+    if not row:
+        return {'allowed':True,'stage':'initial','requires_reason':False,'attempts_used':0,
+                'unit_id':str(unit),'signature':spec,'keys':keys}
+    correction=row.get('correction_signature')
+    if correction and spec!=correction:
+        return {'allowed':False,'stage':'blocked','requires_reason':False,'attempts_used':2,
+                'message':'Esta unidade criativa já usou a tentativa inicial e seu único ciclo de correção. Revise o material existente.'}
+    if spec==row['initial_signature'] and not correction:
+        used=set(row['initial_variant_keys'] or [])
+        stage='initial';attempts=1
+    elif correction and spec==correction:
+        used=set(row['correction_variant_keys'] or [])
+        stage='correction';attempts=2
+    elif not correction:
+        return {'allowed':True,'stage':'correction','requires_reason':True,'attempts_used':1,
+                'unit_id':str(unit),'signature':spec,'keys':keys}
+    else:
+        used=set();stage='blocked';attempts=2
+    repeated=used.intersection(keys)
+    if repeated:
+        return {'allowed':False,'stage':'blocked','requires_reason':False,'attempts_used':attempts,
+                'message':'Esta versão já foi enviada para estes trechos. Alterar a identificação do pedido não cria uma nova tentativa.'}
+    return {'allowed':True,'stage':stage,'requires_reason':False,'attempts_used':attempts,
+            'unit_id':str(unit),'signature':spec,'keys':keys}
+
+
+def reserve_attempt(c, decision, operation, correction_reason=None):
+    if not decision['allowed']:
+        raise HTTPException(409,decision['message'])
+    if decision['requires_reason'] and len((correction_reason or '').strip())<12:
+        raise HTTPException(422,'Explique a causa e a mudança concreta antes do único ciclo de correção.')
+    if not decision['requires_reason'] and correction_reason:
+        raise HTTPException(422,'A justificativa só se aplica ao ciclo de correção.')
+    unit=decision['unit_id'];spec=decision['signature'];keys=decision['keys']
+    if decision['stage']=='initial' and decision['attempts_used']==0:
+        c.execute('''INSERT INTO visual_creative_attempts(creative_unit_id,operation,initial_signature,initial_variant_keys)
+                     VALUES(%s,%s,%s,%s::jsonb)''',(unit,operation,spec,json.dumps(keys)))
+    elif decision['stage']=='initial':
+        row=c.execute('SELECT initial_variant_keys FROM visual_creative_attempts WHERE creative_unit_id=%s AND operation=%s FOR UPDATE',(unit,operation)).fetchone()
+        c.execute('UPDATE visual_creative_attempts SET initial_variant_keys=%s::jsonb,updated_at=now() WHERE creative_unit_id=%s AND operation=%s',
+                  (json.dumps([*(row['initial_variant_keys'] or []),*keys]),unit,operation))
+    elif decision['stage']=='correction':
+        if decision['requires_reason']:
+            c.execute('''UPDATE visual_creative_attempts SET correction_signature=%s,correction_reason=%s,
+                         correction_variant_keys=%s::jsonb,updated_at=now() WHERE creative_unit_id=%s AND operation=%s''',
+                      (spec,correction_reason.strip(),json.dumps(keys),unit,operation))
+        else:
+            row=c.execute('SELECT correction_variant_keys FROM visual_creative_attempts WHERE creative_unit_id=%s AND operation=%s FOR UPDATE',(unit,operation)).fetchone()
+            c.execute('UPDATE visual_creative_attempts SET correction_variant_keys=%s::jsonb,updated_at=now() WHERE creative_unit_id=%s AND operation=%s',
+                      (json.dumps([*(row['correction_variant_keys'] or []),*keys]),unit,operation))
+    return decision['stage']
 
 
 def validate_refs(draft, media):
@@ -339,6 +445,7 @@ class Generate(Strict):
     variant_key: str | None = Field(default=None, pattern='^[a-f0-9]{64}$')
     resolution: Literal['720p', '1080p'] = '720p'
     confirm_cost: bool = False
+    correction_reason: str | None = Field(default=None,max_length=1000)
 
 
 def generation_targets(draft, clip, media, variant_key=None, resolution=None):
@@ -369,13 +476,16 @@ def generation_targets(draft, clip, media, variant_key=None, resolution=None):
 @router.get('/projects/{pid}/clips/{cid}/quote/{kind}')
 def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], variant_key: str | None = None, resolution: Literal['720p','1080p'] = '720p'):
     from .workshop_provider import quote as provider_quote
+    ready()
     with db() as c:
         row=project(c,pid);draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'Gere diretamente o vídeo da inserção')
         groups=generation_targets(draft,clip,media,variant_key,resolution) if kind=='video' else [None]
+        attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media)
     q=(provider_quote(kind,clip.seconds,resolution) if resolution!='720p' else provider_quote(kind,clip.seconds)) if groups else {'usd':0,'seconds':clip.seconds}
     return {**q,'unit_usd':q['usd'],'usd':round(q['usd']*len(groups),6),'new_clips':len(groups),
+            'attempt':{key:attempt[key] for key in ('allowed','stage','requires_reason','attempts_used','message') if key in attempt},
             'reused_occurrences':sum(len(g['event_ids']) for g in variant_plan(draft,clip,media) if _status(draft,occurrence_clip(draft,clip,g,media),media,g)['video_ready']) if clip.id!=draft.base.id else 0,
             'waiting_variants':sum(not g['source_ready'] for g in variant_plan(draft,clip,media)) if clip.id!=draft.base.id else 0,
             'variants':[{'key':g['key'],'minutes':g['minutes']} for g in groups if g]}
@@ -386,6 +496,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
     from .workshop_provider import quote as provider_quote, submit
     from .visual_workshop import prompt
     from .financial import check_available
+    ready()
     if not body.confirm_cost: raise HTTPException(422,'Confirme o custo deste pedido')
     with db() as c:
         row=project(c,pid)
@@ -414,6 +525,12 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if q['seconds']!=clip.seconds: raise HTTPException(409,'A duração mudou; consulte o custo novamente')
         groups=generation_targets(draft,clip,media,body.variant_key,body.resolution) if kind=='video' else [None]
         if not groups: raise HTTPException(409,'Os vídeos já estão disponíveis para revisão')
+        decision=attempt_decision(c,draft,clip,kind,body.resolution,groups,media)
+        if not decision['allowed']:raise HTTPException(409,decision['message'])
+        if decision['requires_reason'] and len((body.correction_reason or '').strip())<12:
+            raise HTTPException(422,'Explique a causa e a mudança concreta antes do único ciclo de correção.')
+        if not decision['requires_reason'] and body.correction_reason:
+            raise HTTPException(422,'A justificativa só se aplica ao ciclo de correção.')
         from decimal import Decimal
         total=float(Decimal(str(q['usd']))*len(groups))
         queued=len(groups)>1
@@ -447,6 +564,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 entry['frames'].append(0)
             prepared={key:base_cut_images(value['source'],value['frames']) for key,value in by_source.items()}
         tids=[body.request_id if n==0 else uuid.uuid5(body.request_id,g['key']) for n,g in enumerate(groups)]
+        attempt_stage=reserve_attempt(c,decision,kind,body.correction_reason)
         for index,group in enumerate(groups):
             effective=clip;image=media.get(str(clip.image_id));return_frame=None
             selected=[media[str(r)] for r in refs]
@@ -481,6 +599,9 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
             if len(selected)>14: raise HTTPException(422,'Use até 14 referências por imagem')
             from .tenancy import active_workspace
             payload={'project_id':str(pid),'clip_id':str(cid),'operation':kind,
+                'creative_unit_id':decision['unit_id'],'attempt_stage':attempt_stage,
+                'attempt_signature':decision['signature'],
+                'correction_reason':body.correction_reason.strip() if attempt_stage=='correction' else None,
                 'callback_workspace':active_workspace() or 'public','callback_token':secrets.token_urlsafe(32),
                 'variant_key':group['key'] if group else None,'requested_variant_key':body.variant_key,
                 'occurrence_ids':group['event_ids'] if group else [],'batch_ids':[str(t) for t in tids],
