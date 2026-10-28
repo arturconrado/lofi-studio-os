@@ -562,6 +562,7 @@ def test_free_storyboard_is_saved_scoped_and_never_queues_generation(client):
     client.cookies.clear();_,other=signup(client);client.headers['X-CSRF-Token']=other['csrf_token']
     assert client.post('/api/creator/storyboard/save',json=body).status_code==404
     assert client.get(f"/api/creator/plans/{saved['id']}/revisions").status_code==404
+    assert client.get(f"/api/creator/plans/{saved['id']}/revisions/1").status_code==404
 
 
 def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeypatch):
