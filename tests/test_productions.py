@@ -53,6 +53,17 @@ def completed_export(owner,program_id):
         (uuid.uuid4(),uuid.uuid4(),program_id,'a'*64))
 
 
+def financial_usage(owner):
+    from studio.financial import total_usage
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    marker=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:return total_usage(c)
+    finally:
+        WORKSPACE.reset(marker)
+
+
 def test_quote_books_nothing_and_uses_recipe(client,monkeypatch):
     owner,h,cid,_=studio(client,monkeypatch)
     q=client.post('/api/creator/productions/quote',json={'channel_id':cid,'hours':2,'idea':'pixel snow at night'},headers=h)
@@ -71,6 +82,9 @@ def test_one_confirmation_books_blocks_in_order(client,monkeypatch):
     first=client.post('/api/creator/productions',json=body|{'confirm_ceiling':True,'accept_without_motion':True},headers=h)
     assert first.status_code==200,first.text
     p=first.json();assert p['status']=='PRODUZINDO_MUSICA' and p['progress']['blocks_created']==1
+    # The parent ceiling is split between the unallocated production balance and
+    # its active batch reservation; the shared ledger must count exactly $5 once.
+    assert financial_usage(owner)==Decimal('5.00')
     again=client.post('/api/creator/productions',json=body|{'confirm_ceiling':True,'accept_without_motion':True},headers=h).json()
     assert again['reused'] and again['id']==p['id']
     batch=sql(owner,'SELECT b.*,pl.data FROM production_batches b JOIN creator_plans pl ON pl.program_id=b.id')
@@ -89,6 +103,9 @@ def test_one_confirmation_books_blocks_in_order(client,monkeypatch):
     after=client.post(f"/api/creator/productions/{p['id']}/advance",headers=h).json()
     assert after['progress']['blocks_created']==2
     assert [r['budget'] for r in sql(owner,'SELECT budget FROM production_blocks ORDER BY hour_index')]==[Decimal('2.50'),Decimal('2.50')]
+    # Once both hours are allocated, the parent remainder is zero and both child
+    # batches together still occupy exactly the originally confirmed ceiling.
+    assert financial_usage(owner)==Decimal('5.00')
 
 
 def test_failure_pauses_without_retry_and_resume_is_explicit(client,monkeypatch):
