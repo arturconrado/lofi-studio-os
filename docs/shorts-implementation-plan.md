@@ -159,4 +159,10 @@ O endpoint de leitura `/api/creator/workshop/shorts/library` expõe apenas Short
 
 Esta fatia fecha a apresentação do derivado aprovado na Biblioteca (G5-07/G1-02) e não autoriza nem inicia envio. A preparação da publicação como `content_format='short'`, o transporte resumível ligado ao hash aprovado e a exibição do estado de upload pertencem ao S5 e continuam pendentes. Revisão visual/humana na aplicação e verificação com a versão implantada também seguem necessárias.
 
+## Implementação S5 — Publicação nativa de Shorts
+
+O publicador agora aceita Shorts como uma origem distinta, ligada ao `factory_task` aprovado e ao SHA-256 revisado. A preparação cria uma publicação em estado `ready`; a autorização exige nova conferência explícita de vídeo, direitos, privacidade, declaração de público infantil e pacote Growth gerado com `content_format='short'`. A sessão resumível existente transmite os bytes do render aprovado e revalida a origem, o projeto, a revisão, a história e o hash integral imediatamente antes do envio. Idempotência é por tarefa de Short, e duplicidade exata usa o SHA-256 já publicado.
+
+A tabela de publicações ganha vínculo tipado com a tarefa do Short e hash dos bytes. A interface apresenta candidatos e status de Shorts em seção separada, sem aplicar a regra de uma hora dos vídeos longos. Aprovação isoladamente não envia; só a ação explícita de autorizar coloca o item na fila. Os arquivos de origem e o render do Short continuam preservados após o recebimento pelo YouTube enquanto a política de retenção desse novo tipo de ativo não for decidida. Esta implementação cobre o caminho automatizado S5, mas ainda requer homologação visual, autorização real do Google e validação de produção.
+
 Fontes oficiais relevantes: [métricas de Shorts](https://support.google.com/youtube/answer/12942217?co=YOUTUBE._YTVideoType%3Dshorts&hl=en), [Related video em Shorts](https://support.google.com/youtube/answer/14075157?hl=pt-BR), [busca e descoberta de Shorts](https://support.google.com/youtube/answer/11914225?co=YOUTUBE._YTVideoType%3Dshorts&hl=pt-BR).
