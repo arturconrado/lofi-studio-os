@@ -2,7 +2,7 @@
 
 **Atualizado em 28/10/2026.** Documento de acompanhamento derivado do SDD v1.0 e do estado dos PRs no GitHub. É aditivo: não altera o SDD original, não afirma homologação e não autoriza deploy, escrita na VPS, publicação ou geração paga.
 
-## Estado atual verificado em 28/10/2026 às 22:24 UTC
+## Estado atual verificado em 28/10/2026 às 22:25 UTC
 
 | Frente | Estado confirmado agora | Gate para avançar |
 |---|---|---|
@@ -16,7 +16,7 @@
 | WP-08/09 | PRs #75 e #76 abertos, empilhados sobre #74 e entre si; Checks 40776613000 e 40776691196 passaram. Implementação parcial, sem publicação real. | Núcleo aprovado e regras G4 ativas; #74 → #75 → #76, depois validar campanha e autorização humana. |
 | FUT-01…05 | Fora do caminho crítico do núcleo. | Começar após os gates e dependências previstos no SDD. |
 
-**Integração:** #66 aguarda WP-00; #72 aguarda WP-00/#66; #74 aguarda WP-01/02; #75 aguarda #74 e o gate do núcleo; #76 aguarda #75. O PR #78 é somente documental e seu Checks run 40779654806 está em andamento; ele não fecha os gates acima.
+**Integração:** #66 aguarda WP-00; #72 aguarda WP-00/#66; #74 aguarda WP-01/02; #75 aguarda #74 e o gate do núcleo; #76 aguarda #75. O PR #78 é somente documental e aguarda a esteira; ele não fecha os gates acima.
 
 ## Evidência histórica e base do diagnóstico
 
