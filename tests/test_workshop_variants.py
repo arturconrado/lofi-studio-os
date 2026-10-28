@@ -408,6 +408,43 @@ def seed_project(cl,draft,media):
     return f'/api/creator/workshop/projects/{pid}',identity
 
 
+@DB
+def test_creative_attempt_limit_is_scoped_to_project_even_when_clip_ids_repeat(client,monkeypatch):
+    """A client-supplied clip UUID in another project must not consume this project's allowance."""
+    from studio import workshop_api as api,workshop_provider
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    import copy
+    draft,media=fixture();url_a,identity=seed_project(client,draft,media)
+    project_a=url_a.rsplit('/',1)[-1];project_b=str(uuid.uuid4())
+    second=Draft.model_validate(draft.model_dump(mode='json'));second_media={}
+    for clip in [second.base,*second.clips]:
+        for field,kind in (('image_id','image'),('video_id','video')):
+            old_id=getattr(clip,field)
+            if old_id is None:continue
+            new_id=uuid.uuid4();setattr(clip,field,new_id)
+            second_media[str(new_id)]=copy.deepcopy(media[str(old_id)])
+    monkeypatch.setattr(workshop_provider,'quote',lambda kind,seconds,*args:{'model':'test','usd':.1,'seconds':seconds,'last_frame_supported':False})
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            original=c.execute('SELECT channel_id FROM visual_projects WHERE id=%s',(project_a,)).fetchone()
+            c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',
+                      (project_b,original['channel_id'],json.dumps(second.model_dump(mode='json'))))
+            for aid,asset in second_media.items():
+                c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,project_b,json.dumps(asset)))
+            c.execute('''INSERT INTO visual_creative_attempts(project_id,creative_unit_id,operation,initial_signature,initial_variant_keys)
+                         VALUES(%s,%s,'image',%s,%s::jsonb)''',
+                      (project_a,draft.base.id,api.creative_spec_signature(draft,draft.base,'image','720p',media),
+                       json.dumps(api.attempt_keys(draft.base,[None]))))
+            c.commit()
+    finally:WORKSPACE.reset(marker)
+    quoted=client.get(f'/api/creator/workshop/projects/{project_b}/clips/{second.base.id}/quote/image')
+    assert quoted.status_code==200,quoted.text
+    assert quoted.json()['attempt']['allowed'] is True
+    assert quoted.json()['attempt']['stage']=='initial'
+
+
 def mock_generation(monkeypatch):
     from studio import workshop_api as api,workshop_provider as provider,financial
     from studio.core import db

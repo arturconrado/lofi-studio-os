@@ -36,11 +36,12 @@ def ensure(c):
       id UUID PRIMARY KEY, channel_id UUID NOT NULL REFERENCES radio_channels(id),
       name TEXT NOT NULL, data JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
     c.execute('''CREATE TABLE IF NOT EXISTS visual_creative_attempts(
+      project_id UUID NOT NULL REFERENCES visual_projects(id),
       creative_unit_id UUID NOT NULL, operation TEXT NOT NULL CHECK(operation IN ('image','video')),
       initial_signature TEXT NOT NULL, initial_variant_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
       correction_signature TEXT, correction_reason TEXT,
       correction_variant_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(creative_unit_id,operation))''')
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(project_id,creative_unit_id,operation))''')
 
 
 def ready():
@@ -142,7 +143,7 @@ def attempt_history(c, unit, operation, project_id):
         ON source_project.id::text=t.payload->>'project_id'
       WHERE t.kind=%s AND t.payload->>'creative_unit_id'=%s AND t.payload->>'operation'=%s
         AND t.payload->>'attempt_stage' IS NOT NULL
-        AND source_project.channel_id=(SELECT channel_id FROM visual_projects WHERE id=%s)
+        AND source_project.id=%s
       ORDER BY t.created_at''',(KIND,str(unit),operation,project_id)).fetchall()
     grouped={}
     for row in rows:
@@ -184,9 +185,10 @@ def attempt_decision(c, draft, clip, operation, resolution, groups, media, proje
     keys=attempt_keys(clip,groups)
     history=attempt_history(c,unit,operation,project_id)
     def decision(values):
-        return {**values,'history':history,'alternatives':attempt_alternatives(values.get('stage'),values.get('allowed',False))}
-    row=c.execute('SELECT * FROM visual_creative_attempts WHERE creative_unit_id=%s AND operation=%s',
-                  (unit,operation)).fetchone()
+        return {'project_id':str(project_id),**values,'history':history,
+                'alternatives':attempt_alternatives(values.get('stage'),values.get('allowed',False))}
+    row=c.execute('SELECT * FROM visual_creative_attempts WHERE project_id=%s AND creative_unit_id=%s AND operation=%s',
+                  (project_id,unit,operation)).fetchone()
     if not row:
         return decision({'allowed':True,'stage':'initial','requires_reason':False,'attempts_used':0,
                 'unit_id':str(unit),'signature':spec,'keys':keys})
@@ -220,23 +222,23 @@ def reserve_attempt(c, decision, operation, correction_reason=None):
         raise HTTPException(422,'Explique a causa e a mudança concreta antes do único ciclo de correção.')
     if not decision['requires_reason'] and correction_reason:
         raise HTTPException(422,'A justificativa só se aplica ao ciclo de correção.')
-    unit=decision['unit_id'];spec=decision['signature'];keys=decision['keys']
+    project=decision['project_id'];unit=decision['unit_id'];spec=decision['signature'];keys=decision['keys']
     if decision['stage']=='initial' and decision['attempts_used']==0:
-        c.execute('''INSERT INTO visual_creative_attempts(creative_unit_id,operation,initial_signature,initial_variant_keys)
-                     VALUES(%s,%s,%s,%s::jsonb)''',(unit,operation,spec,json.dumps(keys)))
+        c.execute('''INSERT INTO visual_creative_attempts(project_id,creative_unit_id,operation,initial_signature,initial_variant_keys)
+                     VALUES(%s,%s,%s,%s,%s::jsonb)''',(project,unit,operation,spec,json.dumps(keys)))
     elif decision['stage']=='initial':
-        row=c.execute('SELECT initial_variant_keys FROM visual_creative_attempts WHERE creative_unit_id=%s AND operation=%s FOR UPDATE',(unit,operation)).fetchone()
-        c.execute('UPDATE visual_creative_attempts SET initial_variant_keys=%s::jsonb,updated_at=now() WHERE creative_unit_id=%s AND operation=%s',
-                  (json.dumps([*(row['initial_variant_keys'] or []),*keys]),unit,operation))
+        row=c.execute('SELECT initial_variant_keys FROM visual_creative_attempts WHERE project_id=%s AND creative_unit_id=%s AND operation=%s FOR UPDATE',(project,unit,operation)).fetchone()
+        c.execute('UPDATE visual_creative_attempts SET initial_variant_keys=%s::jsonb,updated_at=now() WHERE project_id=%s AND creative_unit_id=%s AND operation=%s',
+                  (json.dumps([*(row['initial_variant_keys'] or []),*keys]),project,unit,operation))
     elif decision['stage']=='correction':
         if decision['requires_reason']:
             c.execute('''UPDATE visual_creative_attempts SET correction_signature=%s,correction_reason=%s,
-                         correction_variant_keys=%s::jsonb,updated_at=now() WHERE creative_unit_id=%s AND operation=%s''',
-                      (spec,correction_reason.strip(),json.dumps(keys),unit,operation))
+                         correction_variant_keys=%s::jsonb,updated_at=now() WHERE project_id=%s AND creative_unit_id=%s AND operation=%s''',
+                      (spec,correction_reason.strip(),json.dumps(keys),project,unit,operation))
         else:
-            row=c.execute('SELECT correction_variant_keys FROM visual_creative_attempts WHERE creative_unit_id=%s AND operation=%s FOR UPDATE',(unit,operation)).fetchone()
-            c.execute('UPDATE visual_creative_attempts SET correction_variant_keys=%s::jsonb,updated_at=now() WHERE creative_unit_id=%s AND operation=%s',
-                      (json.dumps([*(row['correction_variant_keys'] or []),*keys]),unit,operation))
+            row=c.execute('SELECT correction_variant_keys FROM visual_creative_attempts WHERE project_id=%s AND creative_unit_id=%s AND operation=%s FOR UPDATE',(project,unit,operation)).fetchone()
+            c.execute('UPDATE visual_creative_attempts SET correction_variant_keys=%s::jsonb,updated_at=now() WHERE project_id=%s AND creative_unit_id=%s AND operation=%s',
+                      (json.dumps([*(row['correction_variant_keys'] or []),*keys]),project,unit,operation))
     return decision['stage']
 
 
