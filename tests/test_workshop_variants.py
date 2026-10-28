@@ -577,8 +577,13 @@ os.environ['DATABASE_URL']=payload['database_url']
 os.environ['STUDIO_PUBLIC_ORIGIN']='https://testserver'
 from fastapi.testclient import TestClient
 from studio.api import app
-from studio import workshop_provider
+from studio import workshop_provider,workshop_api
 workshop_provider.quote=lambda kind,seconds:{'model':'test','usd':.1,'seconds':seconds,'last_frame_supported':True}
+workshop_api.worker_online=lambda conn:True
+workshop_api.base_cut_images=lambda source,frames:{frame:b'fake image bytes' for frame in frames}
+class Store:
+    def put_object(self,**kwargs):pass
+workshop_api.storage=lambda:Store()
 calls=[]
 workshop_provider.submit=lambda task_id:calls.append(str(task_id))
 with TestClient(app,base_url='https://testserver') as fresh:
