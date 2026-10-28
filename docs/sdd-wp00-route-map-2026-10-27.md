@@ -72,6 +72,20 @@ Escopo desta revisão: handlers de `studio/authentication.py` e testes correspon
 
 A leitura estática identificou checagens de ator e workspace em autenticação/membros; as 280 verificações automatizadas de `tests/` passaram no PostgreSQL temporário. Isso ainda não fecha autorização dinâmica em toda a superfície nem paridade com produção. Próxima validação: cobrir concorrência simultânea do último owner, papel inválido, schema e identidade após troca de workspace, e comparar a matriz por handler com cada imagem/runtime.
 
+## Revisão estática do caminho de revisão até biblioteca/publicação
+
+Escopo: rotas de `studio/workshop_api.py`, `studio/ambient_api.py` e `studio/exports.py`, com os testes de workshop/publicação relacionados. Este é um mapeamento do contrato presente no código; a tela empacotada não tem fontes React/TS versionadas neste repositório e a jornada ainda precisa de reprodução autenticada na aplicação implantada.
+
+| Etapa | Comportamento encontrado | Evidência / lacuna em relação ao SDD |
+|---|---|---|
+| Revisar asset do clipe | `POST /api/creator/workshop/projects/{pid}/clips/{cid}/review/{kind}` valida hash/assinatura, identidade e, para vídeo, prévias de emenda; grava aprovação no registro do asset | Testes cobrem aprovação/revisão de variantes e integridade. Isso aprova asset intermediário, não promove o render final à biblioteca de publicação. |
+| Revisar render final do projeto | `POST /api/creator/workshop/projects/{pid}/renders/{tid}/review` confirma que o job completo, hash e snapshot do projeto ainda correspondem; atualiza `factory_tasks.payload.approved/review_sha256/review_note` | Não cria nem atualiza `visual_library`, `export_jobs` ou `youtube_publications`. A transação registra a revisão somente no job de render. |
+| Incluir clipe na biblioteca visual | `POST /api/creator/workshop/projects/{pid}/clips/{cid}/library` exige vídeo aprovado e insere cópia imutável em `visual_library`; `/library/{lid}` reutiliza material compatível dentro de projeto do mesmo canal | A inclusão é um endpoint separado da aprovação. O `INSERT` sempre usa novo UUID; tabela sem chave natural/única e handler sem idempotency key. `tests/test_visual_workshop.py` e `tests/test_workshop_variants.py` cobrem salvar/reutilizar uma vez, não repetição, recuperação de falha ou promoção do render completo. |
+| Aprovar piloto ambiental | `POST /api/ambient/pilots/{pid}/approve` atualiza `status`, `approved_at` e sinais de revisão humana; a interface de episódios diz que a ação não publica | Não cria registro de biblioteca. O piloto aprovado é consumido separadamente como referência de receita ou por `/api/youtube/publications/pilots/{pid}` com autorização e gates próprios; isso não demonstra a jornada de biblioteca exigida por G1-02. |
+| Revisar export tradicional | `POST /api/exports/{jid}/review` valida bytes/hash e snapshot atual, grava `export_reviews` e `program_reviews`; `GET /api/exports` lista jobs | É outro fluxo de exportação. Não compartilha a promoção de `visual_library`; a paridade entre essa lista e a “Biblioteca” visual da UI permanece a descobrir. |
+
+**Achado WP-00 / G1-02:** o backend contém aprovação de asset, aprovação de render, biblioteca visual e export/publicação como estados e endpoints separados. O código não prova o contrato da tela “Revisão → Biblioteca”; no caminho do render do Visual Workshop, a aprovação final não promove o arquivo, e o salvamento manual de clipe não é idempotente. O próximo passo correto é reproduzir com um projeto descartável e seguir o mesmo identificador/hash em Revisão, Biblioteca e tela de publicação. Se confirmado, WP-03 deve criar uma promoção transacional/idempotente da versão aprovada para o acervo pronto para publicação, sem conceder autorização de envio ao YouTube; testes precisam cobrir repetição, reload, falha parcial, mesmo hash e proibição de promover versão desatualizada.
+
 ## Rotas declaradas
 
 | Módulo | Método | Caminho efetivo | Linha no código | Política global estática |
