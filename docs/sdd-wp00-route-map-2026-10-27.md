@@ -48,7 +48,29 @@ Todas as rotas acima estão fora da allowlist pública e, portanto, dependem da 
 
 `tests/test_authentication.py` cobre lista privada por workspace, criação/idempotência de publicação, tentativas com IDs de outro workspace e leitura de rascunho de piloto entre workspaces. `tests/test_youtube_publish.py` cobre liberação confirmada, recusa de exclusão sem escopo de gerenciamento, exclusão idempotente e atualização do snippet. Não foi localizada nesta revisão cobertura abrangente `viewer`/`creator`/`operator`/`workspace_admin`/Basic para cada rota listada, nem uma chamada de teste à rota `/prepare`. Os testes não foram executados nesta sessão porque não há confirmação de PostgreSQL descartável configurado; nenhum banco compartilhado foi usado.
 
-**Resultado WP-00:** a análise estática dos handlers de YouTube avançou; paridade de imagem, autorização dinâmica por endpoint, papéis completos, Basic admin e isolamento runtime continuam pendentes. A presença de `profile()` ou do middleware não prova sozinha cada autorização em execução.
+**Resultado WP-00:** a análise estática avançou nos handlers de YouTube/publicação e autenticação/membros; paridade de imagem, autorização dinâmica por endpoint, cobertura completa de papéis, Basic admin e isolamento runtime continuam pendentes. A presença de `profile()`, `management_identity()` ou do middleware não prova sozinha cada autorização em execução.
+
+## Revisão estática de autenticação, workspaces e membros
+
+Escopo desta revisão: handlers de `studio/authentication.py` e testes correspondentes em `tests/test_authentication.py`, na mesma baseline indicada no cabeçalho. Esta leitura não executa endpoints nem confirma qual revisão está ativa em cada serviço.
+
+| Grupo de rotas | Checagem do handler | Escopo/efeito | Cobertura encontrada e lacuna |
+|---|---|---|---|
+| `/capabilities`, `/register`, `/verify`, `/login`, `/forgot-password`, `/reset-password` | Públicas pela allowlist; limites por IP em operações sensíveis; tokens de uso único/expiração; recuperação responde de modo não enumerável | Criam/verificam conta, emitem instruções de e-mail, atualizam senha e revogam sessões do usuário | Há teste de cadastro indisponível e fluxo de recuperação/verificação/replay; não há matriz dinâmica contra runtime implantado nem teste de limites concorrentes. |
+| `/admin-login` | Pública pela allowlist e compara usuário/senha administrativos em tempo constante | Cria sessão de `platform_admin`, separada da sessão de usuário | `test_platform_cookie_keeps_legacy_workspace_and_logout` verifica login/cookie e acesso legado; falta validação na imagem ativa e matriz de tentativa/limite. |
+| `/me`, `/workspaces` | Exigem cookie de sessão válido; plataforma recebe lista vazia de workspaces; sessão comum lista somente associações daquele usuário | Expõe identidade mínima e memberships | Testes exercitam workspace switch e páginas/login sem conceder API; não há teste de enumeração entre contas em cada handler nem validação no runtime. |
+| `POST /workspace` | Exige sessão não-plataforma e membership explícito no workspace de destino | Atualiza o workspace da sessão | `test_membership_last_owner_and_workspace_switch` cobre destino sem associação e troca para workspace em que o usuário é membro; falta comprovar resolução de schema e sessão atualizada em execução. |
+| `GET /members` | `management_identity` aceita somente `workspace_owner` ou `workspace_admin`; consulta memberships pelo `workspace_id` da identidade | Lista membros do workspace corrente | A suíte cobre que `viewer` não lista membros após troca de workspace, mas não testa diretamente isolamento de listagem para dois workspaces no handler. |
+| `PUT /members`, `POST /members` | Exigem sessão owner; `workspace_admin` é barrado no próprio handler. Edição serializa por advisory lock e impede remover o último owner. Novo membro precisa ter conta verificada; não permite atribuir `workspace_owner` pelo endpoint de inclusão | Altera papel ou adiciona membership no workspace corrente; registra auditoria | `test_membership_last_owner_and_workspace_switch` cobre proteção do último owner, inclusão pelo owner e bloqueio de membro comum. Não cobre diretamente admin tentando alterar/adicionar, enumeração de alvo fora do workspace, papéis inválidos nem concorrência com PostgreSQL descartável. |
+| `POST /logout` | O handler apaga sessões de usuário e plataforma pelo hash do cookie; CSRF/origin mutável são aplicados pelo middleware de sessão | Encerra a sessão e apaga cookies | Testes cobrem logout de plataforma e recusa de origem não confiável para viewer; faltam casos de logout de sessão workspace e confirmação com a imagem implantada. |
+
+### Limite entre a identidade da aplicação e Basic admin
+
+`management_identity()` exige objeto de sessão com papel `workspace_owner` ou `workspace_admin`; por isso, a sessão `platform_admin` e a autenticação HTTP Basic não recebem gestão de membros por esse helper. `workspaces()` trata explicitamente sessão de plataforma como lista vazia, enquanto `/workspace` rejeita sessão de plataforma. O Basic admin continua no caminho privilegiado legado do middleware para rotas que não exigem identidade dentro do handler. Essa distinção não substitui auditoria de cada handler nem estabelece que o comportamento observado no código corresponda às imagens implantadas.
+
+### Resultado desta fatia
+
+A leitura estática identificou checagens de ator e workspace em autenticação/membros e os testes específicos já existentes. Ela não fecha a autorização dinâmica nem o isolamento no runtime. O conjunto de testes exige `LOFI_TEST_DATABASE_URL`; essa variável não está configurada nesta sessão e a fixture executa escrita/limpeza no banco informado. Portanto, não executei os testes nem usei banco compartilhado. A próxima validação segura exige PostgreSQL descartável e inclui tentativas `workspace_admin` em mutações de membros, acesso a alvo de outro workspace, conflito concorrente do último owner, sessão de plataforma/Basic e verificação de workspace/schema após troca.
 
 ## Rotas declaradas
 
