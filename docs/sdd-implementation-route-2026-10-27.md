@@ -37,12 +37,14 @@ A DigitalOcean também informa que há um snapshot do host, disponível, criado 
 
 **Ação WP-00 derivada:** reconciliar publisher, rádio, channel-radio e music-worker com os artefatos versionados e com o mecanismo de release, registrando revisão de origem, hash/digest da imagem, arquivos divergentes e o caminho de implantação. Para music-worker, estabelecer uma identidade de build rastreável. Não reconstruir nem trocar imagens até a comparação e os gates de recuperação estarem documentados.
 
+O mapa estático de rotas da `main` baseline está em [sdd-wp00-route-map-2026-10-27.md](sdd-wp00-route-map-2026-10-27.md): 223 declarações em 25 módulos, com as regras globais de autenticação extraídas do middleware. Ele ainda não demonstra autorização por endpoint no runtime nem paridade das rotas implantadas; essas verificações continuam no WP-00.
+
 ## Sequência ajustada
 
 ### Etapa 1 — fechar WP-00 antes de expandir mudanças estruturais
 
 1. Usar `main` atual como baseline e cruzar cada snapshot dos PRs #67–#69 com o código canônico. Classificar cada divergência como ativa, histórica, configuração, artefato gerado ou ainda indeterminada; não promover snapshots recuperados automaticamente para código executável.
-2. Completar os mapas exigidos pelo SDD: rotas reais e permissões, entidades/dados, serviços/workers/provedores, compositor, versão implantada e dependências entre portais. Incorporar a reconciliação atualizada dos sete containers e das imagens mencionadas acima. Manter detalhes operacionais/segredos em evidência privada; publicar apenas resumo sanitizado.
+2. Completar os mapas exigidos pelo SDD: complementar o mapa estático com permissões por endpoint e confirmação no runtime; mapear entidades/dados, serviços/workers/provedores, compositor, versão implantada e dependências entre portais. Incorporar a reconciliação atualizada dos sete containers e das imagens mencionadas acima. Manter detalhes operacionais/segredos em evidência privada; publicar apenas resumo sanitizado.
 3. Reproduzir os relatos funcionais com dados e publicador simulados, ligando resultado à versão e às rotas observadas.
 4. Fechar TEST-27 em ambiente isolado: verificar cópia/backup, restaurar em destino descartável, exercitar falha e reversão, e provar qual revisão/scripts a rotina de deploy realmente instala. Não usar uma listagem de dump como prova de restore.
 5. Registrar lacuna, causa demonstrada, evidência, migração/reversão e teste de saída. WP-00 só fecha quando o inventário e o plano de migração estiverem completos; merge de #65 ou snapshots não bastam.
