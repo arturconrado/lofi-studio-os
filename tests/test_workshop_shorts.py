@@ -126,6 +126,11 @@ def test_short_contract_requires_story_beats_and_bounded_captions():
     with pytest.raises(ValueError, match='não ambas'):
         ShortSpec.model_validate(data)
 
+    data = short_spec().model_dump(mode='json')
+    data['audio_cues'] = [{'kind':'soft_chime','start_seconds':5.8,'end_seconds':6.2}]
+    with pytest.raises(ValueError, match='direção de áudio'):
+        ShortSpec.model_validate(data)
+
 
 @pytest.mark.skipif(not shutil.which('ffmpeg'), reason='FFmpeg is not installed')
 def test_local_renderer_produces_a_vertical_decodable_story(tmp_path):
@@ -144,7 +149,9 @@ def test_local_renderer_produces_a_vertical_decodable_story(tmp_path):
     spec = short_spec(ids)
     spec = ShortSpec.model_validate({**spec.model_dump(mode='json'),
         'segments': [{**segment.model_dump(mode='json'), 'source_sha256': sha}
-                     for segment in spec.segments]})
+                     for segment in spec.segments],
+        'audio_cues': [{'kind':'music_pause','start_seconds':2,'end_seconds':2.35},
+                       {'kind':'soft_chime','start_seconds':4.2,'end_seconds':4.6}]})
 
     report = render_short(spec, {clip_id: source for clip_id in ids}, audio, audio_sha,
                           tmp_path / 'short.mp4', tmp_path, {
@@ -159,7 +166,11 @@ def test_local_renderer_produces_a_vertical_decodable_story(tmp_path):
         'source_program_id':'program-1','source_snapshot_sha256':'c'*64,
         'source_start_seconds':0,'source_duration_seconds':6,
         'source_track_count':1,'additional_music_tracks':0,'voiceover_tracks':0,
-        'sound_effect_tracks':0,'fade_in_seconds':.25,'fade_out_seconds':.8}
+        'sound_cues':[{'kind':'music_pause','start_seconds':2.0,'end_seconds':2.35},
+                      {'kind':'soft_chime','start_seconds':4.2,'end_seconds':4.6}],
+        'sound_effect_tracks':1,
+        'music_pause_intervals':[{'kind':'music_pause','start_seconds':2.0,'end_seconds':2.35}],
+        'fade_in_seconds':.25,'fade_out_seconds':.8}
     streams=json.loads(subprocess.run(['ffprobe','-v','error','-select_streams','a',
         '-show_streams','-of','json',str(tmp_path/'short.mp4')],check=True,capture_output=True,text=True).stdout)['streams']
     assert len(streams)==1
