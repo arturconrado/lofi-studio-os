@@ -452,6 +452,8 @@ def test_http_batch_quotes_reserves_once_recovers_and_reviews_each_variant(clien
     response=client.post(url+f'/clips/{clip.id}/generate/video',json=request)
     assert response.status_code==200,response.text
     ids=response.json()['batch_ids'];assert len(ids)==2 and not calls and reservations==[.2]
+    history=client.get(url+f'/clips/{clip.id}/quote/video').json()['attempt']['history'][0]
+    assert history['request_count']==1 and history['variant_count']==2 and history['reserved_usd']==.2
     assert client.post(url+f'/clips/{clip.id}/generate/video',json=request).json()['id']==ids[0]
     assert reservations==[.2]
     state=client.get(url).json();assert all(j['status']=='QUEUED' for j in state['jobs'])
@@ -547,6 +549,8 @@ def test_paid_attempt_cycle_persists_across_reload_splits_and_project_duplicates
         'max_usd':quote['usd'],'confirm_cost':True,'variant_key':second_key})
     assert second.status_code==200,second.text
     assert len(calls)==2
+    split_history=client.get(url+f'/clips/{clip.id}/quote/video').json()['attempt']['history'][0]
+    assert split_history['request_count']==2 and split_history['variant_count']==2 and split_history['reserved_usd']==.2
 
     # A changed spec can use one reasoned correction cycle; a later changed spec is blocked.
     state=client.get(url).json();state['data']['clips'][0]['motion']='Ajuste claro: pegar a caneca e devolvê-la ao mesmo lugar'

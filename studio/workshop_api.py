@@ -135,8 +135,9 @@ def attempt_keys(clip, groups):
 
 def attempt_history(c, unit, operation, project_id):
     """Summarize durable requests for this creative unit without exposing provider internals."""
-    rows=c.execute('''SELECT t.payload->>'attempt_stage' stage,t.status,t.created_at,t.reserved_cost,
-             t.payload->>'variant_key' variant_key,t.payload->>'correction_reason' correction_reason
+    rows=c.execute('''SELECT t.id,t.payload->>'attempt_stage' stage,t.status,t.created_at,t.reserved_cost,
+             t.payload->>'variant_key' variant_key,t.payload->'batch_ids' batch_ids,
+             t.payload->>'correction_reason' correction_reason
       FROM factory_tasks t JOIN visual_projects source_project
         ON source_project.id::text=t.payload->>'project_id'
       WHERE t.kind=%s AND t.payload->>'creative_unit_id'=%s AND t.payload->>'operation'=%s
@@ -145,16 +146,21 @@ def attempt_history(c, unit, operation, project_id):
       ORDER BY t.created_at''',(KIND,str(unit),operation,project_id)).fetchall()
     grouped={}
     for row in rows:
-        stage=row['stage'];item=grouped.setdefault(stage,{'stage':stage,'request_count':0,'variant_keys':set(),
+        stage=row['stage'];item=grouped.setdefault(stage,{'request_signatures':set(),'variant_keys':set(),
             'reserved_usd':0.0,'statuses':set(),'recorded_at':row['created_at'].isoformat() if row['created_at'] else None})
-        item['request_count']+=1;item['reserved_usd']+=float(row['reserved_cost'] or 0)
+        # A single user request can reserve one factory_tasks row per selected
+        # variant. Count the shared batch once, while still summing each row's
+        # reserved amount and reporting the number of distinct variants.
+        batch_ids=row.get('batch_ids') or [str(row['id'])]
+        item['request_signatures'].add(tuple(sorted(str(value) for value in batch_ids)))
+        item['reserved_usd']+=float(row['reserved_cost'] or 0)
         item['statuses'].add(row['status'])
         if row['variant_key']:item['variant_keys'].add(row['variant_key'])
         if row['correction_reason']:item['correction_reason']=row['correction_reason']
     order={'initial':0,'correction':1}
     result=[]
     for stage,item in sorted(grouped.items(),key=lambda pair:order.get(pair[0],9)):
-        result.append({key:value for key,value in item.items() if key not in ('variant_keys','statuses')} | {
+        result.append({'stage':stage,'request_count':len(item['request_signatures']),
             'variant_count':len(item['variant_keys']),'reserved_usd':round(item['reserved_usd'],6),
             'statuses':sorted(item['statuses'])})
     return result
