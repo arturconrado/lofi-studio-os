@@ -28,6 +28,22 @@ def test_uncertain_public_task_explains_reconciliation_without_leaking_provider_
     assert 'private-provider-id' not in json.dumps(polling,default=str)
 
 
+def test_public_task_distinguishes_cancel_request_from_provider_confirmation():
+    base={'id':uuid.uuid4(),'kind':'visual_workshop_v1','status':'RUNNING','detail':'Running',
+          'reserved_cost':Decimal('.08'),'created_at':None}
+    payload={'project_id':str(uuid.uuid4()),'operation':'video','cancel_requested_at':123,
+             'provider_job_id':'private-provider-id'}
+    requested=public_task({**base,'payload':payload})
+    assert requested['cancel_state']=='requested'
+    assert 'private-provider-id' not in json.dumps(requested,default=str)
+    payload['provider_terminal_status']='cancelled'
+    confirmed=public_task({**base,'payload':payload})
+    assert confirmed['cancel_state']=='confirmed'
+    payload['provider_terminal_status']='completed'
+    finished=public_task({**base,'payload':payload})
+    assert finished['cancel_state']=='remote_finished'
+
+
 def test_continuation_parts_share_the_original_creative_attempt_unit():
     from studio.workshop_api import creative_unit
     d,_=fixture();root=d.clips[0]
@@ -147,6 +163,49 @@ import sys
 from PIL import Image
 from test_authentication import client,signup
 DB=pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
+
+
+@DB
+def test_cancel_video_is_local_before_submit_and_reconciles_submitting_job(client):
+    from test_authentication import signup
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    cl=client;_,identity=signup(cl);cl.headers.update({'X-CSRF-Token':identity['csrf_token']})
+    cid=cl.get('/api/channels').json()[0]['id']
+    d,_=fixture()
+    d.base.image_id=d.base.video_id=None
+    for clip in d.clips:clip.image_id=clip.video_id=None
+    created=cl.post('/api/creator/workshop/projects',json={'channel_id':cid,'data':d.model_dump(mode='json')})
+    assert created.status_code==200,created.text
+    project_id=created.json()['id']
+    workspace=identity['workspace_id'];marker=WORKSPACE.set(workspace)
+    queued_id,running_id=uuid.uuid4(),uuid.uuid4()
+    try:
+        with db() as c:
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,'visual_workshop_v1','test',%s,.08,'QUEUED')",
+                      (queued_id,json.dumps({'project_id':project_id,'operation':'video'})))
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,'visual_workshop_v1','test',%s,.08,'RUNNING')",
+                      (running_id,json.dumps({'project_id':project_id,'operation':'video','provider_job_id':'private-job-id'})))
+            c.commit()
+    finally:WORKSPACE.reset(marker)
+    root=f'/api/creator/workshop/projects/{project_id}/jobs'
+    response=cl.post(f'{root}/{queued_id}/cancel')
+    assert response.status_code==200,response.text
+    assert response.json()['status']=='CANCELLED' and response.json()['cancel_state']=='before_submission'
+    response=cl.post(f'{root}/{running_id}/cancel')
+    assert response.status_code==200,response.text
+    assert response.json()['status']=='RUNNING' and response.json()['cancel_state']=='requested'
+    assert response.json()['reserved_usd']==pytest.approx(.08)
+    marker=WORKSPACE.set(workspace)
+    try:
+        with db() as c:
+            queued=c.execute('SELECT status,reserved_cost FROM factory_tasks WHERE id=%s',(queued_id,)).fetchone()
+            running=c.execute('SELECT status,reserved_cost,payload FROM factory_tasks WHERE id=%s',(running_id,)).fetchone()
+            assert queued['status']=='CANCELLED' and queued['reserved_cost']==0
+            assert running['status']=='RUNNING' and running['reserved_cost']==Decimal('.08')
+            assert running['payload'].get('cancel_requested_at')
+            assert running['payload']['provider_job_id']=='private-job-id'
+    finally:WORKSPACE.reset(marker)
 
 
 @DB
