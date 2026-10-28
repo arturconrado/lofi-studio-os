@@ -409,8 +409,8 @@ def seed_project(cl,draft,media):
 
 
 @DB
-def test_creative_attempt_limit_is_scoped_to_project_even_when_clip_ids_repeat(client,monkeypatch):
-    """A client-supplied clip UUID in another project must not consume this project's allowance."""
+def test_creative_attempt_limit_is_scoped_to_channel_even_when_clip_ids_repeat(client,monkeypatch):
+    """A client-supplied clip UUID in another channel must not consume this channel's allowance."""
     from studio import workshop_api as api,workshop_provider
     from studio.core import db
     from studio.tenancy import WORKSPACE
@@ -429,13 +429,16 @@ def test_creative_attempt_limit_is_scoped_to_project_even_when_clip_ids_repeat(c
     try:
         with db() as c:
             original=c.execute('SELECT channel_id FROM visual_projects WHERE id=%s',(project_a,)).fetchone()
+            channel_b=uuid.uuid4()
+            c.execute('INSERT INTO radio_channels(id,name,niche) VALUES(%s,%s,%s)',
+                      (channel_b,'Outro canal','Lo-fi para foco e estudo'))
             c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',
-                      (project_b,original['channel_id'],json.dumps(second.model_dump(mode='json'))))
+                      (project_b,channel_b,json.dumps(second.model_dump(mode='json'))))
             for aid,asset in second_media.items():
                 c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,project_b,json.dumps(asset)))
-            c.execute('''INSERT INTO visual_creative_attempts(project_id,creative_unit_id,operation,initial_signature,initial_variant_keys)
+            c.execute('''INSERT INTO visual_creative_attempts(channel_id,creative_unit_id,operation,initial_signature,initial_variant_keys)
                          VALUES(%s,%s,'image',%s,%s::jsonb)''',
-                      (project_a,draft.base.id,api.creative_spec_signature(draft,draft.base,'image','720p',media),
+                      (original['channel_id'],draft.base.id,api.creative_spec_signature(draft,draft.base,'image','720p',media),
                        json.dumps(api.attempt_keys(draft.base,[None]))))
             c.commit()
     finally:WORKSPACE.reset(marker)
