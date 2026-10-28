@@ -305,6 +305,15 @@ def authorize_ready(jid:uuid.UUID,body:ReadyAuthorization):
         growth_receipt=validate_growth_receipt(c,row['channel_id'],body.publication_metadata)
         from .provenance import publication_gate
         if pilot:publication_gate(c,pilot=pilot)
+        elif short:
+            audio=short['payload'].get('audio') or {}
+            if audio.get('program_id'):
+                publication_gate(c,program_id=audio['program_id'])
+            parent_id=short['payload'].get('parent_pilot_id')
+            if parent_id:
+                parent=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(parent_id,row['channel_id'])).fetchone()
+                if not parent:raise HTTPException(409,'Não foi possível validar o vídeo longo de origem neste canal.')
+                publication_gate(c,pilot=parent)
         refuse_duplicates(c,row['channel_id'],body.allow_repeat_visual,pilot=pilot,short_sha256=row.get('short_sha256'))
         cred=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s',(row['channel_id'],)).fetchone()
         if not cred or not upload_allowed(json.loads(cipher().decrypt(cred['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio pelo Google no menu Canais.')
