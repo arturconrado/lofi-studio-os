@@ -644,7 +644,7 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     def unavailable():raise AssertionError('Approved reuse must not call provider or request credentials')
     monkeypatch.setattr(mv,'catalog_quote',unavailable)
     monkeypatch.setattr(mv.runtime,'key',unavailable)
-    body['request_id']=str(uuid.uuid4())
+    body['request_id']=str(uuid.uuid4());body['revision']=client.get(f"/api/creator/assembly/plans/{saved['id']}").json()['revision']
     reused=client.post('/api/creator/motion-validation',json=body,headers=headers)
     assert reused.status_code==200,reused.text
     assert reused.json()['reused'] and reused.json()['id']==tid
