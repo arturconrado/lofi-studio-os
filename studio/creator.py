@@ -314,10 +314,10 @@ def save_storyboard(body:StoryboardRequest):
   require(c,body.channel_id,body.spec.recipe_sha256,body.spec)
   if body.draft_id:
    if body.draft_revision is None:raise HTTPException(422,'Informe a revisão atual do roteiro para salvá-lo com segurança.')
-   from .creator_plan_versions import require_current_revision,append
-   current_revision=require_current_revision(c,body.draft_id,body.draft_revision)
-   prior=c.execute("SELECT id,data FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL",(body.draft_id,body.channel_id)).fetchone()
+   from .creator_plan_versions import save_locked_revision
+   prior=c.execute("SELECT id,data,revision FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL FOR UPDATE",(body.draft_id,body.channel_id)).fetchone()
    if not prior:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
+   if prior['revision']!=body.draft_revision:raise HTTPException(409,'O roteiro mudou em outra janela. Recarregue a revisão atual antes de salvar.')
    pid=body.draft_id
    result['production_assets']=prior['data'].get('production_assets',{})
    if not metadata:
@@ -325,9 +325,8 @@ def save_storyboard(body:StoryboardRequest):
      if key in prior['data']:result[key]=prior['data'][key]
    for key in ('assembly_audio','assembly_environment'):
     if key in prior['data']:result[key]=prior['data'][key]
-   current_revision+=1
-   c.execute('UPDATE creator_plans SET theme=%s,minutes=%s,data=%s,revision=%s WHERE id=%s',(body.spec.scenario,body.spec.hours*60,json.dumps(result,ensure_ascii=False),current_revision,pid))
-   append(c,pid,current_revision,result)
+   current_revision=save_locked_revision(c,prior,result,body.draft_revision)
+   c.execute('UPDATE creator_plans SET theme=%s,minutes=%s WHERE id=%s',(body.spec.scenario,body.spec.hours*60,pid))
   else:
    c.execute("INSERT INTO creator_plans(id,request_id,theme,minutes,data,status,reserved,channel_id) VALUES(%s,%s,%s,%s,%s,'draft',0,%s)",(pid,pid,body.spec.scenario,body.spec.hours*60,json.dumps(result,ensure_ascii=False),body.channel_id))
    from .creator_plan_versions import append

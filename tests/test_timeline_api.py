@@ -95,8 +95,8 @@ def test_real_clip_upload_review_and_compatible_reuse_are_separate(client,monkey
     with video.open('rb') as handle:r=client.post(base+'/clips/typing_idle',files={'file':('idle.mp4',handle,'video/mp4')},data={'revision':'1'},headers=headers)
     assert r.status_code==200,r.text
     clip=r.json();action=next(a for a in client.get(base).json()['actions'] if a['action']=='typing_idle')
-    assert clip['revision']==2
-    assert [entry['revision'] for entry in client.get(f'/api/creator/plans/{pid}/revisions').json()['revisions']]==[2,1]
+    assert clip['revision']==1
+    assert [entry['revision'] for entry in client.get(f'/api/creator/plans/{pid}/revisions').json()['revisions']]==[1]
     assert not action['ready']
     assert action['clips'][0]['origin']=={'kind':'uploaded_to_plan','id':pid}
     review={'revision':clip['revision'],'sha256':clip['sha256'],'confirm_identity_props':True,'confirm_motion':True,'confirm_pose_anchors':True}
@@ -106,20 +106,27 @@ def test_real_clip_upload_review_and_compatible_reuse_are_separate(client,monkey
     review['confirm_loop_seam']=True
     reviewed=client.post(base+'/clips/'+clip['id']+'/review',json=review,headers=headers)
     assert reviewed.status_code==200,reviewed.text
-    assert reviewed.json()['revision']==3
-    approved=client.get(f'/api/creator/plans/{pid}/revisions/3').json()
-    assert approved['data']['production_assets'][clip['id']]['status']=='APPROVED_ACTION'
-    assert approved['data']['production_assets'][clip['id']]['human_review_sha256']==clip['sha256']
+    assert reviewed.json()['revision']==1
+    approved=client.get(f'/api/creator/plans/{pid}/revisions/1').json()
+    assert 'production_assets' not in approved['data']
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    marker=WORKSPACE.set(client.get('/api/auth/me').json()['workspace_id'])
+    try:
+        with db() as c:
+            asset=c.execute("SELECT data->'production_assets'->%s asset FROM creator_plans WHERE id=%s",(clip['id'],pid)).fetchone()['asset']
+            assert asset['status']=='APPROVED_ACTION' and asset['human_review_sha256']==clip['sha256']
+    finally:WORKSPACE.reset(marker)
     new=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers).json()['id']
     newbase='/api/creator/assembly/plans/'+new
     assert client.get(newbase).json()['reusable_clips']==1
     reused=client.post(newbase+'/reuse',json={'revision':1},headers=headers).json()
-    assert reused['reused_clips']==1 and reused['revision']==2
-    reused=client.post(newbase+'/reuse',json={'revision':2},headers=headers).json()
-    assert reused['reused_clips']==0 and reused['revision']==2
+    assert reused['reused_clips']==1 and reused['revision']==1
+    reused=client.post(newbase+'/reuse',json={'revision':1},headers=headers).json()
+    assert reused['reused_clips']==0 and reused['revision']==1
     assert next(a for a in client.get(newbase).json()['actions'] if a['action']=='typing_idle')['ready']
     spec['shirt_color']='pink'
-    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':new,'draft_revision':2,'spec':spec},headers=headers).status_code==200
+    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':new,'draft_revision':1,'spec':spec},headers=headers).status_code==200
     assert not next(a for a in client.get(newbase).json()['actions'] if a['action']=='typing_idle')['ready']
 
 

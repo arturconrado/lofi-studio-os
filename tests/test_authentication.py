@@ -604,14 +604,24 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     r=client.post('/api/creator/motion-validation',json=body,headers=headers)
     assert r.status_code==200,r.text
     assert r.json()['state']=='UNCERTAIN'
-    assert r.json()['plan_revision']==saved['revision']+2
+    assert r.json()['plan_revision']==saved['revision']
     history=client.get(f"/api/creator/plans/{saved['id']}/revisions").json()['revisions']
-    assert history[0]['revision']==saved['revision']+2
+    assert history[0]['revision']==saved['revision']
     snapshot=client.get(f"/api/creator/plans/{saved['id']}/revisions/{history[0]['revision']}").json()
-    assert snapshot['data']['production_assets'][tid]['state']=='UNCERTAIN'
-    assert snapshot['sha256']
+    assert 'production_assets' not in snapshot['data']
+    from studio.creator_plan_versions import content_hash
+    assert snapshot['sha256']==content_hash(snapshot['data'])
     assert client.post('/api/creator/motion-validation',json=body,headers=headers).json()['state']=='UNCERTAIN'
     assert Client.sends==1
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            plan=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(saved['id'],)).fetchone()
+            data=copy.deepcopy(plan['data']);data['title']='Edited while asset remains uncertain'
+            from studio.creator_plan_versions import save_locked_revision
+            changed_revision=save_locked_revision(c,plan,data,plan['revision']);c.commit()
+    finally:WORKSPACE.reset(marker)
+    assert changed_revision==saved['revision']+1
     stale=dict(body,request_id=str(uuid.uuid4()))
     assert client.post('/api/creator/motion-validation',json=stale,headers=headers).status_code==409
     for _ in range(2):
@@ -624,10 +634,9 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     try:
         with db() as c:
             plan=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(saved['id'],)).fetchone()
-            data=copy.deepcopy(plan['data']);assets=dict(data['production_assets']);assets[tid].update(state='REVIEW',video_key='cached.mp4',sha256='a'*64,seconds=8,human_review='pending');data['production_assets']=assets
-            from studio.creator_plan_versions import save_locked_revision
-            completed_revision=save_locked_revision(c,plan,data,plan['revision'])
-            assert completed_revision==plan['revision']+1
+            completed_revision=mv.update_asset_state(c,saved['id'],tid,'REVIEW',
+                {'video_key':'cached.mp4','sha256':'a'*64,'seconds':8,'human_review':'pending'})
+            assert completed_revision==plan['revision']==changed_revision
             report={'sha256':'a'*64,'full_decode_pass':True,'duration_seconds':8}
             c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'pending','video_key':'cached.mp4','report':report,'plan_revision':completed_revision}),tid));c.commit()
     finally:WORKSPACE.reset(marker)
@@ -635,12 +644,17 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     assert client.post('/api/creator/motion-validation/'+tid+'/review',json=dict(review_body,revision=completed_revision-1),headers=headers).status_code==409
     approved=client.post('/api/creator/motion-validation/'+tid+'/review',json=review_body,headers=headers)
     assert approved.status_code==200,approved.text
-    assert approved.json()['revision']==completed_revision+1
+    assert approved.json()['revision']==completed_revision
     approved_snapshot=client.get(f"/api/creator/plans/{saved['id']}/revisions/{approved.json()['revision']}").json()
-    assert approved_snapshot['data']['production_assets'][tid]['human_review']=='approved'
-    assert approved_snapshot['data']['production_assets'][tid]['human_review_sha256']=='a'*64
+    assert 'production_assets' not in approved_snapshot['data']
     from studio.creator_plan_versions import content_hash
     assert approved_snapshot['sha256']==content_hash(approved_snapshot['data'])
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            asset=c.execute('SELECT data->\'production_assets\'->%s asset FROM creator_plans WHERE id=%s',(tid,saved['id'])).fetchone()['asset']
+            assert asset['human_review']=='approved' and asset['human_review_sha256']=='a'*64
+    finally:WORKSPACE.reset(marker)
     def unavailable():raise AssertionError('Approved reuse must not call provider or request credentials')
     monkeypatch.setattr(mv,'catalog_quote',unavailable)
     monkeypatch.setattr(mv.runtime,'key',unavailable)

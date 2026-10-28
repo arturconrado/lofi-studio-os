@@ -10,7 +10,6 @@ from .core import db,storage,audit
 from .channels import profile
 from . import runtime
 from .production_harness import production_spec_hash
-from .creator_plan_versions import save_locked_revision
 router=APIRouter(prefix='/motion-validation')
 MODEL='google/veo-3.1-lite'
 KIND='motion_validation_20261014'
@@ -55,14 +54,18 @@ def public(row):
             'role':p.get('role'),'demo_only':True,'applied_to_live':False}
 
 
-def update_asset_state(c,plan_id,task_id,state):
+def update_asset_state(c,plan_id,task_id,state,details=None):
     row=c.execute("SELECT * FROM creator_plans WHERE id=%s AND status='draft' FOR UPDATE",(plan_id,)).fetchone()
     if not row:return None
     data=copy.deepcopy(row['data']);assets=dict(data.get('production_assets') or {});entry=assets.get(str(task_id))
     if not entry:return row['revision']
-    if entry.get('state')==state:return row['revision']
-    entry['state']=state;assets[str(task_id)]=entry;data['production_assets']=assets
-    return save_locked_revision(c,row,data,row['revision'])
+    updated=dict(entry);updated['state']=state;updated.update(details or {})
+    if updated==entry:return row['revision']
+    assets[str(task_id)]=updated;data['production_assets']=assets
+    # Asset lifecycle changes are tracked by the task ID and its own hash.
+    # They do not change the editorial proposal revision.
+    c.execute('UPDATE creator_plans SET data=%s WHERE id=%s',(json.dumps(data,ensure_ascii=False),plan_id))
+    return row['revision']
 
 
 @router.get('/sources')
@@ -156,7 +159,8 @@ def submit(body:Pilot):
         data=dict(locked['data']);assets=dict(data.get('production_assets') or {})
         assets[str(body.request_id)]={'role':'interaction_reference','state':'SUBMITTING','spec_sha256':payload['spec_sha256']}
         data['production_assets']=assets
-        payload['plan_revision']=save_locked_revision(c,locked,data,body.revision)
+        c.execute('UPDATE creator_plans SET data=%s WHERE id=%s',(json.dumps(data,ensure_ascii=False),body.plan_id))
+        payload['plan_revision']=body.revision
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'SUBMITTING','Pedido único; sem retentativa automática')",(body.request_id,KIND,MODEL,json.dumps(payload),cap));audit(c,'MOTION_PILOT_RESERVED',str(body.request_id),str(cap));c.commit()
     try:
         with httpx.Client(timeout=90) as client:
@@ -202,14 +206,10 @@ def refresh(tid:uuid.UUID):
         patch={'video_key':key,'report':report,'actual_cost_usd':state.get('usage',{}).get('cost')}
         with db() as c:
             c.execute("SELECT pg_advisory_xact_lock(192837467)")
-            task=get_task(c,tid);plan=c.execute("SELECT * FROM creator_plans WHERE id=%s AND status='draft' FOR UPDATE",(task['payload']['plan_id'],)).fetchone()
-            patch['plan_revision']=None
-            if plan:
-                data=copy.deepcopy(plan['data']);assets=dict(data.get('production_assets') or {})
-                current=assets.get(str(tid),{})
-                current.update({'role':'interaction_reference','state':'REVIEW','video_key':key,'sha256':report['sha256'],'spec_sha256':row['payload']['spec_sha256'],'seconds':report['duration_seconds'],'human_review':'pending'})
-                assets[str(tid)]=current;data['production_assets']=assets
-                patch['plan_revision']=save_locked_revision(c,plan,data,plan['revision'])
+            task=get_task(c,tid)
+            patch['plan_revision']=update_asset_state(c,task['payload']['plan_id'],tid,'REVIEW',
+                {'role':'interaction_reference','video_key':key,'sha256':report['sha256'],
+                 'spec_sha256':row['payload']['spec_sha256'],'seconds':report['duration_seconds'],'human_review':'pending'})
             c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Prévia de oito segundos pronta; revisão visual pendente',updated_at=now() WHERE id=%s",(json.dumps(patch),tid));audit(c,'MOTION_PILOT_COMPLETED',str(tid));c.commit();return public(get_task(c,tid))
 
 
@@ -244,13 +244,11 @@ def review(tid:uuid.UUID,body:AssetReview):
         plan=c.execute('SELECT * FROM creator_plans WHERE id=%s AND status=\'draft\' FOR UPDATE',(p['plan_id'],)).fetchone()
         if not plan:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
         if plan['revision']!=body.revision:raise HTTPException(409,'O roteiro mudou. Recarregue a revisão atual antes de aprovar o asset.')
-        if not plan or production_spec_hash(plan['data'].get('production_spec'))!=p['spec_sha256']:
+        if production_spec_hash(plan['data'].get('production_spec'))!=p['spec_sha256']:
             raise HTTPException(409,'O roteiro mudou. Este asset precisa ser reavaliado para a nova versão')
-        data=copy.deepcopy(plan['data']);assets=dict(data.get('production_assets') or {})
-        entry=assets.get(str(tid))
+        entry=plan['data'].get('production_assets',{}).get(str(tid))
         if not entry:raise HTTPException(409,'Asset não vinculado ao roteiro')
-        entry.update(state='APPROVED_REFERENCE',human_review='approved',human_review_sha256=body.sha256)
-        assets[str(tid)]=entry;data['production_assets']=assets
-        revision=save_locked_revision(c,plan,data,body.revision)
+        revision=update_asset_state(c,p['plan_id'],tid,'APPROVED_REFERENCE',
+                                    {'human_review':'approved','human_review_sha256':body.sha256})
         c.execute("UPDATE factory_tasks SET payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'approved','plan_revision':revision}),tid));audit(c,'STORYBOARD_ASSET_REVIEWED',p['plan_id'],str(tid));c.commit()
     return {'ok':True,'asset_role':'interaction_reference','revision':revision,'full_program_approved':False,'broadcast_started':False}

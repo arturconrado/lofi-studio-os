@@ -4,6 +4,18 @@ import json
 import uuid
 
 
+def revision_data(data):
+    """Return the immutable editorial proposal, excluding mutable artifact state.
+
+    Each artifact is versioned by its own immutable hash and keeps the plan
+    revision it was evaluated against. Upload/progress/review status is
+    operational metadata and must not manufacture a new proposal revision.
+    """
+    value=dict(data)
+    value.pop('production_assets',None)
+    return value
+
+
 def content_hash(data):
     encoded=json.dumps(data,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode('utf-8')
     return hashlib.sha256(encoded).hexdigest()
@@ -24,20 +36,28 @@ def initialize(c):
       LEFT JOIN creator_plan_revisions r ON r.plan_id=p.id AND r.revision=p.revision
       WHERE p.data IS NOT NULL AND r.plan_id IS NULL''').fetchall()
     for row in rows:
+        snapshot=revision_data(row['data'])
         c.execute('INSERT INTO creator_plan_revisions(plan_id,revision,sha256,data) VALUES(%s,%s,%s,%s) ON CONFLICT(plan_id,revision) DO NOTHING',
-                  (row['id'],row['revision'],content_hash(row['data']),json.dumps(row['data'],ensure_ascii=False)))
+                  (row['id'],row['revision'],content_hash(snapshot),json.dumps(snapshot,ensure_ascii=False)))
 
 
 def append(c,plan_id,revision,data):
+    snapshot=revision_data(data)
     c.execute('INSERT INTO creator_plan_revisions(plan_id,revision,sha256,data) VALUES(%s,%s,%s,%s)',
-              (plan_id,revision,content_hash(data),json.dumps(data,ensure_ascii=False)))
+              (plan_id,revision,content_hash(snapshot),json.dumps(snapshot,ensure_ascii=False)))
 
 
 def save_locked_revision(c,row,data,expected):
     from fastapi import HTTPException
     if row['revision']!=expected:
         raise HTTPException(409,'O roteiro mudou em outra janela. Recarregue a revisão atual antes de salvar.')
-    if content_hash(data)==content_hash(row['data']):return row['revision']
+    if content_hash(revision_data(data))==content_hash(revision_data(row['data'])):
+        # Persist operational metadata (for example asset review state) while
+        # keeping the editorial revision and its immutable snapshot unchanged.
+        if data!=row['data']:
+            c.execute('UPDATE creator_plans SET data=%s WHERE id=%s',
+                      (json.dumps(data,ensure_ascii=False),row['id']))
+        return row['revision']
     revision=row['revision']+1
     c.execute('UPDATE creator_plans SET data=%s,revision=%s WHERE id=%s',
               (json.dumps(data,ensure_ascii=False),revision,row['id']))
