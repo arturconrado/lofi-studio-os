@@ -19,6 +19,10 @@ say() { echo "[auto-deploy] $*"; }
 fail() { say "ERRO: $1"; exit "${2:-1}"; }
 
 request="${SSH_ORIGINAL_COMMAND:-}"
+if [ "$request" = "lofi-deploy-protocol" ]; then
+  printf 'LOFI_DEPLOY_PROTOCOL=2\n'
+  exit 0
+fi
 [[ "$request" =~ ^deploy\ ([0-9a-f]{7,40})$ ]] || fail "uso: deploy <sha>" 2
 FULL_SHA=${BASH_REMATCH[1]}
 SHA=${FULL_SHA:0:7}

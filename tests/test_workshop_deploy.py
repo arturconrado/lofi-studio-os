@@ -34,6 +34,20 @@ def test_youtube_publisher_deploy_is_versioned_and_upload_safe():
     assert 'for s in "${SERVICES[@]}"; do' in script
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='Production deploy runs Bash on Linux')
+def test_installed_deployer_protocol_probe_is_read_only_and_required_before_release():
+    script=Path('ops/auto-deploy.sh').resolve()
+    env={**os.environ,'SSH_ORIGINAL_COMMAND':'lofi-deploy-protocol'}
+    result=subprocess.run(['bash',str(script)],env=env,capture_output=True,text=True)
+    assert result.returncode==0
+    assert result.stdout.strip()=='LOFI_DEPLOY_PROTOCOL=2'
+
+    workflow=Path('.github/workflows/deploy.yml').read_text()
+    assert 'name: Verify installed deployer protocol' in workflow
+    assert workflow.index('name: Verify installed deployer protocol') < workflow.index('name: Deploy (waits while production is busy)')
+    assert 'no release archive was sent.' in workflow
+
+
 def test_unresolved_paid_jobs_block_deployment(tmp_path):
     script=Path('ops/auto-deploy.sh').read_text()
     start=script.index("busy=$(sql <<'EOF'")
