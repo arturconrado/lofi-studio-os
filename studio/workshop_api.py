@@ -160,9 +160,11 @@ def attempt_history(c, unit, operation, project_id):
     order={'initial':0,'correction':1}
     result=[]
     for stage,item in sorted(grouped.items(),key=lambda pair:order.get(pair[0],9)):
-        result.append({'stage':stage,'request_count':len(item['request_signatures']),
+        entry={'stage':stage,'request_count':len(item['request_signatures']),
             'variant_count':len(item['variant_keys']),'reserved_usd':round(item['reserved_usd'],6),
-            'statuses':sorted(item['statuses'])})
+            'statuses':sorted(item['statuses'])}
+        if item.get('correction_reason'):entry['correction_reason']=item['correction_reason']
+        result.append(entry)
     return result
 
 
