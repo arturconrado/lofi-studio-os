@@ -112,7 +112,7 @@ export function Produce() {
           search_phrase_options: growthPackage.search_phrase_options, historical_context: growthPackage.historical_context, reference_editorial_leads: growthPackage.reference_editorial_leads,
           channel_memory_version: growthPackage.channel_memory?.version || null, channel_memory_source_ids: [...new Set((growthPackage.channel_memory?.items || []).flatMap((item:any) => item.source_ids || []))],
           cost_usd: growthPackage.cost_usd ?? null, generated_at: new Date().toISOString() },
-        growth_context: { idea, scenario, recipe: recipe?.name || '', duration_hours: String(hours), visual_scene: scenario || '', musical_direction: quote.audio_prompt } },
+        growth_context: { creative_intent: sceneProposalApplied ? assistantBrief.trim() : '', idea, scenario, recipe: recipe?.name || '', duration_hours: String(hours), visual_scene: scenario || '', musical_direction: quote.audio_prompt } },
     }), 'Produção autorizada. Acompanhe por aqui.');
     setBusy(false);
     if (p) { requestId.current = uuid(); navigate('/projetos/' + p.id); }
@@ -127,9 +127,9 @@ export function Produce() {
       const generated = await post<GrowthPackage>(`/api/growth/${cid}/package-suggestion`, {
         request_id: requestId, intent: growthIntent, content_format: 'long_form',
         source_title: `${sceneInfo?.label || scenario} · ${recipe.name}`,
-        source_description: [idea, quote.copy.description].filter(Boolean).join('\n\n').slice(0, 5000),
+        source_description: [sceneProposalApplied ? assistantBrief.trim() : '', idea, quote.copy.description].filter(Boolean).join('\n\n').slice(0, 5000),
         source_context: {
-          theme: idea || sceneInfo?.label || scenario || '',
+          theme: (sceneProposalApplied ? assistantBrief.trim() : '') || idea || sceneInfo?.label || scenario || '',
           visual_scene: sceneInfo?.reference?.setting || sceneInfo?.label || scenario || '',
           music_style: recipe.name,
           musical_direction: (sceneProposalApplied && sceneProposal?.music_brief) || recipe.data.music.bible || recipe.data.music.moods?.join(', ') || recipe.name,
@@ -171,7 +171,7 @@ export function Produce() {
           search_phrase_options: growthPackage.search_phrase_options, historical_context: growthPackage.historical_context, reference_editorial_leads: growthPackage.reference_editorial_leads,
           channel_memory_version: growthPackage.channel_memory?.version || null, channel_memory_source_ids: [...new Set((growthPackage.channel_memory?.items || []).flatMap((item:any) => item.source_ids || []))],
           cost_usd: growthPackage.cost_usd ?? null, generated_at: new Date().toISOString() },
-        growth_context: { idea, scenario, recipe: recipe?.name || '', duration_hours: String(hours), visual_scene: scenario || '', musical_direction: (sceneProposalApplied && sceneProposal?.music_brief) || quote.audio_prompt },
+        growth_context: { creative_intent: assistantBrief.trim(), idea, scenario, recipe: recipe?.name || '', duration_hours: String(hours), visual_scene: scenario || '', musical_direction: (sceneProposalApplied && sceneProposal?.music_brief) || quote.audio_prompt },
       },
     }), 'Roteiro e pacote Growth salvos; nenhuma produção iniciada');
     setPreparing(false);
@@ -315,6 +315,7 @@ export function Produce() {
             </div>
           )}
           {!quote.whole_episode_export_available && <div class="notice warn">{quote.episode_export_blocker} Nenhum custo será reservado.</div>}
+          {sceneProposalApplied && <div class="notice warn">A proposta aplicada será salva no storyboard com o harness. A produção direta permanece bloqueada aqui porque ainda não consome todos os campos personalizados da proposta.</div>}
           <div class="row">
             <button class="btn" disabled={!growthPackage || preparing || busy} onClick={prepareTimeline}>{preparing ? 'Salvando roteiro…' : 'Preparar roteiro e montagem — sem cobrança de produção'}</button>
             <span class="faint" style={{ fontSize: '13px' }}>Você poderá vincular clipes e blocos de música já existentes e revisar o MP4 completo.</span>
@@ -331,7 +332,7 @@ export function Produce() {
           {quote.visual.renderer_ready && quote.whole_episode_export_available && <Check checked={confirmed} onChange={setConfirmed}>Autorizo até {usd(ceiling)} para {hours}h de música original com a receita “{quote.recipe.name}”. Sem novas tentativas pagas automáticas.</Check>}
           {!quote.visual.renderer_ready && <div class="notice warn">A geração paga está bloqueada até a montagem audiovisual desta jornada estar conectada. Preparar o roteiro acima não reserva custo.</div>}
           <div class="row">
-            <button class="btn primary lg" disabled={!growthPackage || !confirmed || !quote.whole_episode_export_available || !quote.visual.renderer_ready || !quote.visual.applied || busy || !quote.paid_enabled || overBudget || underEstimate || !settings.value} onClick={submit}><IconSpark /> {busy ? 'Autorizando…' : 'Produzir'}</button>
+            <button class="btn primary lg" disabled={!growthPackage || !confirmed || !quote.whole_episode_export_available || !quote.visual.renderer_ready || !quote.visual.applied || busy || !quote.paid_enabled || overBudget || underEstimate || !settings.value || sceneProposalApplied} onClick={submit}><IconSpark /> {busy ? 'Autorizando…' : 'Produzir'}</button>
             <span class="faint" style={{ fontSize: '13px' }}>A revisão só será liberada depois de o MP4 completo ficar pronto.</span>
           </div>
         </>}
