@@ -37,7 +37,7 @@ A DigitalOcean também informa que há um snapshot do host, disponível, criado 
 
 **Ação WP-00 derivada:** reconciliar publisher, rádio, channel-radio e music-worker com os artefatos versionados e com o mecanismo de release, registrando revisão de origem, hash/digest da imagem, arquivos divergentes e o caminho de implantação. Para music-worker, estabelecer uma identidade de build rastreável. Não reconstruir nem trocar imagens até a comparação e os gates de recuperação estarem documentados.
 
-O mapa estático de rotas da `main` baseline está em [sdd-wp00-route-map-2026-10-27.md](sdd-wp00-route-map-2026-10-27.md): 223 declarações em 25 módulos, com as regras globais de autenticação extraídas do middleware. Ele ainda não demonstra autorização por endpoint no runtime nem paridade das rotas implantadas; essas verificações continuam no WP-00.
+O mapa estático de rotas da `main` baseline está em [sdd-wp00-route-map-2026-10-27.md](sdd-wp00-route-map-2026-10-27.md): 223 declarações em 25 módulos, com as regras globais de autenticação extraídas do middleware. O [mapa de sistema e dados](sdd-wp00-system-map-2026-10-27.md) reúne 57 tabelas distintas declaradas, dependências e caminhos de composição, além de riscos que exigem prova. Esses mapas ainda não demonstram autorização por endpoint no runtime, schema instalado nem paridade das rotas/imagens implantadas; essas verificações continuam no WP-00.
 
 ## Sequência ajustada
 
