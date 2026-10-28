@@ -566,7 +566,7 @@ def test_free_storyboard_is_saved_scoped_and_never_queues_generation(client):
 
 
 def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeypatch):
-    import json,io,hashlib
+    import copy,json,io,hashlib
     from PIL import Image
     from decimal import Decimal
     from studio import motion_validation as mv
@@ -624,9 +624,10 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     try:
         with db() as c:
             plan=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(saved['id'],)).fetchone()
-            data=dict(plan['data']);assets=dict(data['production_assets']);assets[tid].update(state='REVIEW',video_key='cached.mp4',sha256='a'*64,seconds=8,human_review='pending');data['production_assets']=assets
+            data=copy.deepcopy(plan['data']);assets=dict(data['production_assets']);assets[tid].update(state='REVIEW',video_key='cached.mp4',sha256='a'*64,seconds=8,human_review='pending');data['production_assets']=assets
             from studio.creator_plan_versions import save_locked_revision
             completed_revision=save_locked_revision(c,plan,data,plan['revision'])
+            assert completed_revision==plan['revision']+1
             report={'sha256':'a'*64,'full_decode_pass':True,'duration_seconds':8}
             c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'pending','video_key':'cached.mp4','report':report,'plan_revision':completed_revision}),tid));c.commit()
     finally:WORKSPACE.reset(marker)
