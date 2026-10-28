@@ -210,10 +210,10 @@ def test_cancel_video_survives_worker_restart_and_reconciles_same_remote_job_and
         def get(self,*args,**kwargs):raise RuntimeError('simulated lost provider connection')
     monkeypatch.setattr(provider.httpx,'Client',LostConnection)
     monkeypatch.setattr(provider.runtime,'key',lambda:'test-token')
-    with pytest.raises(RuntimeError,match='lost provider connection'):
-        provider.refresh(str(running_id))
     marker=WORKSPACE.set(workspace)
     try:
+        with pytest.raises(RuntimeError,match='lost provider connection'):
+            provider.refresh(str(running_id))
         with db() as c:
             after_disconnect=c.execute('SELECT status,reserved_cost,actual_cost,payload FROM factory_tasks WHERE id=%s',(running_id,)).fetchone()
             assert after_disconnect['status']=='RUNNING' and after_disconnect['reserved_cost']==Decimal('.08')
