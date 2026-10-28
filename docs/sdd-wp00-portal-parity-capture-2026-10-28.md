@@ -31,3 +31,16 @@ Esta captura registra a interface observada nesta sessão, não prova a autoriza
 ## Conclusão
 
 **A paridade não está comprovada e o portal antigo não está liberado para remoção.** A Biblioteca antiga expõe categorias e ações de mídia não observadas na Biblioteca nova; Criar, Canais e Growth também apresentam diferenças de jornada. São lacunas para descoberta e decisão de migração, não autorização para apagar ou substituir dados. WP-00 permanece aberto, assim como TEST-27 e a matriz dinâmica de permissões.
+
+
+## Reconciliação visual da publicação — 28/10/2026
+
+Leitura cruzada, sem mutação, entre Biblioteca → Publicações no YouTube e YouTube Studio → Conteúdo → Vídeos. A lista do YouTube Studio mostrava 11 vídeos (1–11 de 11): 10 públicos e 1 não listado. A Biblioteca nova mostrava 10 registros com link remoto e 1 publicação em estado incerto sem identificador/link remoto.
+
+A correspondência não é integral:
+- Um registro do Halloween aparece como privado na Biblioteca, mas como público no YouTube Studio; o título local também difere do título remoto.
+- Um registro com link remoto da Biblioteca não apareceu na lista completa do YouTube Studio.
+- Há uma publicação pública no YouTube Studio sem identificador remoto correspondente na lista da Biblioteca; um item de tema semelhante aparece localmente como incerto e sem link.
+- Um vídeo não listado no YouTube Studio aparece como público na Biblioteca.
+
+Essas diferenças podem representar estado local desatualizado, metadados históricos ou outra divergência que exige reconciliação por identificador remoto e, quando possível, estado de processamento. A captura não determina qual registro está correto. **Não retomar, reenviar, apagar ou alterar metadados com base apenas nesta tela.** G1-03/G1-04 e TEST-02/34 permanecem sem prova ponta a ponta; comparar por ID remoto, revisar autorização/visibilidade e definir recuperação idempotente antes de qualquer ação. Nenhuma publicação, alteração de visibilidade ou exclusão foi executada.
