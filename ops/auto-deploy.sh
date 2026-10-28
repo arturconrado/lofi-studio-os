@@ -121,14 +121,9 @@ rollback: cd $COMPOSE_DIR && cp compose.production-final.private.before-$SHA.pri
 EOF
 chmod 600 "$R/DEPLOY-RECORD.txt"
 
-# 6. Disk: drop production images that no container uses, keeping the 4 newest for rollback.
-used=$(docker ps -a --format '{{.Image}}' | sort -u)
-docker image ls lofi-studio-os --format '{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}' | grep ':production-' | sort -r | awk -F'\t' 'NR>4{print $2}' |
-while read -r image; do
-  grep -qx "$image" <<<"$used" || docker image rm "$image" >/dev/null 2>&1 || true
-done
-docker builder prune -f --filter until=72h >/dev/null 2>&1 || true
-find "$BACKUPS" -name 'lofi-db-*.dump' -mtime +21 -delete 2>/dev/null || true
+# Retain release images, build cache, and database dumps. This deploy script has
+# no authority to prune recovery material; any future retention policy must be
+# separately reviewed against a verified restore procedure and explicit policy.
 
 say "versão $SHA nos serviços gerenciados (antes: ${current#lofi-studio-os:production-})"
 [ -n "$behind" ] && say "AVISO: código dos transmissores mudou ($behind ); radio/channel-radio precisam de deploy manual"
