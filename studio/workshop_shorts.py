@@ -121,7 +121,7 @@ def _caption_image(caption, folder, index, width=1080, height=1920):
     return path
 
 
-def render_short(spec, sources, audio, audio_sha256, destination, folder):
+def render_short(spec, sources, audio, audio_sha256, destination, folder, audio_provenance=None):
     """Compose source motion in a synced blurred 9:16 canvas with timed captions."""
     from .timeline_compositor import file_hash, measure
 
@@ -201,11 +201,19 @@ def render_short(spec, sources, audio, audio_sha256, destination, folder):
     subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-i', str(destination), '-f', 'null', '-'],
                    check=True, timeout=min(600, max(300, int(seconds * 12))),
                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    audio_receipt={'source_type':'input_audio_track','source_track_sha256':audio_sha256,
+                   'source_start_seconds':spec.audio_start_seconds,'source_duration_seconds':seconds,
+                   'source_track_count':1,'additional_music_tracks':0,'voiceover_tracks':0,
+                   'sound_effect_tracks':0,'fade_in_seconds':0.25,'fade_out_seconds':0.8}
+    if isinstance(audio_provenance,dict):
+        for key in ('source_type','source_program_id','source_snapshot_sha256'):
+            value=audio_provenance.get(key)
+            if isinstance(value,str) and value:audio_receipt[key]=value
     return {'sha256': file_hash(destination), 'seconds': actual, 'audio_seconds': audio_seconds,
             'width': 1080, 'height': 1920, 'fps': 30, 'profile': 'youtube_shorts_9x16',
             'composition': 'same-frame-blurred-background', 'captions': [c.model_dump(mode='json') for c in spec.captions],
             'segments': [{'clip_id': s.clip_id, 'source_sha256': s.source_sha256,
                           'source_start_seconds': s.source_start_seconds,
                           'duration_seconds': s.duration_seconds, 'beat': s.beat}
-                         for s in spec.segments], 'audio_sha256': audio_sha256,
+                         for s in spec.segments], 'audio_sha256': audio_sha256,'audio_provenance':audio_receipt,
             'full_decode_pass': True, 'final_review_required': True}

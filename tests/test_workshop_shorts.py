@@ -136,8 +136,19 @@ def test_local_renderer_produces_a_vertical_decodable_story(tmp_path):
                      for segment in spec.segments]})
 
     report = render_short(spec, {clip_id: source for clip_id in ids}, audio, audio_sha,
-                          tmp_path / 'short.mp4', tmp_path)
+                          tmp_path / 'short.mp4', tmp_path, {
+                              'source_type':'approved_parent_track_excerpt',
+                              'source_program_id':'program-1','source_snapshot_sha256':'c'*64})
     assert report['seconds'] == pytest.approx(6, abs=.15)
     assert (report['width'], report['height']) == (1080, 1920)
     assert report['full_decode_pass'] is True
     assert len(report['sha256']) == 64
+    assert report['audio_provenance'] == {
+        'source_type':'approved_parent_track_excerpt','source_track_sha256':audio_sha,
+        'source_program_id':'program-1','source_snapshot_sha256':'c'*64,
+        'source_start_seconds':0,'source_duration_seconds':6,
+        'source_track_count':1,'additional_music_tracks':0,'voiceover_tracks':0,
+        'sound_effect_tracks':0,'fade_in_seconds':.25,'fade_out_seconds':.8}
+    streams=json.loads(subprocess.run(['ffprobe','-v','error','-select_streams','a',
+        '-show_streams','-of','json',str(tmp_path/'short.mp4')],check=True,capture_output=True,text=True).stdout)['streams']
+    assert len(streams)==1
