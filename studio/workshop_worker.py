@@ -82,7 +82,7 @@ def tick():
             spec = ShortSpec.model_validate(p['spec'])
             final = folder / 'short.mp4'
             report = render_short(spec, files, audio, p['audio']['sha256'], final, folder, {
-                'source_type':'approved_parent_track_excerpt',
+                'source_type':p['audio'].get('source_type','approved_parent_track_excerpt'),
                 'source_program_id':p['audio']['program_id'],
                 'source_snapshot_sha256':p['audio']['snapshot']})
             key = f'visual-workshop/{p["project_id"]}/shorts/{t["id"]}/{report["sha256"]}.mp4'

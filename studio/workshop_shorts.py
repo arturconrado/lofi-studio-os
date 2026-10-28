@@ -40,12 +40,18 @@ class ShortSpec(Strict):
     story_title: str = Field(min_length=1, max_length=120)
     story_summary: str = Field(min_length=20, max_length=1200)
     parent_video_id: str = Field(pattern=r'^[A-Za-z0-9_-]{11}$')
+    audio_mode: Literal['parent_excerpt', 'approved_channel_track'] = 'parent_excerpt'
+    music_program_id: str | None = Field(default=None, max_length=40)
     audio_start_seconds: float = Field(ge=0, le=86400)
     segments: list[ShortSegment] = Field(min_length=2, max_length=8)
     captions: list[ShortCaption] = Field(min_length=1, max_length=12)
 
     @model_validator(mode='after')
     def complete_story_and_captions(self):
+        if self.audio_mode == 'parent_excerpt' and self.music_program_id:
+            raise ValueError('Selecione a trilha do longo ou uma trilha aprovada do canal, não ambas')
+        if self.audio_mode == 'approved_channel_track' and not self.music_program_id:
+            raise ValueError('Escolha uma trilha aprovada do canal para este Short')
         beats = {segment.beat for segment in self.segments}
         if not {'opening', 'turn', 'resolution'} <= beats:
             raise ValueError('Inclua abertura, virada e resolução nos movimentos escolhidos')

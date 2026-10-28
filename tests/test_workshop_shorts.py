@@ -115,6 +115,17 @@ def test_short_contract_requires_story_beats_and_bounded_captions():
     with pytest.raises(ValueError, match='duração'):
         ShortSpec.model_validate(data)
 
+    data = short_spec().model_dump(mode='json')
+    data['audio_mode'] = 'approved_channel_track'
+    with pytest.raises(ValueError, match='trilha aprovada'):
+        ShortSpec.model_validate(data)
+    data['music_program_id'] = 'CHANNEL-TRACK-1'
+    selected = ShortSpec.model_validate(data)
+    assert selected.audio_mode == 'approved_channel_track'
+    data['audio_mode'] = 'parent_excerpt'
+    with pytest.raises(ValueError, match='não ambas'):
+        ShortSpec.model_validate(data)
+
 
 @pytest.mark.skipif(not shutil.which('ffmpeg'), reason='FFmpeg is not installed')
 def test_local_renderer_produces_a_vertical_decodable_story(tmp_path):
