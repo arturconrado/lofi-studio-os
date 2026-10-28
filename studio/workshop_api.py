@@ -133,13 +133,16 @@ def attempt_keys(clip, groups):
             for group in groups]
 
 
-def attempt_history(c, unit, operation):
+def attempt_history(c, unit, operation, project_id):
     """Summarize durable requests for this creative unit without exposing provider internals."""
-    rows=c.execute('''SELECT payload->>'attempt_stage' stage,status,created_at,reserved_cost,
-             payload->>'variant_key' variant_key,payload->>'correction_reason' correction_reason
-      FROM factory_tasks WHERE kind=%s AND payload->>'creative_unit_id'=%s
-        AND payload->>'operation'=%s AND payload->>'attempt_stage' IS NOT NULL ORDER BY created_at''',
-      (KIND,str(unit),operation)).fetchall()
+    rows=c.execute('''SELECT t.payload->>'attempt_stage' stage,t.status,t.created_at,t.reserved_cost,
+             t.payload->>'variant_key' variant_key,t.payload->>'correction_reason' correction_reason
+      FROM factory_tasks t JOIN visual_projects source_project
+        ON source_project.id::text=t.payload->>'project_id'
+      WHERE t.kind=%s AND t.payload->>'creative_unit_id'=%s AND t.payload->>'operation'=%s
+        AND t.payload->>'attempt_stage' IS NOT NULL
+        AND source_project.channel_id=(SELECT channel_id FROM visual_projects WHERE id=%s)
+      ORDER BY t.created_at''',(KIND,str(unit),operation,project_id)).fetchall()
     grouped={}
     for row in rows:
         stage=row['stage'];item=grouped.setdefault(stage,{'stage':stage,'request_count':0,'variant_keys':set(),
@@ -168,10 +171,10 @@ def attempt_alternatives(stage, allowed):
     return options
 
 
-def attempt_decision(c, draft, clip, operation, resolution, groups, media):
+def attempt_decision(c, draft, clip, operation, resolution, groups, media, project_id):
     unit=creative_unit(draft,clip);spec=creative_spec_signature(draft,clip,operation,resolution,media)
     keys=attempt_keys(clip,groups)
-    history=attempt_history(c,unit,operation)
+    history=attempt_history(c,unit,operation,project_id)
     def decision(values):
         return {**values,'history':history,'alternatives':attempt_alternatives(values.get('stage'),values.get('allowed',False))}
     row=c.execute('SELECT * FROM visual_creative_attempts WHERE creative_unit_id=%s AND operation=%s',
@@ -520,7 +523,7 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'Gere diretamente o vídeo da inserção')
         groups=generation_targets(draft,clip,media,variant_key,resolution) if kind=='video' else [None]
-        attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media)
+        attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media,pid)
     q=(provider_quote(kind,clip.seconds,resolution) if resolution!='720p' else provider_quote(kind,clip.seconds)) if groups else {'usd':0,'seconds':clip.seconds}
     return {**q,'unit_usd':q['usd'],'usd':round(q['usd']*len(groups),6),'new_clips':len(groups),
             'attempt':{key:attempt[key] for key in ('allowed','stage','requires_reason','attempts_used','message','history','alternatives') if key in attempt},
@@ -563,7 +566,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if q['seconds']!=clip.seconds: raise HTTPException(409,'A duração mudou; consulte o custo novamente')
         groups=generation_targets(draft,clip,media,body.variant_key,body.resolution) if kind=='video' else [None]
         if not groups: raise HTTPException(409,'Os vídeos já estão disponíveis para revisão')
-        decision=attempt_decision(c,draft,clip,kind,body.resolution,groups,media)
+        decision=attempt_decision(c,draft,clip,kind,body.resolution,groups,media,pid)
         if not decision['allowed']:raise HTTPException(409,decision['message'])
         if decision['requires_reason'] and len((body.correction_reason or '').strip())<12:
             raise HTTPException(422,'Explique a causa e a mudança concreta antes do único ciclo de correção.')
