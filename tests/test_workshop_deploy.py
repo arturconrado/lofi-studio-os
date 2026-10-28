@@ -44,7 +44,7 @@ def test_unresolved_paid_jobs_block_deployment(tmp_path):
     env={**os.environ,'TEST_BUSY_COUNT':'1'}
     stub='''set -euo pipefail
 sql() { cat >/dev/null; printf '%s' "$TEST_BUSY_COUNT"; }
-fail() { exit "$3"; }
+fail() { exit "$2"; }
 '''
     result=subprocess.run(['bash','-c',stub+gate],env=env,capture_output=True,text=True)
     assert result.returncode==75
