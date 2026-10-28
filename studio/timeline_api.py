@@ -1,5 +1,5 @@
 """Private portal contract for reviewed inputs and durable local timeline jobs."""
-import hashlib,json,math,os,tempfile,uuid
+import copy,hashlib,json,math,os,tempfile,uuid
 from pathlib import Path
 from fastapi import APIRouter,HTTPException,UploadFile,File,Form,Request
 from typing import Literal
@@ -358,14 +358,14 @@ class ClipReview(BaseModel):
 def review_clip(pid:uuid.UUID,cid:uuid.UUID,body:ClipReview):
     if not all((body.confirm_identity_props,body.confirm_motion,body.confirm_pose_anchors)):raise HTTPException(422,'Confira identidade, objetos, movimento e poses')
     with db() as c:
-        row=get_plan(c,pid,True);asset=row['data'].get('production_assets',{}).get(str(cid))
+        row=get_plan(c,pid,True);data=copy.deepcopy(row['data']);asset=data.get('production_assets',{}).get(str(cid))
         if not asset or asset.get('role')!='action_clip' or asset.get('sha256')!=body.sha256 or asset.get('spec_sha256')!=production_spec_hash(row['data']['production_spec']):raise HTTPException(409,'Clipe ou roteiro mudou; revise a versão atual')
         if asset['action']=='typing_idle' and not body.confirm_loop_seam:raise HTTPException(422,'Confira também a continuidade do loop de digitação')
         pixel=row['data']['production_spec'].get('visual_variant') in ('pixel_art_original','pixel_art_reviewed')
         if pixel and not body.confirm_visual_style:raise HTTPException(422,'Confira também o estilo pixel-art 8-bit do clipe')
         asset.update(status='APPROVED_ACTION',human_review_sha256=body.sha256,pose_anchors_reviewed=True,loop_seam_reviewed=body.confirm_loop_seam,
                      visual_style_reviewed=bool(body.confirm_visual_style),visual_style_review_sha256=body.sha256 if body.confirm_visual_style else None)
-        data=dict(row['data']);assets=dict(data.get('production_assets') or {});assets[str(cid)]=asset;data['production_assets']=assets
+        assets=dict(data.get('production_assets') or {});assets[str(cid)]=asset;data['production_assets']=assets
         from .creator_plan_versions import save_locked_revision
         revision=save_locked_revision(c,row,data,body.revision);audit(c,'ACTION_CLIP_REVIEWED',str(pid),str(cid));c.commit()
     return {'reviewed':True,'revision':revision,'program_approved':False}

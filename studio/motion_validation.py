@@ -1,5 +1,5 @@
 """Portal-operated single paid pilot, durable reservation, no submit retries."""
-import base64,hashlib,io,json,os,re,tempfile,uuid
+import base64,copy,hashlib,io,json,os,re,tempfile,uuid
 from decimal import Decimal
 from pathlib import Path
 import httpx
@@ -192,7 +192,7 @@ def refresh(tid:uuid.UUID):
             task=get_task(c,tid);plan=c.execute("SELECT * FROM creator_plans WHERE id=%s AND status='draft' FOR UPDATE",(task['payload']['plan_id'],)).fetchone()
             patch['plan_revision']=None
             if plan:
-                data=dict(plan['data']);assets=dict(data.get('production_assets') or {})
+                data=copy.deepcopy(plan['data']);assets=dict(data.get('production_assets') or {})
                 current=assets.get(str(tid),{})
                 current.update({'role':'interaction_reference','state':'REVIEW','video_key':key,'sha256':report['sha256'],'spec_sha256':row['payload']['spec_sha256'],'seconds':report['duration_seconds'],'human_review':'pending'})
                 assets[str(tid)]=current;data['production_assets']=assets
@@ -233,10 +233,11 @@ def review(tid:uuid.UUID,body:AssetReview):
         if plan['revision']!=body.revision:raise HTTPException(409,'O roteiro mudou. Recarregue a revisão atual antes de aprovar o asset.')
         if not plan or production_spec_hash(plan['data'].get('production_spec'))!=p['spec_sha256']:
             raise HTTPException(409,'O roteiro mudou. Este asset precisa ser reavaliado para a nova versão')
-        entry=plan['data'].get('production_assets',{}).get(str(tid))
+        data=copy.deepcopy(plan['data']);assets=dict(data.get('production_assets') or {})
+        entry=assets.get(str(tid))
         if not entry:raise HTTPException(409,'Asset não vinculado ao roteiro')
         entry.update(state='APPROVED_REFERENCE',human_review='approved',human_review_sha256=body.sha256)
-        data=dict(plan['data']);assets=dict(data.get('production_assets') or {});assets[str(tid)]=entry;data['production_assets']=assets
+        assets[str(tid)]=entry;data['production_assets']=assets
         revision=save_locked_revision(c,plan,data,body.revision)
         c.execute("UPDATE factory_tasks SET payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'approved','plan_revision':revision}),tid));audit(c,'STORYBOARD_ASSET_REVIEWED',p['plan_id'],str(tid));c.commit()
     return {'ok':True,'asset_role':'interaction_reference','revision':revision,'full_program_approved':False,'broadcast_started':False}
