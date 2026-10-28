@@ -187,12 +187,12 @@ export function Produce() {
           </Field>
           <p class="faint" style={{ fontSize: '13px' }}>A preparação da timeline aceita 1h, 4h ou 8h sem cobrança. A produção paga segue bloqueada enquanto faltarem o compositor integrado ou os assets aprovados.</p>
           <Field label="Ideia (opcional)" hint="Vira o tema do título, da descrição e a direção musical da hora.">
-            <textarea class="textarea" maxLength={1500} placeholder="ex.: madrugada de neve, pixels quentes, foco profundo" value={idea} onInput={e => setIdea((e.target as HTMLTextAreaElement).value)} />
+            <textarea class="textarea" maxLength={1500} placeholder="ex.: madrugada de neve, pixels quentes, foco profundo" value={idea} onInput={e => { setIdea((e.target as HTMLTextAreaElement).value); setSceneProposal(''); }} />
           </Field>
           <div class="notice">
             <b>Desenvolver a ideia com o assistente</b>
             <p class="faint">Descreva o que você quer ver. O assistente prepara uma proposta de cena para revisar; só o texto aceito segue para o roteiro. Isso não inicia produção.</p>
-            <textarea class="textarea" maxLength={800} placeholder="ex.: uma madrugada de Halloween, chuva na janela e luzes quentes de uma cidade distante" value={assistantBrief} onInput={e => setAssistantBrief((e.target as HTMLTextAreaElement).value)} />
+            <textarea class="textarea" maxLength={800} placeholder="ex.: uma madrugada de Halloween, chuva na janela e luzes quentes de uma cidade distante" value={assistantBrief} onInput={e => { setAssistantBrief((e.target as HTMLTextAreaElement).value); setSceneProposal(''); }} />
             <div class="row wrap" style={{ marginTop: '8px' }}>
               <Check checked={assistantCostConfirmed} onChange={setAssistantCostConfirmed}>Autorizo até US$0,10 para criar esta proposta.</Check>
               <button class="btn secondary" disabled={!assistantCostConfirmed || assistantBusy || !quote || assistantBrief.trim().length < 3} onClick={suggestScene}>{assistantBusy ? 'Preparando…' : 'Pedir proposta'}</button>
@@ -207,7 +207,7 @@ export function Produce() {
         <div class="card stack">
           <h3>3. Cena</h3>
           <div class="grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: '8px' }}>
-            {scenes.map(s => <button type="button" class="scene" aria-pressed={s.id === scenario} title={s.reference?.setting} onClick={() => setScenario(s.id)}><b>{s.label.split(' · ')[0]}</b><span class="faint" style={{ fontSize: '12px' }}>{s.label.split(' · ')[1] || ''}</span></button>)}
+            {scenes.map(s => <button type="button" class="scene" aria-pressed={s.id === scenario} title={s.reference?.setting} onClick={() => { setScenario(s.id); setSceneProposal(''); }}><b>{s.label.split(' · ')[0]}</b><span class="faint" style={{ fontSize: '12px' }}>{s.label.split(' · ')[1] || ''}</span></button>)}
           </div>
           {recipe && (recipe.data.visual.variant !== 'canonical_illustrated' || recipe.data.music.style_id === '8bit_lofi') && <div class="notice">Direção pixel art aplicada à cena e às ações, com o episódio aprovado servindo de guia de identidade e composição.</div>}
         </div>
