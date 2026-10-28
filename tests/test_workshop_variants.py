@@ -610,7 +610,7 @@ def test_delivery_attempt_scope_freezes_paid_action_inventory(client):
         assert decision['allowed'] is False
         assert decision['delivery_scope']['locked'] is True
         assert decision['delivery_scope']['initial_used']==1
-        assert 'Revise o escopo' in decision['message']
+        assert 'Revise e confirme o escopo' in decision['message']
 
         with db() as c:
             c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
