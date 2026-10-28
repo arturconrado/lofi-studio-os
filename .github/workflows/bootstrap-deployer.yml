@@ -65,14 +65,32 @@ jobs:
           target=/opt/lofi-studio-os-releases/bin/auto-deploy
           backup="${target}.pre-protocol2-${RUN_ID}"
           stage="${target}.stage-${RUN_ID}"
+          failed="${target}.failed-bootstrap-${RUN_ID}"
+          rollback_stage="${target}.rollback-${RUN_ID}"
           test "$REMOTE_DIR" = "$(dirname "$INCOMING")"
           test "$INCOMING" = "${REMOTE_DIR}/auto-deploy.sh"
-          installed=0
+          expected_new=$(sha256sum "$INCOMING" | awk '{print $1}')
           restore_on_failure() {
             status=$?
-            if [ "$installed" = 1 ] && [ -f "$backup" ]; then
-              cp -p "$backup" "$target" || echo "Could not restore previous deployer" >&2
-              echo "Bootstrap failed; previous deployer restored from $backup" >&2
+            trap - ERR
+            set +e
+            if [ -f "$target" ] && [ -f "$backup" ]; then
+              current_sha=$(sha256sum "$target" | awk '{print $1}')
+              backup_sha=$(sha256sum "$backup" | awk '{print $1}')
+              if [ "$current_sha" = "$expected_new" ] && [ "$backup_sha" = "$EXPECTED_OLD" ] &&
+                 [ ! -e "$failed" ] && [ ! -e "$rollback_stage" ]; then
+                cp -a "$target" "$failed" && cp -a "$backup" "$rollback_stage" &&
+                  mv -f "$rollback_stage" "$target"
+                restored_sha=$(sha256sum "$target" | awk '{print $1}')
+                if [ "$restored_sha" = "$EXPECTED_OLD" ]; then
+                  echo "Bootstrap failed; previous deployer restored atomically from $backup" >&2
+                  echo "Failed candidate preserved at $failed" >&2
+                else
+                  echo "Rollback hash verification failed; inspect $target and $backup" >&2
+                fi
+              elif [ "$current_sha" != "$EXPECTED_OLD" ]; then
+                echo "Bootstrap failed; target did not match the expected candidate or old hash; no rollback overwrite attempted" >&2
+              fi
             fi
             rm -f "$stage" "$INCOMING"
             rmdir "$REMOTE_DIR" 2>/dev/null || true
@@ -87,12 +105,10 @@ jobs:
           install -o root -g root -m 700 "$INCOMING" "$stage"
           bash -n "$stage"
           actual_new=$(sha256sum "$stage" | awk '{print $1}')
-          expected_new=$(sha256sum "$INCOMING" | awk '{print $1}')
           test "$actual_new" = "$expected_new"
           protocol=$(SSH_ORIGINAL_COMMAND=lofi-deploy-protocol "$stage")
           test "$protocol" = "LOFI_DEPLOY_PROTOCOL=2"
           mv -f "$stage" "$target"
-          installed=1
           actual_installed=$(sha256sum "$target" | awk '{print $1}')
           test "$actual_installed" = "$expected_new"
           rm -f "$INCOMING"
