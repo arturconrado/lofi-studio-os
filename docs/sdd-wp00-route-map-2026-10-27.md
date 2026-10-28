@@ -11,7 +11,7 @@ A extração estática registrou **223 rotas HTTP declaradas em 25 módulos**. O
 - Nas sessões, `viewer` não pode fazer mutações (com exceção do logout e troca de workspace); `creator` tem mutações limitadas a tracks, Creator e autenticação; `operator` tem mutações limitadas às rotas de operação de canais e MiniOBS; mudanças de settings e todas as rotas de membros exigem papel administrativo.
 - O fallback de Basic admin é um caminho distinto: o middleware autoriza a requisição sem definir `req.state.identity` nem o contexto de workspace e não aplica os filtros de papel/CSRF da sessão. Cada handler precisa ser revisado para confirmar como trata esse caminho; o mapa abaixo descreve só a política global, não uma garantia de autorização funcional.
 - Algumas operações verificam autorização adicional dentro dos próprios handlers (por exemplo, gestão/publicação no YouTube e direitos de mídia). O middleware global não substitui a auditoria por endpoint nem demonstra isolamento de cada consulta ao banco.
-- `GET /health` consulta dependências; esta coleta não chamou endpoints nem alterou estado.
+- A tentativa read-only sem sessão de obter `/openapi.json` retornou 401; não foi obtido catálogo dinâmico. `GET /health` não foi chamado.
 
 ## Rotas declaradas
 
