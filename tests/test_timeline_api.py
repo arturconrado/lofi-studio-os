@@ -99,18 +99,27 @@ def test_real_clip_upload_review_and_compatible_reuse_are_separate(client,monkey
     assert [entry['revision'] for entry in client.get(f'/api/creator/plans/{pid}/revisions').json()['revisions']]==[1]
     assert not action['ready']
     assert action['clips'][0]['origin']=={'kind':'uploaded_to_plan','id':pid}
-    review={'revision':clip['revision'],'sha256':clip['sha256'],'confirm_identity_props':True,'confirm_motion':True,'confirm_pose_anchors':True}
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    marker=WORKSPACE.set(client.get('/api/auth/me').json()['workspace_id'])
+    try:
+        with db() as c:
+            row=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(pid,)).fetchone()
+            data=dict(row['data']);data['editorial_note']='Keep the approved clip linked to its source hash.'
+            from studio.creator_plan_versions import save_locked_revision
+            current_revision=save_locked_revision(c,row,data,row['revision']);c.commit()
+    finally:WORKSPACE.reset(marker)
+    assert current_revision==2
+    review={'revision':current_revision,'sha256':clip['sha256'],'confirm_identity_props':True,'confirm_motion':True,'confirm_pose_anchors':True}
     stale=dict(review,confirm_loop_seam=True);stale['revision']=1
     assert client.post(base+'/clips/'+clip['id']+'/review',json=stale,headers=headers).status_code==409
     assert client.post(base+'/clips/'+clip['id']+'/review',json=review,headers=headers).status_code==422
     review['confirm_loop_seam']=True
     reviewed=client.post(base+'/clips/'+clip['id']+'/review',json=review,headers=headers)
     assert reviewed.status_code==200,reviewed.text
-    assert reviewed.json()['revision']==1
-    approved=client.get(f'/api/creator/plans/{pid}/revisions/1').json()
+    assert reviewed.json()['revision']==2
+    approved=client.get(f'/api/creator/plans/{pid}/revisions/2').json()
     assert 'production_assets' not in approved['data']
-    from studio.core import db
-    from studio.tenancy import WORKSPACE
     marker=WORKSPACE.set(client.get('/api/auth/me').json()['workspace_id'])
     try:
         with db() as c:
