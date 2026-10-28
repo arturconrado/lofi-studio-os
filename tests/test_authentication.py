@@ -600,22 +600,46 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     monkeypatch.setattr(studio.financial,'check_available',lambda c,amount:None)
     monkeypatch.setenv('S3_BUCKET','disposable-test')
     saved=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':{'hours':8,'asset_budget_usd':2,'character_reference':'reviewed:'+source_sha+':girl','cat_reference':'reviewed:'+source_sha+':cat'}},headers=headers).json()
-    body=dict(request_id=tid,plan_id=saved['id'],channel_id=cid,batch_id=bid,scene_id='ref',max_reservation_usd='.64',confirm_cost=True)
+    body=dict(request_id=tid,plan_id=saved['id'],channel_id=cid,batch_id=bid,scene_id='ref',revision=saved['revision'],max_reservation_usd='.64',confirm_cost=True)
     r=client.post('/api/creator/motion-validation',json=body,headers=headers)
     assert r.status_code==200,r.text
     assert r.json()['state']=='UNCERTAIN'
+    assert r.json()['plan_revision']==saved['revision']+1
+    history=client.get(f"/api/creator/plans/{saved['id']}/revisions").json()['revisions']
+    assert history[0]['revision']==saved['revision']+1
+    snapshot=client.get(f"/api/creator/plans/{saved['id']}/revisions/{history[0]['revision']}").json()
+    assert snapshot['data']['production_assets'][tid]['state']=='SUBMITTING'
+    assert snapshot['sha256']
     assert client.post('/api/creator/motion-validation',json=body,headers=headers).json()['state']=='UNCERTAIN'
     assert Client.sends==1
+    stale=dict(body,request_id=str(uuid.uuid4()))
+    assert client.post('/api/creator/motion-validation',json=stale,headers=headers).status_code==409
     for _ in range(2):
-        body['request_id']=str(uuid.uuid4());assert client.post('/api/creator/motion-validation',json=body,headers=headers).status_code==200
-    body['request_id']=str(uuid.uuid4())
+        body['request_id']=str(uuid.uuid4());body['revision']=client.get(f"/api/creator/assembly/plans/{saved['id']}").json()['revision']
+        assert client.post('/api/creator/motion-validation',json=body,headers=headers).status_code==200
+    body['request_id']=str(uuid.uuid4());body['revision']=client.get(f"/api/creator/assembly/plans/{saved['id']}").json()['revision']
     assert client.post('/api/creator/motion-validation',json=body,headers=headers).status_code==409
     assert Client.sends==3
     marker=WORKSPACE.set(identity['workspace_id'])
     try:
         with db() as c:
-            c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'approved','video_key':'cached.mp4'}),tid));c.commit()
+            plan=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(saved['id'],)).fetchone()
+            data=dict(plan['data']);assets=dict(data['production_assets']);assets[tid].update(state='REVIEW',video_key='cached.mp4',sha256='a'*64,seconds=8,human_review='pending');data['production_assets']=assets
+            from studio.creator_plan_versions import save_locked_revision
+            completed_revision=save_locked_revision(c,plan,data,plan['revision'])
+            report={'sha256':'a'*64,'full_decode_pass':True,'duration_seconds':8}
+            c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'pending','video_key':'cached.mp4','report':report,'plan_revision':completed_revision}),tid));c.commit()
     finally:WORKSPACE.reset(marker)
+    review_body={'sha256':'a'*64,'confirm_identity':True,'confirm_motion_contact':True,'revision':completed_revision}
+    assert client.post('/api/creator/motion-validation/'+tid+'/review',json=dict(review_body,revision=completed_revision-1),headers=headers).status_code==409
+    approved=client.post('/api/creator/motion-validation/'+tid+'/review',json=review_body,headers=headers)
+    assert approved.status_code==200,approved.text
+    assert approved.json()['revision']==completed_revision+1
+    approved_snapshot=client.get(f"/api/creator/plans/{saved['id']}/revisions/{approved.json()['revision']}").json()
+    assert approved_snapshot['data']['production_assets'][tid]['human_review']=='approved'
+    assert approved_snapshot['data']['production_assets'][tid]['human_review_sha256']=='a'*64
+    from studio.creator_plan_versions import content_hash
+    assert approved_snapshot['sha256']==content_hash(approved_snapshot['data'])
     def unavailable():raise AssertionError('Approved reuse must not call provider or request credentials')
     monkeypatch.setattr(mv,'catalog_quote',unavailable)
     monkeypatch.setattr(mv.runtime,'key',unavailable)

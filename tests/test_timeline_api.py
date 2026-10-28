@@ -100,7 +100,7 @@ def test_real_clip_upload_review_and_compatible_reuse_are_separate(client,monkey
     assert not action['ready']
     assert action['clips'][0]['origin']=={'kind':'uploaded_to_plan','id':pid}
     review={'revision':clip['revision'],'sha256':clip['sha256'],'confirm_identity_props':True,'confirm_motion':True,'confirm_pose_anchors':True}
-    stale=dict(review);stale['revision']=1
+    stale=dict(review,confirm_loop_seam=True);stale['revision']=1
     assert client.post(base+'/clips/'+clip['id']+'/review',json=stale,headers=headers).status_code==409
     assert client.post(base+'/clips/'+clip['id']+'/review',json=review,headers=headers).status_code==422
     review['confirm_loop_seam']=True
@@ -202,7 +202,7 @@ def test_approved_scene_regions_need_no_cushion_and_clip_masks_bind_to_clip(clie
     env=client.get(base).json()['environment'];assert env['cushion_box'] is None and env['fire']
     video=tmp_path/'pet.mp4'
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=1280x720:rate=24:duration=11','-c:v','libx264','-threads','1','-preset','ultrafast','-pix_fmt','yuv420p',str(video)],check=True)
-    with video.open('rb') as handle:clip=client.post(base+'/clips/pet_cat',files={'file':('pet.mp4',handle,'video/mp4')},headers=headers).json()
+    with video.open('rb') as handle:clip=client.post(base+'/clips/pet_cat',files={'file':('pet.mp4',handle,'video/mp4')},data={'revision':'2'},headers=headers).json()
     frame={'shirt':[[.1,.5],[.3,.5],[.3,.9]],'protected_girl':[[.4,.1],[.6,.1],[.6,.4]]}
     masks={'revision':2,'sha256':clip['sha256'],'keyframes':[{'t':0,**frame},{'t':5,**frame}],'confirm_every_frame':True}
     path=base+'/clips/'+clip['id']+'/masks'

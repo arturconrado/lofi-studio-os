@@ -10,6 +10,7 @@ from .core import db,storage,audit
 from .channels import profile
 from . import runtime
 from .production_harness import production_spec_hash
+from .creator_plan_versions import save_locked_revision
 router=APIRouter(prefix='/motion-validation')
 MODEL='google/veo-3.1-lite'
 KIND='motion_validation_20261014'
@@ -78,6 +79,7 @@ class Pilot(BaseModel):
     channel_id:uuid.UUID
     batch_id:str=Field(max_length=40)
     scene_id:str=Field(max_length=100)
+    revision:int=Field(ge=1)
     max_reservation_usd:Decimal=Field(gt=0,le=1000)
     confirm_cost:bool=False
 
@@ -92,8 +94,9 @@ def submit(body:Pilot):
         if old:
             if old['kind']!=KIND:raise HTTPException(409,'Identificador já utilizado')
             return public(old)
-        plan=c.execute("SELECT data FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft'",(body.plan_id,body.channel_id)).fetchone()
+        plan=c.execute("SELECT * FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft'",(body.plan_id,body.channel_id)).fetchone()
         if not plan or not plan['data'].get('production_spec'):raise HTTPException(404,'Salve o roteiro deste programa antes de produzir seus assets')
+        if plan['revision']!=body.revision:raise HTTPException(409,'O roteiro mudou. Recarregue a versão atual antes de produzir o asset.')
         source=c.execute('SELECT s.image_key FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.batch_id=%s AND s.id=%s',(body.channel_id,body.batch_id,body.scene_id)).fetchone()
         if not source:raise HTTPException(404,'Referência não encontrada neste canal')
         from .visual_identity import assert_usable
@@ -137,7 +140,13 @@ def submit(body:Pilot):
         if plan_spent+cap>plan_cap:raise HTTPException(409,'Teto de assets do roteiro atingido')
         from .financial import check_available
         check_available(c,cap)
-        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'SUBMITTING','Pedido único; sem retentativa automática')",(body.request_id,KIND,MODEL,json.dumps(payload),cap));c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',COALESCE(data->'production_assets','{}'::jsonb)||%s::jsonb) WHERE id=%s",(json.dumps({str(body.request_id):{'role':'interaction_reference','state':'SUBMITTING','spec_sha256':payload['spec_sha256']}}),body.plan_id));audit(c,'MOTION_PILOT_RESERVED',str(body.request_id),str(cap));c.commit()
+        locked=c.execute("SELECT * FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' FOR UPDATE",(body.plan_id,body.channel_id)).fetchone()
+        if not locked or locked['revision']!=body.revision:raise HTTPException(409,'O roteiro mudou. Recarregue a versão atual antes de produzir o asset.')
+        data=dict(locked['data']);assets=dict(data.get('production_assets') or {})
+        assets[str(body.request_id)]={'role':'interaction_reference','state':'SUBMITTING','spec_sha256':payload['spec_sha256']}
+        data['production_assets']=assets
+        payload['plan_revision']=save_locked_revision(c,locked,data,body.revision)
+        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'SUBMITTING','Pedido único; sem retentativa automática')",(body.request_id,KIND,MODEL,json.dumps(payload),cap));audit(c,'MOTION_PILOT_RESERVED',str(body.request_id),str(cap));c.commit()
     try:
         with httpx.Client(timeout=90) as client:
             r=client.post('https://openrouter.ai/api/v1/videos',headers={'Authorization':'Bearer '+token,'X-Title':'Lo-Fi Studio OS validation'},json={'model':MODEL,'prompt':PROMPT,'duration':8,'resolution':'720p','aspect_ratio':'16:9','generate_audio':False,'frame_images':[{'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+base64.b64encode(encoded.getvalue()).decode()},'frame_type':'first_frame'}],'provider':{'allow_fallbacks':False}})
@@ -177,8 +186,17 @@ def refresh(tid:uuid.UUID):
             storage().upload_file(str(path),os.environ['S3_BUCKET'],key,ExtraArgs={'ContentType':'video/mp4'})
         # Never expose provider URLs or keys to the browser.
         patch={'video_key':key,'report':report,'actual_cost_usd':state.get('usage',{}).get('cost')}
-    with db() as c:
-        c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Prévia de oito segundos pronta; revisão visual pendente',updated_at=now() WHERE id=%s",(json.dumps(patch),tid));c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',COALESCE(data->'production_assets','{}'::jsonb)||%s::jsonb) WHERE id=%s",(json.dumps({str(tid):{'role':'interaction_reference','state':'REVIEW','video_key':key,'sha256':report['sha256'],'spec_sha256':row['payload']['spec_sha256'],'seconds':report['duration_seconds'],'human_review':'pending'}}),row['payload']['plan_id']));audit(c,'MOTION_PILOT_COMPLETED',str(tid));c.commit();return public(get_task(c,tid))
+        with db() as c:
+            c.execute("SELECT pg_advisory_xact_lock(192837467)")
+            task=get_task(c,tid);plan=c.execute("SELECT * FROM creator_plans WHERE id=%s AND status='draft' FOR UPDATE",(task['payload']['plan_id'],)).fetchone()
+            patch['plan_revision']=None
+            if plan:
+                data=dict(plan['data']);assets=dict(data.get('production_assets') or {})
+                current=assets.get(str(tid),{})
+                current.update({'role':'interaction_reference','state':'REVIEW','video_key':key,'sha256':report['sha256'],'spec_sha256':row['payload']['spec_sha256'],'seconds':report['duration_seconds'],'human_review':'pending'})
+                assets[str(tid)]=current;data['production_assets']=assets
+                patch['plan_revision']=save_locked_revision(c,plan,data,plan['revision'])
+            c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Prévia de oito segundos pronta; revisão visual pendente',updated_at=now() WHERE id=%s",(json.dumps(patch),tid));audit(c,'MOTION_PILOT_COMPLETED',str(tid));c.commit();return public(get_task(c,tid))
 
 
 @router.get('/{tid}/video')
@@ -198,6 +216,7 @@ def history(channel_id:uuid.UUID,plan_id:uuid.UUID):
 
 class AssetReview(BaseModel):
     sha256:str=Field(pattern=r'^[a-f0-9]{64}$')
+    revision:int=Field(ge=1)
     confirm_identity:bool=False
     confirm_motion_contact:bool=False
 
@@ -208,12 +227,15 @@ def review(tid:uuid.UUID,body:AssetReview):
         c.execute('SELECT pg_advisory_xact_lock(192837467)');row=get_task(c,tid)
         p=row['payload'];report=p.get('report',{})
         if row['status']!='COMPLETED' or report.get('sha256')!=body.sha256 or report.get('full_decode_pass') is not True or report.get('duration_seconds',0)<7.9:raise HTTPException(409,'O arquivo atual não corresponde à revisão')
-        plan=c.execute('SELECT data FROM creator_plans WHERE id=%s FOR UPDATE',(p['plan_id'],)).fetchone()
+        plan=c.execute('SELECT * FROM creator_plans WHERE id=%s AND status=\'draft\' FOR UPDATE',(p['plan_id'],)).fetchone()
+        if not plan:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
+        if plan['revision']!=body.revision:raise HTTPException(409,'O roteiro mudou. Recarregue a revisão atual antes de aprovar o asset.')
         if not plan or production_spec_hash(plan['data'].get('production_spec'))!=p['spec_sha256']:
             raise HTTPException(409,'O roteiro mudou. Este asset precisa ser reavaliado para a nova versão')
         entry=plan['data'].get('production_assets',{}).get(str(tid))
         if not entry:raise HTTPException(409,'Asset não vinculado ao roteiro')
         entry.update(state='APPROVED_REFERENCE',human_review='approved',human_review_sha256=body.sha256)
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',COALESCE(data->'production_assets','{}'::jsonb)||%s::jsonb) WHERE id=%s",(json.dumps({str(tid):entry}),p['plan_id']))
-        c.execute("UPDATE factory_tasks SET payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'approved'}),tid));audit(c,'STORYBOARD_ASSET_REVIEWED',p['plan_id'],str(tid));c.commit()
-    return {'ok':True,'asset_role':'interaction_reference','full_program_approved':False,'broadcast_started':False}
+        data=dict(plan['data']);assets=dict(data.get('production_assets') or {});assets[str(tid)]=entry;data['production_assets']=assets
+        revision=save_locked_revision(c,plan,data,body.revision)
+        c.execute("UPDATE factory_tasks SET payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'approved','plan_revision':revision}),tid));audit(c,'STORYBOARD_ASSET_REVIEWED',p['plan_id'],str(tid));c.commit()
+    return {'ok':True,'asset_role':'interaction_reference','revision':revision,'full_program_approved':False,'broadcast_started':False}
