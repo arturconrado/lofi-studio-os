@@ -17,7 +17,8 @@ PRESETS = {'legacy_10_25_45':[(m,'breath_pet') for m in (10,20,30,40,50)]+[(25,'
 # Defaults omitted from the creative hash so earlier approvals stay bound.
 NEUTRAL = {'markers':[], 'weather':'scene_default', 'time_of_day':'scene_default', 'precipitation_intensity':None,
            'occasional_variations':False, 'variation_seed':0, 'contextual_actions':[],
-           'recipe_sha256':'', 'visual_variant':'canonical_illustrated'}
+           'recipe_sha256':'', 'visual_variant':'canonical_illustrated', 'creative_intent':'',
+           'proposal_rationale':'', 'proposal_open_questions':[], 'delivery_format':'long_form_16_9'}
 # Recipe fields added later; omitted from compiled output at their defaults too.
 RECIPE_NEUTRAL = {'recipe_sha256':'', 'visual_variant':'canonical_illustrated'}
 
@@ -29,6 +30,10 @@ class Marker(BaseModel):
 
 class ProductionSpec(BaseModel):
     version: Literal[1] = 1
+    creative_intent: str = Field(default='', max_length=1500)
+    proposal_rationale: str = Field(default='', max_length=500)
+    proposal_open_questions: list[str] = Field(default_factory=list, max_length=5)
+    delivery_format: Literal['long_form_16_9'] = 'long_form_16_9'
     niche_pack_sha256: str = Field(default='',pattern=r'^(|[a-f0-9]{64})$')
     cadence: Literal['legacy_10_25_45', 'quarter_hour_v2', 'custom_markers'] = 'legacy_10_25_45'
     hours: int = Field(default=8, ge=1, le=8)
@@ -53,6 +58,8 @@ class ProductionSpec(BaseModel):
 
     @model_validator(mode='after')
     def scene_rules(self):
+        if any(not question.strip() or len(question)>240 for question in self.proposal_open_questions):
+            raise ValueError('Pontos em aberto devem ser curtos e não vazios')
         scene=resolve(self)
         if (self.cadence=='custom_markers')!=bool(self.markers):raise ValueError('Use marcos personalizados somente com a agenda personalizada')
         if self.precipitation_intensity is not None and not scene['overlay']:raise ValueError('Intensidade só vale para chuva, neve ou névoa compostas localmente')
@@ -98,6 +105,7 @@ def content_context(spec):
             if action not in actions:actions.append(action)
     context={
         'source':'approved_production_harness_spec',
+        'intent':spec.creative_intent,
         'scene':scene_label,
         'scene_direction':spec.scene_brief,
         'weather':scene['weather'],

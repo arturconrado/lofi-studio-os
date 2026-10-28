@@ -30,7 +30,8 @@ type Quote = { recipe: { name: string; sha256: string }; scenario: string; scene
   suggested_ceiling_usd: number; remaining_usd: number; paid_enabled: boolean; audio_prompt: string; copy: { title: string; description: string }; visual: VisualPlan;
   spec: Record<string, unknown>; whole_episode_export_available: boolean; episode_export_blocker: string | null };
 type GrowthPackage = { title:string; description:string; primary_phrase:string; primary_phrase_source:string; search_phrase_options:any[]; historical_context:any; reference_editorial_leads:any[]; channel_memory?:{version:string;items:any[];auto_refreshed_from_saved_observations:boolean}; request_id:string; cost_usd?:number };
-type BriefSuggestion = { patch: { scene_brief?: string }; reused: boolean; generation_started: false; cost_usd?: number };
+type ProposalPatch = { scene_brief?: string; music_brief?: string; scenario?: string; music_style?: string; hours?: number; shirt_color?: string; cadence?: string; markers?: { minute: number; sequence: string }[]; contextual_actions?: string[]; rationale?: string; open_questions?: string[] };
+type BriefSuggestion = { patch: ProposalPatch; reused: boolean; generation_started: false; cost_usd?: number };
 
 export function Produce() {
   const cid = channel.value?.id;
@@ -56,8 +57,9 @@ export function Produce() {
   const [assistantCostConfirmed, setAssistantCostConfirmed] = useState(false);
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [assistantNote, setAssistantNote] = useState('');
-  const [sceneProposal, setSceneProposal] = useState('');
+  const [sceneProposal, setSceneProposal] = useState<ProposalPatch | null>(null);
   const [sceneProposalApplied, setSceneProposalApplied] = useState(false);
+  const pendingProposal = useRef<ProposalPatch | null>(null);
   const requestId = useRef(uuid());
 
   const allowed = bound.data?.recipes || [];
@@ -70,7 +72,23 @@ export function Produce() {
   useEffect(() => { if (settled && list.length && !list.some(r => r.id === recipeId)) setRecipeId(defaultId || list[0].id); }, [settled, list, defaultId]);
   const recipe = list.find(r => r.id === recipeId) || null;
   const scenes = (catalog.data?.scenes || []).filter(s => s.approved && (!recipe?.data.visual.allowed_scenarios.length || recipe.data.visual.allowed_scenarios.includes(s.id)));
-  useEffect(() => { setScenario(recipe?.data.visual.default_scenario || null); }, [recipe?.id]);
+  const applyProposalValues = (proposal: ProposalPatch) => {
+    if (proposal.hours != null) setHours(proposal.hours);
+    setScenario(proposal.scenario || scenario || recipe?.data.visual.default_scenario || null);
+    if (proposal.scene_brief) setIdea(proposal.scene_brief);
+    setSceneProposalApplied(true);
+    setGrowthPackage(null);
+    setGrowthNote('Proposta aplicada à configuração do roteiro. A cotação está sendo atualizada; gere novamente o pacote Growth antes de salvar.');
+  };
+
+  useEffect(() => {
+    if (!recipe) return;
+    const proposal = pendingProposal.current;
+    if (proposal) {
+      pendingProposal.current = null;
+      applyProposalValues(proposal);
+    } else setScenario(recipe.data.visual.default_scenario || null);
+  }, [recipe?.id]);
 
   useEffect(() => {
     if (!cid || !recipe || !scenario) return;
@@ -114,7 +132,7 @@ export function Produce() {
           theme: idea || sceneInfo?.label || scenario || '',
           visual_scene: sceneInfo?.reference?.setting || sceneInfo?.label || scenario || '',
           music_style: recipe.name,
-          musical_direction: recipe.data.music.bible || recipe.data.music.moods?.join(', ') || recipe.name,
+          musical_direction: (sceneProposalApplied && sceneProposal?.music_brief) || recipe.data.music.bible || recipe.data.music.moods?.join(', ') || recipe.name,
           instruments: (recipe.data.music.instruments || []).join(', '),
           session_length: `${hours} hour long-form instrumental session`,
         }, primary_phrase: '', confirm_cost: true,
@@ -126,7 +144,7 @@ export function Produce() {
 
   const prepareTimeline = async () => {
     if (!quote || !cid || !growthPackage) return;
-    if (sceneProposal && !sceneProposalApplied) { setAssistantNote('Aplique a versão revisada da proposta à ideia antes de salvar o roteiro.'); return; }
+    if (sceneProposal && !sceneProposalApplied) { setAssistantNote('Aplique a proposta revisada à configuração antes de salvar o roteiro.'); return; }
     const phrase = growthPackage.primary_phrase.trim().toLocaleLowerCase();
     const opening = growthPackage.description.trim().match(/^.*?[.!?](?:\s|$)/)?.[0] || growthPackage.description.trim();
     if (!growthPackage.title.trim().toLocaleLowerCase().startsWith(phrase) || !opening.toLocaleLowerCase().includes(phrase) || growthPackage.description.trim().length < 450) {
@@ -134,7 +152,18 @@ export function Produce() {
     }
     setPreparing(true);
     const saved = await attempt(() => post<{ id: string }>('/api/creator/storyboard/save', {
-      channel_id: cid, spec: { ...quote.spec, hours, ...(sceneProposalApplied && sceneProposal ? { scene_brief: sceneProposal } : {}) },
+      channel_id: cid, spec: { ...quote.spec, hours, ...(sceneProposalApplied && sceneProposal ? {
+        creative_intent: assistantBrief.trim(), proposal_rationale: sceneProposal.rationale || '',
+        proposal_open_questions: sceneProposal.open_questions || [], delivery_format: 'long_form_16_9',
+        scene_brief: sceneProposal.scene_brief || quote.spec.scene_brief,
+        music_brief: sceneProposal.music_brief || quote.spec.music_brief,
+        scenario: sceneProposal.scenario || quote.spec.scenario,
+        music_style: sceneProposal.music_style || quote.spec.music_style,
+        hours: sceneProposal.hours || hours, shirt_color: sceneProposal.shirt_color || quote.spec.shirt_color,
+        cadence: sceneProposal.cadence || quote.spec.cadence,
+        markers: sceneProposal.markers || quote.spec.markers,
+        contextual_actions: sceneProposal.contextual_actions || quote.spec.contextual_actions,
+      } : {}) },
       youtube_metadata: {
         title: growthPackage.title, description: growthPackage.description, intent: growthIntent,
         primary_phrase: growthPackage.primary_phrase,
@@ -142,7 +171,7 @@ export function Produce() {
           search_phrase_options: growthPackage.search_phrase_options, historical_context: growthPackage.historical_context, reference_editorial_leads: growthPackage.reference_editorial_leads,
           channel_memory_version: growthPackage.channel_memory?.version || null, channel_memory_source_ids: [...new Set((growthPackage.channel_memory?.items || []).flatMap((item:any) => item.source_ids || []))],
           cost_usd: growthPackage.cost_usd ?? null, generated_at: new Date().toISOString() },
-        growth_context: { idea, scenario, recipe: recipe?.name || '', duration_hours: String(hours), visual_scene: scenario || '', musical_direction: quote.audio_prompt },
+        growth_context: { idea, scenario, recipe: recipe?.name || '', duration_hours: String(hours), visual_scene: scenario || '', musical_direction: (sceneProposalApplied && sceneProposal?.music_brief) || quote.audio_prompt },
       },
     }), 'Roteiro e pacote Growth salvos; nenhuma produção iniciada');
     setPreparing(false);
@@ -154,17 +183,36 @@ export function Produce() {
     setAssistantBusy(true); setAssistantNote('Preparando uma proposta de direção para sua revisão…');
     try {
       const result = await post<BriefSuggestion>('/api/creator/form-assist', {
-        request_id: uuid(), channel_id: cid, brief: assistantBrief.trim(), focus: 'scene_brief', current: quote.spec,
+        request_id: uuid(), channel_id: cid, brief: assistantBrief.trim(), focus: 'proposal', current: quote.spec,
         confirm_cost: true,
       });
-      const proposal = result.patch.scene_brief || '';
-      if (!proposal) throw new Error('O assistente não retornou uma proposta de cena.');
-      setSceneProposal(proposal);
+      if (!result.patch.scene_brief) throw new Error('O assistente não retornou uma direção de cena para a proposta.');
+      setSceneProposal(result.patch);
       setSceneProposalApplied(false);
-      setAssistantNote(`Proposta pronta para revisão${result.cost_usd != null ? ` · custo US$ ${Number(result.cost_usd).toFixed(4)}` : ''}. Nenhuma produção foi iniciada.`);
+      setAssistantNote(`Proposta estruturada pronta para revisão${result.cost_usd != null ? ` · custo US$ ${Number(result.cost_usd).toFixed(4)}` : ' · proposta reutilizada'}. Nenhuma produção foi iniciada.`);
     } catch (e:any) {
       setAssistantNote(e.message || 'Não foi possível preparar a proposta. Confira o histórico antes de tentar novamente.');
     } finally { setAssistantCostConfirmed(false); setAssistantBusy(false); }
+  };
+
+  const applyProposal = () => {
+    if (!sceneProposal) return;
+    const targetRecipe = sceneProposal.music_style
+      ? list.find(r => r.data.music.style_id === sceneProposal.music_style)
+      : recipe;
+    if (sceneProposal.music_style && !targetRecipe) {
+      setAssistantNote('A proposta sugere um estilo sem receita aprovada neste canal. Escolha uma receita compatível para continuar.'); return;
+    }
+    const targetScenes = (catalog.data?.scenes || []).filter((s:any) => s.approved && (!targetRecipe?.data.visual.allowed_scenarios.length || targetRecipe.data.visual.allowed_scenarios.includes(s.id)));
+    if (sceneProposal.scenario && !targetScenes.some((s:any) => s.id === sceneProposal.scenario)) {
+      setAssistantNote('O cenário proposto não está aprovado para a receita do canal. Ajuste a receita ou revise a proposta.'); return;
+    }
+    if (targetRecipe && targetRecipe.id !== recipeId) {
+      pendingProposal.current = sceneProposal;
+      setRecipeId(targetRecipe.id);
+      return;
+    }
+    applyProposalValues(sceneProposal);
   };
 
   if (recipes.loading) return <Skeleton lines={6} />;
@@ -177,7 +225,7 @@ export function Produce() {
 
       <section class="stack">
         <div class="row"><h3 style={{ flex: 1 }}>1. Receita</h3><a class="btn ghost sm" href={href('/receitas')}>Gerenciar receitas</a></div>
-        <div class="grid auto">{list.map(r => <RecipeCard r={r} pressed={r.id === recipeId} isDefault={r.id === defaultId} onClick={() => setRecipeId(r.id)} />)}</div>
+        <div class="grid auto">{list.map(r => <RecipeCard r={r} pressed={r.id === recipeId} isDefault={r.id === defaultId} onClick={() => { setRecipeId(r.id); setSceneProposal(null); setSceneProposalApplied(false); }} />)}</div>
         {!allowed.length && <p class="faint" style={{ fontSize: '13px' }}>Este canal ainda não tem receitas definidas; todas estão liberadas. Fixe as do canal em <a href={href('/canais')}>Canais</a>.</p>}
       </section>
 
@@ -185,32 +233,44 @@ export function Produce() {
         <div class="card stack">
           <h3>2. Duração e ideia</h3>
           <Field label="Duração do episódio">
-          <Segmented label="Horas" value={hours} onChange={setHours} options={[
-              { value: 1, label: '1h' }, { value: 4, label: '4h' }, { value: 8, label: '8h' }]} />
+          <Segmented label="Horas" value={hours} onChange={value => { setHours(value); setSceneProposal(null); setSceneProposalApplied(false); }} options={[
+              { value: 1, label: '1h' }, { value: 2, label: '2h' }, { value: 4, label: '4h' }, { value: 8, label: '8h' }]} />
           </Field>
           <p class="faint" style={{ fontSize: '13px' }}>A preparação da timeline aceita 1h, 4h ou 8h sem cobrança. A produção paga segue bloqueada enquanto faltarem o compositor integrado ou os assets aprovados.</p>
           <Field label="Ideia (opcional)" hint="Vira o tema do título, da descrição e a direção musical da hora.">
-            <textarea class="textarea" maxLength={1500} placeholder="ex.: madrugada de neve, pixels quentes, foco profundo" value={idea} onInput={e => { setIdea((e.target as HTMLTextAreaElement).value); setSceneProposal(''); setSceneProposalApplied(false); }} />
+            <textarea class="textarea" maxLength={1500} placeholder="ex.: madrugada de neve, pixels quentes, foco profundo" value={idea} onInput={e => { setIdea((e.target as HTMLTextAreaElement).value); setSceneProposal(null); setSceneProposalApplied(false); }} />
           </Field>
           <div class="notice">
             <b>Desenvolver a ideia com o assistente</b>
             <p class="faint">Descreva o que você quer ver. O assistente prepara uma proposta de cena para revisar; só o texto aceito segue para o roteiro. Isso não inicia produção.</p>
-            <textarea class="textarea" maxLength={800} placeholder="ex.: uma madrugada de Halloween, chuva na janela e luzes quentes de uma cidade distante" value={assistantBrief} onInput={e => { setAssistantBrief((e.target as HTMLTextAreaElement).value); setSceneProposal(''); setSceneProposalApplied(false); }} />
+            <textarea class="textarea" maxLength={800} placeholder="ex.: uma madrugada de Halloween, chuva na janela e luzes quentes de uma cidade distante" value={assistantBrief} onInput={e => { setAssistantBrief((e.target as HTMLTextAreaElement).value); setSceneProposal(null); setSceneProposalApplied(false); }} />
             <div class="row wrap" style={{ marginTop: '8px' }}>
               <Check checked={assistantCostConfirmed} onChange={setAssistantCostConfirmed}>Autorizo até US$0,10 para criar esta proposta.</Check>
               <button class="btn secondary" disabled={!assistantCostConfirmed || assistantBusy || !quote || assistantBrief.trim().length < 3} onClick={suggestScene}>{assistantBusy ? 'Preparando…' : 'Pedir proposta'}</button>
             </div>
             {assistantNote && <p class="faint" role="status">{assistantNote}</p>}
             {sceneProposal && <div class="stack" style={{ marginTop: '8px' }}>
-              <Field label="Proposta de cena — revise antes de aplicar"><textarea class="textarea" rows={4} maxLength={2000} value={sceneProposal} onInput={e => { setSceneProposal((e.target as HTMLTextAreaElement).value); setSceneProposalApplied(false); setGrowthPackage(null); }} /></Field>
-              <button class="btn" type="button" onClick={() => { setIdea(sceneProposal); setSceneProposalApplied(true); setGrowthPackage(null); setGrowthNote('A ideia mudou; gere novamente título e descrição para manter o Growth alinhado.'); }}>Aplicar à ideia do roteiro</button>
+              <h4>Proposta estruturada — revise antes de aplicar</h4>
+              <p class="faint">Intenção: {assistantBrief.trim()} · Entrega: vídeo longo 16:9 em preparação; a proposta não inicia produção.</p>
+              <p class="faint">Referências atuais: {String((quote?.spec as any)?.character_reference || 'identidade do canal')} e {String((quote?.spec as any)?.cat_reference || 'gato do canal')}.</p>
+              {sceneProposal.rationale && <p>{sceneProposal.rationale}</p>}
+              <Field label="Direção visual"><textarea class="textarea" rows={4} maxLength={2000} value={sceneProposal.scene_brief || ''} onInput={e => { setSceneProposal({ ...sceneProposal, scene_brief: (e.target as HTMLTextAreaElement).value }); setSceneProposalApplied(false); }} /></Field>
+              <Field label="Direção musical"><textarea class="textarea" rows={3} maxLength={2000} value={sceneProposal.music_brief || ''} onInput={e => { setSceneProposal({ ...sceneProposal, music_brief: (e.target as HTMLTextAreaElement).value }); setSceneProposalApplied(false); }} /></Field>
+              <p class="faint">Cenário: {(catalog.data?.scenes || []).find((s:any) => s.id === (sceneProposal.scenario || scenario))?.label || scenario} · Duração proposta: {sceneProposal.hours || hours}h · Receita: {list.find(r => r.data.music.style_id === sceneProposal.music_style)?.name || recipe?.name} · Cor: {sceneProposal.shirt_color || String((quote?.spec as any)?.shirt_color || 'violet')}.</p>
+              <p class="faint">Agenda proposta: {sceneProposal.cadence || String((quote?.spec as any)?.cadence || 'agenda atual')}; {(sceneProposal.markers?.length ? sceneProposal.markers : quote?.visual.planned || []).map((e:any) => `min ${e.minute} · ${SEQUENCE_LABEL[e.sequence] || e.sequence}`).join(' · ') || 'a confirmar na montagem'}.</p>
+              {!!sceneProposal.contextual_actions?.length && <p class="faint">Ações de cenário: {sceneProposal.contextual_actions.join(', ')}.</p>}
+              <p class="faint">Cotação da configuração atual: {quote ? usd(quote.estimate_usd) : 'indisponível'}. Ela considera receita e duração, mas não recalcula custos de uma agenda ou ações personalizadas. Antes de qualquer produção, essa configuração precisa passar pela cotação e revisão técnica. O formato final e os recursos de cena também dependem dessa revisão.</p>
+              {!!sceneProposal.open_questions?.length && <div class="notice warn"><b>Pontos a resolver:</b><ul>{sceneProposal.open_questions.map(q => <li>{q}</li>)}</ul></div>}
+              {!!quote?.visual.missing_actions.length && <div class="notice warn">Ainda faltam clipes de movimento revisados: {quote.visual.missing_actions.join(', ')}.</div>}
+              <button class="btn" type="button" onClick={applyProposal}>Aplicar à configuração do roteiro</button>
+              {sceneProposalApplied && <p class="faint" role="status">Aplicada ao formulário. Revise a cotação atualizada e gere novamente título e descrição antes de salvar.</p>}
             </div>}
           </div>
         </div>
         <div class="card stack">
           <h3>3. Cena</h3>
           <div class="grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: '8px' }}>
-            {scenes.map(s => <button type="button" class="scene" aria-pressed={s.id === scenario} title={s.reference?.setting} onClick={() => { setScenario(s.id); setSceneProposal(''); setSceneProposalApplied(false); }}><b>{s.label.split(' · ')[0]}</b><span class="faint" style={{ fontSize: '12px' }}>{s.label.split(' · ')[1] || ''}</span></button>)}
+            {scenes.map(s => <button type="button" class="scene" aria-pressed={s.id === scenario} title={s.reference?.setting} onClick={() => { setScenario(s.id); setSceneProposal(null); setSceneProposalApplied(false); }}><b>{s.label.split(' · ')[0]}</b><span class="faint" style={{ fontSize: '12px' }}>{s.label.split(' · ')[1] || ''}</span></button>)}
           </div>
           {recipe && (recipe.data.visual.variant !== 'canonical_illustrated' || recipe.data.music.style_id === '8bit_lofi') && <div class="notice">Direção pixel art aplicada à cena e às ações, com o episódio aprovado servindo de guia de identidade e composição.</div>}
         </div>

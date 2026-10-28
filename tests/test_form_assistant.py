@@ -21,6 +21,25 @@ def test_field_assistance_only_returns_requested_field():
     assert filter_patch({'scene_brief': '', 'music_brief': None}, 'all') == {}
 
 
+def test_structured_proposal_keeps_valid_schedule_and_actions():
+    current=ProductionSpec(hours=1)
+    patch=filter_patch({'scene_brief':'Rainy focus session','cadence':'custom_markers',
+        'markers':[{'minute':15,'sequence':'breath_pet'}], 'contextual_actions':[],
+        'rationale':'A quiet pause supports the study mood.','open_questions':[]},'proposal',current)
+    assert patch['cadence']=='custom_markers'
+    assert patch['markers']==[{'minute':15,'sequence':'breath_pet'}]
+    assert patch['scene_brief']=='Rainy focus session'
+
+
+def test_structured_proposal_drops_invalid_schedule_with_creator_question():
+    current=ProductionSpec(hours=1)
+    patch=filter_patch({'cadence':'custom_markers',
+        'markers':[{'minute':59,'sequence':'phone_check'}], 'scene_brief':'Late-night coding',
+        'open_questions':[]},'proposal',current)
+    assert 'cadence' not in patch and 'markers' not in patch
+    assert any('agenda proposta' in question.lower() for question in patch['open_questions'])
+
+
 def test_empty_scene_direction_preserves_existing_asset_hash():
     old = ProductionSpec().model_dump()
     old.pop('niche_pack_sha256')
