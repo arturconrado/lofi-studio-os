@@ -108,3 +108,56 @@ def test_shared_ceiling_serializes_concurrent_workspace_reservations(monkeypatch
     finally:
         with core.db() as c:
             c.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(schema)));c.commit()
+
+
+@pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
+def test_uncertain_reservation_and_ceiling_survive_a_new_application_process(monkeypatch):
+    """A fresh process sees the same uncertain spend and cannot reserve it twice."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    from psycopg import sql
+    from studio import core
+    from studio.tenancy import WORKSPACE, schema_name
+
+    database=os.environ['LOFI_TEST_DATABASE_URL'];monkeypatch.setenv('DATABASE_URL',database)
+    workspace_id=str(uuid4());schema=schema_name(workspace_id);task_id=uuid4()
+    with core.db() as c:
+        c.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema)));c.commit()
+    try:
+        marker=WORKSPACE.set(workspace_id)
+        try:
+            core.init_db()
+            with core.db() as c:
+                c.execute('UPDATE studio_config SET enabled=true,total_limit=.10 WHERE id=1')
+                c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,'test','simulated','{}',.08,'UNCERTAIN')",(task_id,))
+                c.commit()
+        finally:WORKSPACE.reset(marker)
+        child_script='''
+import sys
+from studio import core,financial
+from studio.tenancy import WORKSPACE
+from fastapi import HTTPException
+marker=WORKSPACE.set(sys.argv[1])
+try:
+    with core.db() as c:
+        usage=financial.total_usage(c)
+        try: financial.check_available(c, '.03')
+        except HTTPException as error: print(f"{usage}|{error.status_code}")
+        else: raise SystemExit('unexpectedly authorized a second reservation')
+finally: WORKSPACE.reset(marker)
+'''
+        env=os.environ.copy();env['DATABASE_URL']=database;env['PYTHONPATH']=os.getcwd()
+        restarted=subprocess.run([sys.executable,'-c',child_script,workspace_id],cwd=Path(__file__).resolve().parents[1],env=env,
+                                 text=True,capture_output=True,check=True,timeout=30)
+        usage,status=restarted.stdout.strip().split('|')
+        assert Decimal(usage)==Decimal('.08') and status=='409',restarted.stdout+'\n'+restarted.stderr
+        marker=WORKSPACE.set(workspace_id)
+        try:
+            with core.db() as c:
+                assert financial.total_usage(c)==Decimal('.08')
+                assert c.execute('SELECT count(*) n FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()['n']==1
+        finally:WORKSPACE.reset(marker)
+    finally:
+        with core.db() as c:
+            c.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(schema)));c.commit()
