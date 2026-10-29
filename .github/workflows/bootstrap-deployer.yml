@@ -1,0 +1,165 @@
+name: Bootstrap production deployer protocol 2
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type the exact confirmation to install the reviewed deployer
+        type: choice
+        options:
+          - NO
+          - INSTALL_PROTOCOL_2
+        default: NO
+        required: true
+      expected_installed_sha256:
+        description: Expected current server script SHA-256 (must match the captured value)
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+jobs:
+  bootstrap:
+    if: github.ref == 'refs/heads/main' && inputs.confirm == 'INSTALL_PROTOCOL_2' && inputs.expected_installed_sha256 == '4b97425d9c53e5250de228aa01cbe48faa7a91e3b3a88871226a2272d8793a43'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production-bootstrap
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Validate reviewed source
+        run: |
+          bash -n ops/auto-deploy.sh
+          grep -Fq "LOFI_DEPLOY_PROTOCOL=2" ops/auto-deploy.sh
+          sha256sum ops/auto-deploy.sh
+      - name: Configure bootstrap SSH
+        env:
+          KEY: ${{ secrets.VPS_BOOTSTRAP_KEY }}
+          KNOWN: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          test -n "$KEY"
+          test -n "$KNOWN"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/bootstrap
+          chmod 600 ~/.ssh/bootstrap
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+      - name: Install reviewed deployer and preserve the previous copy
+        env:
+          HOST: ${{ secrets.VPS_HOST }}
+          EXPECTED_OLD: ${{ inputs.expected_installed_sha256 }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          test -n "$HOST"
+          remote_dir=$(ssh -i ~/.ssh/bootstrap -o BatchMode=yes -o StrictHostKeyChecking=yes "root@${HOST}" \
+            "umask 077; mktemp -d /root/.lofi-deployer-bootstrap.XXXXXXXX")
+          [[ "$remote_dir" =~ ^/root/\.lofi-deployer-bootstrap\.[A-Za-z0-9]+$ ]]
+          incoming="${remote_dir}/auto-deploy.sh"
+          scp -i ~/.ssh/bootstrap -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            ops/auto-deploy.sh "root@${HOST}:${incoming}"
+          ssh -i ~/.ssh/bootstrap -o BatchMode=yes -o StrictHostKeyChecking=yes "root@${HOST}" \
+            "EXPECTED_OLD=${EXPECTED_OLD} RUN_ID=${RUN_ID} INCOMING=${incoming} REMOTE_DIR=${remote_dir} bash -s" <<'REMOTE'
+          set -euo pipefail
+          target=/opt/lofi-studio-os-releases/bin/auto-deploy
+          backup="${target}.pre-protocol2-${RUN_ID}"
+          stage="${target}.stage-${RUN_ID}"
+          failed="${target}.failed-bootstrap-${RUN_ID}"
+          rollback_stage="${target}.rollback-${RUN_ID}"
+          test "$REMOTE_DIR" = "$(dirname "$INCOMING")"
+          test "$INCOMING" = "${REMOTE_DIR}/auto-deploy.sh"
+          expected_new=$(sha256sum "$INCOMING" | awk '{print $1}')
+          restore_on_failure() {
+            status=$?
+            trap - ERR
+            set +e
+            if [ -f "$target" ] && [ -f "$backup" ]; then
+              current_sha=$(sha256sum "$target" | awk '{print $1}')
+              backup_sha=$(sha256sum "$backup" | awk '{print $1}')
+              if [ "$current_sha" = "$expected_new" ] && [ "$backup_sha" = "$EXPECTED_OLD" ] &&
+                 [ ! -e "$failed" ] && [ ! -e "$rollback_stage" ]; then
+                cp -a "$target" "$failed" && cp -a "$backup" "$rollback_stage" &&
+                  mv -f "$rollback_stage" "$target"
+                restored_sha=$(sha256sum "$target" | awk '{print $1}')
+                if [ "$restored_sha" = "$EXPECTED_OLD" ]; then
+                  echo "Bootstrap failed; previous deployer restored atomically from $backup" >&2
+                  echo "Failed candidate preserved at $failed" >&2
+                else
+                  echo "Rollback hash verification failed; inspect $target and $backup" >&2
+                fi
+              elif [ "$current_sha" != "$EXPECTED_OLD" ]; then
+                echo "Bootstrap failed; target did not match the expected candidate or old hash; no rollback overwrite attempted" >&2
+              fi
+            fi
+            rm -f "$stage" "$INCOMING"
+            rmdir "$REMOTE_DIR" 2>/dev/null || true
+            exit "$status"
+          }
+          trap restore_on_failure ERR
+          test -f "$target" && test ! -L "$target"
+          test ! -e "$backup" && test ! -e "$stage"
+          actual_old=$(sha256sum "$target" | awk '{print $1}')
+          test "$actual_old" = "$EXPECTED_OLD"
+          cp -a "$target" "$backup"
+          install -o root -g root -m 700 "$INCOMING" "$stage"
+          bash -n "$stage"
+          actual_new=$(sha256sum "$stage" | awk '{print $1}')
+          test "$actual_new" = "$expected_new"
+          protocol=$(SSH_ORIGINAL_COMMAND=lofi-deploy-protocol "$stage")
+          test "$protocol" = "LOFI_DEPLOY_PROTOCOL=2"
+          mv -f "$stage" "$target"
+          actual_installed=$(sha256sum "$target" | awk '{print $1}')
+          test "$actual_installed" = "$expected_new"
+          rm -f "$INCOMING"
+          rmdir "$REMOTE_DIR"
+          trap - ERR
+          printf 'Previous deployer preserved at %s\n' "$backup"
+          printf 'Installed deployer SHA-256: %s\n' "$actual_installed"
+          printf 'Protocol self-check: %s\n' "$protocol"
+          REMOTE
+      - name: Verify forced-command handshake and roll back on failure
+        env:
+          HOST: ${{ secrets.VPS_HOST }}
+          KEY: ${{ secrets.VPS_DEPLOY_KEY }}
+          BOOTSTRAP_KEY: ${{ secrets.VPS_BOOTSTRAP_KEY }}
+          EXPECTED_OLD: ${{ inputs.expected_installed_sha256 }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$BOOTSTRAP_KEY" > ~/.ssh/bootstrap
+          chmod 600 ~/.ssh/bootstrap
+          expected_new=$(sha256sum ops/auto-deploy.sh | awk '{print $1}')
+          set +e
+          protocol=$(ssh -i ~/.ssh/deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "root@${HOST}" "lofi-deploy-protocol" 2>&1)
+          handshake_status=$?
+          set -e
+          if [ "$handshake_status" -ne 0 ] || [ "$protocol" != "LOFI_DEPLOY_PROTOCOL=2" ]; then
+            echo "Forced-command handshake failed; restoring the previous deployer." >&2
+            ssh -i ~/.ssh/bootstrap -o BatchMode=yes -o StrictHostKeyChecking=yes "root@${HOST}" \
+              "EXPECTED_OLD=${EXPECTED_OLD} EXPECTED_NEW=${expected_new} RUN_ID=${RUN_ID} bash -s" <<'ROLLBACK'
+          set -euo pipefail
+          target=/opt/lofi-studio-os-releases/bin/auto-deploy
+          backup="${target}.pre-protocol2-${RUN_ID}"
+          failed="${target}.failed-protocol2-${RUN_ID}"
+          rollback_stage="${target}.rollback-${RUN_ID}"
+          test -f "$target" && test ! -L "$target"
+          test -f "$backup" && test ! -L "$backup"
+          test ! -e "$failed" && test ! -e "$rollback_stage"
+          current_sha=$(sha256sum "$target" | awk '{print $1}')
+          backup_sha=$(sha256sum "$backup" | awk '{print $1}')
+          test "$current_sha" = "$EXPECTED_NEW"
+          test "$backup_sha" = "$EXPECTED_OLD"
+          cp -a "$target" "$failed"
+          cp -a "$backup" "$rollback_stage"
+          mv -f "$rollback_stage" "$target"
+          restored_sha=$(sha256sum "$target" | awk '{print $1}')
+          test "$restored_sha" = "$EXPECTED_OLD"
+          printf 'Previous deployer restored; failed candidate preserved at %s\n' "$failed"
+          ROLLBACK
+            exit 1
+          fi
+          printf 'Forced-command handshake: %s\n' "$protocol"

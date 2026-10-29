@@ -34,24 +34,46 @@ class ShortCaption(Strict):
     position: Literal['top', 'bottom'] = 'top'
 
 
+class ShortAudioCue(Strict):
+    kind: Literal['music_pause', 'soft_chime']
+    start_seconds: float = Field(ge=0, le=180)
+    end_seconds: float = Field(gt=0, le=180)
+
+
 class ShortSpec(Strict):
     title: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=5000)
     story_title: str = Field(min_length=1, max_length=120)
     story_summary: str = Field(min_length=20, max_length=1200)
     parent_video_id: str = Field(pattern=r'^[A-Za-z0-9_-]{11}$')
+    audio_mode: Literal['parent_excerpt', 'approved_channel_track'] = 'parent_excerpt'
+    music_program_id: str | None = Field(default=None, max_length=40)
     audio_start_seconds: float = Field(ge=0, le=86400)
+    audio_cues: list[ShortAudioCue] = Field(default_factory=list, max_length=6)
     segments: list[ShortSegment] = Field(min_length=2, max_length=8)
     captions: list[ShortCaption] = Field(min_length=1, max_length=12)
 
     @model_validator(mode='after')
     def complete_story_and_captions(self):
+        if self.audio_mode == 'parent_excerpt' and self.music_program_id:
+            raise ValueError('Selecione a trilha do longo ou uma trilha aprovada do canal, não ambas')
+        if self.audio_mode == 'approved_channel_track' and not self.music_program_id:
+            raise ValueError('Escolha uma trilha aprovada do canal para este Short')
         beats = {segment.beat for segment in self.segments}
         if not {'opening', 'turn', 'resolution'} <= beats:
             raise ValueError('Inclua abertura, virada e resolução nos movimentos escolhidos')
         duration = sum(segment.duration_seconds for segment in self.segments)
         if duration > 180:
             raise ValueError('O perfil atual de Shorts aceita até 3 minutos')
+        previous_cue_start = -1.0
+        for cue in self.audio_cues:
+            if cue.end_seconds <= cue.start_seconds or cue.end_seconds > duration:
+                raise ValueError('Cada direção de áudio precisa estar dentro da duração da história')
+            if cue.start_seconds < previous_cue_start:
+                raise ValueError('Ordene as direções de áudio pelo instante de início')
+            if cue.kind == 'soft_chime' and cue.end_seconds - cue.start_seconds > 1.2:
+                raise ValueError('O toque local deve durar no máximo 1,2 segundo')
+            previous_cue_start = cue.start_seconds
         previous_end = -1
         for caption in self.captions:
             if caption.end_seconds <= caption.start_seconds or caption.end_seconds > duration:
@@ -121,7 +143,7 @@ def _caption_image(caption, folder, index, width=1080, height=1920):
     return path
 
 
-def render_short(spec, sources, audio, audio_sha256, destination, folder):
+def render_short(spec, sources, audio, audio_sha256, destination, folder, audio_provenance=None):
     """Compose source motion in a synced blurred 9:16 canvas with timed captions."""
     from .timeline_compositor import file_hash, measure
 
@@ -150,7 +172,12 @@ def render_short(spec, sources, audio, audio_sha256, destination, folder):
         args += ['-i', str(source)]
     audio_index = len(spec.segments)
     args += ['-ss', str(spec.audio_start_seconds), '-t', str(seconds), '-i', str(audio)]
-    caption_start = audio_index + 1
+    cue_start = audio_index + 1
+    for cue in spec.audio_cues:
+        if cue.kind == 'soft_chime':
+            duration = cue.end_seconds - cue.start_seconds
+            args += ['-f', 'lavfi', '-i', f'sine=frequency=880:sample_rate=48000:duration={duration}']
+    caption_start = cue_start + sum(cue.kind == 'soft_chime' for cue in spec.audio_cues)
     caption_paths = [_caption_image(c.model_dump(), folder, i) for i, c in enumerate(spec.captions)]
     for path in caption_paths:
         args += ['-loop', '1', '-framerate', '30', '-i', str(path)]
@@ -184,9 +211,28 @@ def render_short(spec, sources, audio, audio_sha256, destination, folder):
     final_label = 'shortout'
     filters.append(f'[{current}]format=yuv420p[{final_label}]')
     fade_out = max(0, seconds - .8)
-    audio_filter = f'afade=t=in:st=0:d=0.25,afade=t=out:st={fade_out}:d=0.8,atrim=duration={seconds},asetpts=PTS-STARTPTS'
-    args += ['-filter_complex', ';'.join(filters), '-map', f'[{final_label}]', '-map', f'{audio_index}:a:0',
-             '-t', str(seconds), '-af', audio_filter, '-c:v', 'libx264', '-threads:v', '1',
+    volume = '1'
+    for cue in reversed([cue for cue in spec.audio_cues if cue.kind == 'music_pause']):
+        volume = f"if(between(t,{cue.start_seconds},{cue.end_seconds}),0,{volume})"
+    filters.append(f"[{audio_index}:a:0]atrim=duration={seconds},asetpts=PTS-STARTPTS,volume='{volume}',afade=t=in:st=0:d=0.25,afade=t=out:st={fade_out}:d=0.8[shortmusic]")
+    cue_labels = []
+    effect_index = 0
+    for cue in spec.audio_cues:
+        if cue.kind != 'soft_chime':
+            continue
+        duration = cue.end_seconds - cue.start_seconds
+        source_index = cue_start + effect_index
+        effect_index += 1
+        delay_ms = round(cue.start_seconds * 1000)
+        label = f'shortcue{effect_index}'
+        filters.append(f'[{source_index}:a:0]atrim=duration={duration},asetpts=PTS-STARTPTS,volume=0.08,afade=t=in:st=0:d=0.025,afade=t=out:st={max(0,duration-.18)}:d={min(.18,duration)},adelay={delay_ms}|{delay_ms}[{label}]')
+        cue_labels.append(f'[{label}]')
+    if cue_labels:
+        filters.append('[shortmusic]' + ''.join(cue_labels) + f'amix=inputs={1+len(cue_labels)}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95[shortaudio]')
+    else:
+        filters.append('[shortmusic]anull[shortaudio]')
+    args += ['-filter_complex', ';'.join(filters), '-map', f'[{final_label}]', '-map', '[shortaudio]',
+             '-t', str(seconds), '-c:v', 'libx264', '-threads:v', '1',
              '-preset', 'veryfast', '-crf', '19',
              '-pix_fmt', 'yuv420p', '-r', '30', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
              '-movflags', '+faststart', str(destination)]
@@ -201,11 +247,22 @@ def render_short(spec, sources, audio, audio_sha256, destination, folder):
     subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-i', str(destination), '-f', 'null', '-'],
                    check=True, timeout=min(600, max(300, int(seconds * 12))),
                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    audio_receipt={'source_type':'input_audio_track','source_track_sha256':audio_sha256,
+                   'source_start_seconds':spec.audio_start_seconds,'source_duration_seconds':seconds,
+                   'source_track_count':1,'additional_music_tracks':0,'voiceover_tracks':0,
+                   'sound_cues':[cue.model_dump(mode='json') for cue in spec.audio_cues],
+                   'sound_effect_tracks':sum(cue.kind == 'soft_chime' for cue in spec.audio_cues),
+                   'music_pause_intervals':[cue.model_dump(mode='json') for cue in spec.audio_cues if cue.kind == 'music_pause'],
+                   'fade_in_seconds':0.25,'fade_out_seconds':0.8}
+    if isinstance(audio_provenance,dict):
+        for key in ('source_type','source_program_id','source_snapshot_sha256'):
+            value=audio_provenance.get(key)
+            if isinstance(value,str) and value:audio_receipt[key]=value
     return {'sha256': file_hash(destination), 'seconds': actual, 'audio_seconds': audio_seconds,
             'width': 1080, 'height': 1920, 'fps': 30, 'profile': 'youtube_shorts_9x16',
             'composition': 'same-frame-blurred-background', 'captions': [c.model_dump(mode='json') for c in spec.captions],
             'segments': [{'clip_id': s.clip_id, 'source_sha256': s.source_sha256,
                           'source_start_seconds': s.source_start_seconds,
                           'duration_seconds': s.duration_seconds, 'beat': s.beat}
-                         for s in spec.segments], 'audio_sha256': audio_sha256,
+                         for s in spec.segments], 'audio_sha256': audio_sha256,'audio_provenance':audio_receipt,
             'full_decode_pass': True, 'final_review_required': True}

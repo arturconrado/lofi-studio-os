@@ -4,12 +4,13 @@ from decimal import Decimal
 from pathlib import Path
 import httpx
 from PIL import Image
-from fastapi import APIRouter,HTTPException,Request
+from fastapi import APIRouter,Depends,HTTPException,Request
 from pydantic import BaseModel,Field
 from .core import db,storage,audit
 from .channels import profile
 from . import runtime
 from .production_harness import production_spec_hash
+from .permissions import require_spend_permission
 router=APIRouter(prefix='/motion-validation')
 MODEL='google/veo-3.1-lite'
 KIND='motion_validation_20261014'
@@ -98,7 +99,7 @@ class Pilot(BaseModel):
     confirm_cost:bool=False
 
 
-@router.post('')
+@router.post('',dependencies=[Depends(require_spend_permission)])
 def submit(body:Pilot):
     if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva do teste de oito segundos')
     # Check identity and idempotency before any external work.

@@ -80,6 +80,47 @@ def test_viewer_and_wrong_origin_denied(client):
     assert client.put('/api/settings',json={},headers=headers).status_code==403
 
 
+def test_paid_http_route_rejects_non_admin_roles_before_reserving(client,monkeypatch):
+    """Real HTTP requests enforce spend permission before any job/reservation is created."""
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+
+    _,owner=signup(client)
+    owner_user_id=client.get('/api/auth/me').json()['user_id']
+    channel=client.get('/api/channels').json()[0]['id']
+    track=client.post('/api/tracks',json={
+        'channel_id':channel,'title':'Private test track','collection':'Test','bpm':70,
+        'prompt':'Original gentle instrumental music for a permission regression test',
+    },headers={'X-CSRF-Token':owner['csrf_token']})
+    assert track.status_code==200,track.text
+    track_id=track.json()['id']
+    monkeypatch.setattr('studio.runtime.key',lambda:None)
+
+    for role in ('viewer','creator','operator'):
+        with auth.connection() as c:
+            c.execute('UPDATE public.os_memberships SET role=%s WHERE user_id=%s AND workspace_id=%s',
+                      (role,owner_user_id,owner['workspace_id']))
+        response=client.post(f'/api/tracks/{track_id}/generate',json={'confirm_cost':True},
+                             headers={'X-CSRF-Token':owner['csrf_token']})
+        assert response.status_code==403,(role,response.status_code,response.text)
+
+    # An authorized role reaches the next safety check, but no key or provider
+    # call exists in this fixture, so the route stops before reserving or queuing.
+    with auth.connection() as c:
+        c.execute("UPDATE public.os_memberships SET role='workspace_admin' WHERE user_id=%s AND workspace_id=%s",
+                  (owner_user_id,owner['workspace_id']))
+    response=client.post(f'/api/tracks/{track_id}/generate',json={'confirm_cost':True},
+                         headers={'X-CSRF-Token':owner['csrf_token']})
+    assert response.status_code==409 and 'Configure sua chave' in response.json()['detail']
+
+    scope=WORKSPACE.set(owner['workspace_id'])
+    try:
+        with db() as c:
+            assert c.execute('SELECT count(*) AS n FROM jobs WHERE track_id=%s',(track_id,)).fetchone()['n']==0
+    finally:
+        WORKSPACE.reset(scope)
+
+
 def test_approved_pilot_reappears_as_library_candidate_and_prepare_is_recoverable(client):
     """Review approval surfaces the same pilot in Library; retries never upload."""
     _,identity=signup(client)
