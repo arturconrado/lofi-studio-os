@@ -11,13 +11,14 @@ import hashlib
 import time
 from pathlib import Path
 from typing import Literal
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import Field
 from PIL import Image
 from .core import db, storage, audit, ensure_once
 from .channels import profile
 from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame, seam_binding, variant_plan, occurrence_clip, _status, validate_continuations
 from .workshop_shorts import ShortSpec
+from .permissions import require_spend_permission
 
 router = APIRouter(prefix='/workshop')
 KIND = 'visual_workshop_v1'
@@ -670,7 +671,7 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
             'variants':[{'key':g['key'],'minutes':g['minutes']} for g in groups if g]}
 
 
-@router.post('/projects/{pid}/clips/{cid}/generate/{kind}')
+@router.post('/projects/{pid}/clips/{cid}/generate/{kind}',dependencies=[Depends(require_spend_permission)])
 def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], body: Generate):
     from .workshop_provider import quote as provider_quote, submit
     from .visual_workshop import prompt

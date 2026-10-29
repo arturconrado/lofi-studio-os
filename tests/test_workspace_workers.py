@@ -38,3 +38,59 @@ def test_secret_files_restrict_permissions_and_refuse_symlinks(tmp_path):
     link=tmp_path/'link';link.symlink_to(target)
     with pytest.raises(OSError):write_private(link,'bad')
     assert target.read_text()=='SECRET=updated\n'
+
+
+def test_explicit_public_scope_skips_worker_tenant_for_database_storage_and_queue(monkeypatch):
+    from studio import core
+    from studio.tenancy import WORKSPACE,ScopedQueue,ScopedStorage,active_workspace
+    tenant=str(uuid.uuid4())
+    monkeypatch.setenv('LOFI_WORKSPACE_ID',tenant)
+    monkeypatch.setenv('S3_ENDPOINT','https://storage.test')
+    monkeypatch.setenv('S3_ACCESS_KEY_ID','test-access')
+    monkeypatch.setenv('S3_SECRET_ACCESS_KEY','test-secret')
+    monkeypatch.setenv('S3_BUCKET','test-bucket')
+    monkeypatch.setenv('REDIS_URL','redis://unused.test/0')
+    s3,redis_client=object(),object()
+    monkeypatch.setattr(core.boto3,'client',lambda *args,**kwargs:s3)
+    monkeypatch.setattr(core.redis.Redis,'from_url',lambda *args,**kwargs:redis_client)
+    assert active_workspace()==tenant  # An unbound worker still inherits its configured tenant.
+
+    marker=WORKSPACE.set(tenant)
+    try:
+        assert isinstance(core.storage(),ScopedStorage)
+        assert isinstance(core.queue(),ScopedQueue)
+    finally:WORKSPACE.reset(marker)
+
+    marker=WORKSPACE.set(None)
+    try:
+        assert active_workspace() is None
+        assert core.storage() is s3
+        assert core.queue() is redis_client
+    finally:WORKSPACE.reset(marker)
+
+
+def test_public_http_routes_do_not_inherit_worker_workspace(monkeypatch):
+    import asyncio
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from studio.api import auth
+    from studio.tenancy import active_workspace
+
+    tenant=str(uuid.uuid4())
+    monkeypatch.setenv('LOFI_WORKSPACE_ID',tenant)
+    observed=[]
+    scope={'type':'http','asgi':{'version':'3.0'},'http_version':'1.1','method':'GET',
+           'scheme':'https','path':'/health','raw_path':b'/health','query_string':b'',
+           'headers':[],'server':('testserver',443),'client':('127.0.0.1',12345),
+           'root_path':''}
+    request=Request(scope)
+
+    async def next_handler(_request):
+        observed.append(active_workspace())
+        return Response('ok')
+
+    response=asyncio.run(auth(request,next_handler))
+    assert response.status_code==200
+    assert observed==[None]
+    # Restore the worker fallback after the request completes.
+    assert active_workspace()==tenant

@@ -117,7 +117,11 @@ def tick():
             c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Vídeo completo pronto para revisão',updated_at=now() WHERE id=%s",
                       (json.dumps({'report': report, 'video_key': key}), t['id'])); c.commit()
     except Exception as e:
-        logger.exception('Visual Workshop task failed id=%s operation=%s', t['id'], t['payload'].get('operation'))
+        # Provider/filesystem exception messages can echo request material or
+        # credentials. Keep the operational identifiers and exception class,
+        # but do not log the exception text or traceback.
+        logger.error('Visual Workshop task failed id=%s operation=%s error_type=%s',
+                     t['id'], t['payload'].get('operation'), type(e).__name__)
         with db() as c:
             c.execute("UPDATE factory_tasks SET status='FAILED',detail=%s,updated_at=now() WHERE id=%s",
                       ('Montagem interrompida (' + type(e).__name__ + '). Confira as fontes e o espaço disponível.', t['id'])); c.commit()

@@ -9,11 +9,12 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from typing import Literal
 from urllib.parse import urlparse
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from .core import db
 from .channels import profile
 from .youtube_metadata import editorial_phrase, metadata_guidelines, validate_metadata
+from .permissions import require_spend_permission
 
 router = APIRouter(prefix='/api/growth')
 CAUTION = ('Comparações são observacionais; mudanças de público, horário e tráfego podem explicar diferenças. '
@@ -454,7 +455,7 @@ def metadata_context(cid:uuid.UUID,intent:str='coding_focus',content_format:Lite
             'search_phrase_options':options,'suggested_primary_phrase':options[0]['phrase'] if options else '',
             'historical_context':projection,'search_volume_measured':False,'interpretation_note':CAUTION}
 
-@router.post('/{cid}/package-suggestion')
+@router.post('/{cid}/package-suggestion',dependencies=[Depends(require_spend_permission)])
 def package_suggestion(cid:uuid.UUID,body:PackagingSuggestionRequest):
     if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva de até US$0,10 para gerar a sugestão')
     with db() as c:
