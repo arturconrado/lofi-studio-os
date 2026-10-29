@@ -538,6 +538,57 @@ def seed_project(cl,draft,media):
 
 
 @DB
+def test_approved_current_shorts_are_listed_in_library_but_stale_or_unreviewed_are_not(client):
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio.visual_workshop import digest
+    from test_workshop_shorts import short_spec
+
+    draft,media=fixture()
+    url,identity=seed_project(client,draft,media)
+    project_id=uuid.UUID(url.rstrip('/').split('/')[-1])
+    channel_id=client.get('/api/channels').json()[0]['id']
+    spec=short_spec();spec_data=spec.model_dump(mode='json')
+    valid_sha='d'*64;stale_sha='e'*64
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            project=c.execute('SELECT data FROM visual_projects WHERE id=%s',(project_id,)).fetchone()
+            current_digest=digest(project['data'])
+            task_ids=[uuid.uuid4() for _ in range(3)]
+            for task_id,reviewed,source_digest,sha in [
+                (task_ids[0],False,current_digest,valid_sha),
+                (task_ids[1],True,'f'*64,stale_sha),
+                (task_ids[2],False,current_digest,'a'*64),
+            ]:
+                asset_id=uuid.uuid4()
+                c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',
+                    (asset_id,project_id,json.dumps({'kind':'short','key':f'test/{task_id}.mp4','sha256':sha,
+                      'approved':reviewed,'review_sha256':sha if reviewed else None,'parent_video_id':spec.parent_video_id})))
+                payload={'operation':'short_render','project_id':str(project_id),'asset_id':str(asset_id),
+                    'video_key':f'test/{task_id}.mp4','draft_sha256':source_digest,'spec':spec_data,
+                    'short_spec_sha256':spec.content_hash(),'review_state':'approved' if reviewed else '',
+                    'review_sha256':sha if reviewed else None,'report':{'sha256':sha,'seconds':spec.seconds}}
+                c.execute('INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,%s,\'test\',%s,0,\'COMPLETED\')',
+                          (task_id,'visual_workshop_v1',json.dumps(payload)))
+            c.commit()
+    finally:WORKSPACE.reset(marker)
+
+    reviewed=client.post(f'/api/creator/workshop/projects/{project_id}/shorts/{task_ids[0]}/review',json={
+        'sha256':valid_sha,'approve':True,'confirm_story':True,'confirm_framing':True,
+        'confirm_captions':True,'confirm_audio':True,'confirm_source_and_rights':True})
+    assert reviewed.status_code==200,reviewed.text
+
+    result=client.get(f'/api/creator/workshop/shorts/library?channel_id={channel_id}')
+    assert result.status_code==200,result.text
+    items=result.json()
+    assert [item['short_id'] for item in items]==[str(task_ids[0])]
+    assert items[0]['sha256']==valid_sha
+    assert items[0]['parent_video_id']==spec.parent_video_id
+    assert items[0]['video_url'].endswith(f'/shorts/{task_ids[0]}/video')
+
+
+@DB
 def test_creative_attempt_limit_is_scoped_to_channel_even_when_clip_ids_repeat(client,monkeypatch):
     """A client-supplied clip UUID in another channel must not consume this channel's allowance."""
     from studio import workshop_api as api,workshop_provider
