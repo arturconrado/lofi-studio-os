@@ -46,6 +46,7 @@ function respond(url: string): unknown {
   if (url.includes('/api/creator/programs/')) return { title: 't', description: 'd' };
   if (url.includes('/api/youtube/publications/pilots/candidates')) return pilotCandidates;
   if (url.includes('/api/creator/workshop/shorts/library')) return shortCandidates;
+  if (url.includes('/api/youtube/publications/shorts/candidates')) return shortCandidates;
   if (url.includes('/api/youtube/publications')) return publications;
   return [];
 }
@@ -127,6 +128,17 @@ describe('every screen renders with data', () => {
     expect(container.querySelector('a[href="/short-video"]')).not.toBeNull();
     expect(container.querySelector('a[href="https://youtu.be/abcdefghijk"]')).not.toBeNull();
     expect(container.textContent).toContain('Aprovação não inicia upload');
+  });
+
+  it('keeps Short publication preparation separate from long-form candidates', async () => {
+    shortCandidates = [{ short_id: 'short-1', channel_id: 'c1', title: 'A tiny coding break', story_title: 'The pause',
+      story_summary: 'A cat asks for a break, then the coding session resumes.', seconds: 18, sha256: 'b'.repeat(64), video_url: '/short-video' }];
+    navigate('/biblioteca');
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.textContent).toContain('Shorts aprovados para preparar publicação'));
+    expect(container.textContent).toContain('Fluxo Shorts');
+    expect(container.textContent).toContain('A tiny coding break');
+    expect(container.textContent).toContain('Preparar para publicar');
   });
 
   it('shows explicitly approved pilots as Library candidates without starting upload', async () => {

@@ -15,8 +15,9 @@ const GROUPS: Record<string, string[]> = {
   prontos: ['PRONTO_PARA_PUBLICAR', 'PUBLICADO', 'AO_VIVO'], encerrados: ['CANCELADO', 'ARQUIVADO'],
 };
 
-type Publication = { id: string; channel_id: string; title: string; description: string; intent?: string; primary_phrase?: string; keywords?: string[]; publication_metadata?: { seconds?: number; growth_context?: Record<string, string> }; pilot_id?: string | null; privacy: string; made_for_kids?: boolean; actual_privacy: string | null; state: string; video_id: string | null; detail: string; bytes_sent?: number; created_at: string };
+type Publication = { id: string; channel_id: string; title: string; description: string; intent?: string; primary_phrase?: string; keywords?: string[]; publication_metadata?: { seconds?: number; content_format?: string; short_video_url?: string; growth_context?: Record<string, string> }; pilot_id?: string | null; short_task_id?: string | null; privacy: string; made_for_kids?: boolean; actual_privacy: string | null; state: string; video_id: string | null; detail: string; bytes_sent?: number; created_at: string };
 type PilotCandidate = { pilot_id: string; channel_id: string; title: string; seconds: number; thumbnail_url: string; video_url: string; approved_at: string | null; created_at: string };
+type ShortPublicationCandidate = { short_id: string; channel_id: string; title: string; story_title: string; story_summary: string; seconds: number; sha256: string; video_url: string };
 type ShortCandidate = { short_id: string; project_id: string; channel_id: string; title: string; description: string; story_title: string; story_summary: string; parent_video_id: string; seconds: number; sha256: string; approved_at: string; video_url: string };
 const PUB_STATE: Record<string, [string, string]> = { uploaded: ['ok', 'No YouTube'], ready: ['ok', 'Pronto para publicar'], queued: ['info', 'Na fila'], uploading: ['violet', 'Enviando'], held: ['', 'Pausado pela agenda'],
   interrupted: ['warn', 'Interrompido'], uncertain: ['warn', 'Incerto'], failed: ['bad', 'Falhou'], deleted: ['', 'Excluído'] };
@@ -24,6 +25,7 @@ const PUB_STATE: Record<string, [string, string]> = { uploaded: ['ok', 'No YouTu
 function Publications({ cid }: { cid: string }) {
   const pubs = useResource<Publication[]>('/api/youtube/publications', ['production.updated'], []);
   const candidates = useResource<PilotCandidate[]>(`/api/youtube/publications/pilots/candidates?channel_id=${encodeURIComponent(cid)}`, ['production.updated'], [cid]);
+  const shortCandidates = useResource<ShortPublicationCandidate[]>(`/api/youtube/publications/shorts/candidates?channel_id=${encodeURIComponent(cid)}`, ['production.updated'], [cid]);
   const [preparing, setPreparing] = useState<string | null>(null);
   const [removing, setRemoving] = useState<Publication | null>(null);
   const [sure, setSure] = useState(false);
@@ -55,7 +57,7 @@ function Publications({ cid }: { cid: string }) {
     setGrowthBusy(true); setGrowthNote('Reunindo observações do YouTube Studio e histórico comparável…');
     const requestId = uuid();
     const result = await attempt(() => post<any>(`/api/growth/${cid}/package-suggestion`, {
-      request_id: requestId, publication_id: source.id, intent: source.intent || 'coding_focus', content_format: 'long_form',
+      request_id: requestId, publication_id: source.id, intent: source.intent || 'coding_focus', content_format: source.publication_metadata?.content_format || (source.short_task_id ? 'short' : 'long_form'),
       source_title: source.title, source_description: source.description || '', source_context: source.publication_metadata?.growth_context || {}, primary_phrase: source.primary_phrase || '', confirm_cost: true,
     }), 'Sugestão nativa pronta para revisar');
     if (result) {
@@ -75,10 +77,17 @@ function Publications({ cid }: { cid: string }) {
     setPreparing(null);
     if (result !== undefined) { pubs.reload(); candidates.reload(); }
   };
+  const prepareShort = async (candidate: ShortPublicationCandidate) => {
+    setPreparing(candidate.short_id);
+    const result = await attempt(() => post(`/api/youtube/publications/shorts/${candidate.short_id}/prepare`, { request_id: uuid(), channel_id: cid }), 'Short aprovado adicionado à fila de revisão; nenhum envio foi iniciado.');
+    setPreparing(null);
+    if (result !== undefined) { pubs.reload(); shortCandidates.reload(); }
+  };
   const retry = async (p: Publication) => { const ok = await attempt(() => post(`/api/youtube/publications/${p.id}/retry`, {}), 'Publicação recolocada na fila'); if (ok !== undefined) pubs.reload(); };
   const list = (pubs.data || []).filter(p => p.channel_id === cid);
   const candidateList = candidates.data || [];
-  if (!list.length && !candidateList.length) return null;
+  const shortCandidateList = shortCandidates.data || [];
+  if (!list.length && !candidateList.length && !shortCandidateList.length) return null;
   const release = async (p: Publication) => {
     if (!confirm(`Liberar o envio de “${p.title}”?`)) return;
     try { await post(`/api/youtube/publications/${p.id}/release`, { confirm_release: true }); }
@@ -106,13 +115,24 @@ function Publications({ cid }: { cid: string }) {
           <button class="btn primary sm" disabled={preparing === candidate.pilot_id} onClick={() => preparePilot(candidate)}>{preparing === candidate.pilot_id ? 'Preparando…' : 'Preparar para publicar'}</button></div>
       </article>)}</div>
     </section>}
+    {shortCandidateList.length > 0 && <section class="card">
+      <div class="card-head"><h3 class="grow">Shorts aprovados para preparar publicação</h3><Pill tone="ok">Fluxo Shorts</Pill></div>
+      <p class="faint">Cada história vertical é preparada e publicada separadamente dos vídeos longos. Preparar não inicia o envio.</p>
+      <div class="grid cols-2">{shortCandidateList.map(candidate => <article class="card stack" key={candidate.short_id}>
+        <div class="row spread"><b>{candidate.title || candidate.story_title}</b><Pill tone="ok">Aprovado</Pill></div>
+        <p class="faint">{candidate.story_summary}</p>
+        <div class="faint">{duration(candidate.seconds)} · SHA-256 {candidate.sha256.slice(0, 12)}…</div>
+        <div class="row"><a class="btn ghost sm" href={candidate.video_url} target="_blank" rel="noreferrer">Assistir Short</a>
+          <button class="btn primary sm" disabled={preparing === candidate.short_id} onClick={() => prepareShort(candidate)}>{preparing === candidate.short_id ? 'Preparando…' : 'Preparar para publicar'}</button></div>
+      </article>)}</div>
+    </section>}
     {list.length > 0 && <section class="card">
       <div class="card-head"><h3 class="grow">Publicações no YouTube</h3></div>
       <div style={{ overflowX: 'auto' }}>
         <table class="table"><thead><tr><th>Vídeo</th><th>Estado</th><th>Visibilidade</th><th>Enviado</th><th /></tr></thead>
           <tbody>{list.map(p => { const [tone, label] = PUB_STATE[p.state] || ['', p.state]; return (
             <tr>
-              <td><b>{p.title}</b>{p.video_id && <div><a class="faint mono" style={{ fontSize: '12px' }} href={`https://youtu.be/${p.video_id}`} target="_blank" rel="noreferrer">youtu.be/{p.video_id}</a></div>}</td>
+              <td><b>{p.title}</b>{p.short_task_id && <div><Pill tone="violet">Short</Pill></div>}{p.video_id && <div><a class="faint mono" style={{ fontSize: '12px' }} href={`https://youtu.be/${p.video_id}`} target="_blank" rel="noreferrer">youtu.be/{p.video_id}</a></div>}</td>
               <td><Pill tone={tone}>{label}</Pill>{p.detail && <div class="faint" style={{ fontSize: '12px', marginTop: '4px' }}>{p.detail}</div>}</td>
               <td>{p.actual_privacy || p.privacy}</td><td class="faint">{ago(p.created_at)}</td>
               <td style={{ textAlign: 'right' }}>
@@ -128,6 +148,7 @@ function Publications({ cid }: { cid: string }) {
       <Dialog open={!!readyForReview} onClose={() => setReadyForReview(null)} title="Publicação pronta para o YouTube">
         <p>{Math.floor((readyForReview?.publication_metadata?.seconds || 0) / 60)} min · Visibilidade: {readyForReview?.privacy}</p>
         {readyForReview?.pilot_id && <a class="btn" target="_blank" rel="noreferrer" href={`/api/ambient/pilots/${readyForReview.pilot_id}/video`}>Assistir ao vídeo completo</a>}
+        {readyForReview?.short_task_id && readyForReview.publication_metadata?.short_video_url && <a class="btn" target="_blank" rel="noreferrer" href={readyForReview.publication_metadata.short_video_url}>Assistir ao Short</a>}
         <label class="field"><span>Visibilidade</span><select class="select" value={readyPrivacy} onChange={e => setReadyPrivacy((e.target as HTMLSelectElement).value)}><option value="private">Privado</option><option value="unlisted">Não listado</option><option value="public">Público</option></select></label>
         <label class="field"><span>Público infantil</span><select class="select" value={readyKids === null ? '' : String(readyKids)} onChange={e => setReadyKids((e.target as HTMLSelectElement).value === '' ? null : (e.target as HTMLSelectElement).value === 'true')}><option value="">Selecione</option><option value="false">Não foi criado para crianças</option><option value="true">Foi criado para crianças</option></select></label>
         <Check checked={growthCost} onChange={setGrowthCost}>Autorizo o custo máximo de US$ 0,10 para gerar a sugestão</Check>

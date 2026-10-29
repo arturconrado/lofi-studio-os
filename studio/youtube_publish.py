@@ -11,7 +11,7 @@ from .youtube import cipher,configured
 from .channels import profile
 router=APIRouter(prefix='/api/youtube/publications')
 UPLOAD_SCOPE='https://www.googleapis.com/auth/youtube.upload'
-FIELDS='id,channel_id,export_id,pilot_id,thumbnail_detail,title,description,intent,primary_phrase,keywords,publication_metadata,privacy,made_for_kids,state,bytes_sent,total_bytes,video_id,actual_privacy,detail,created_at,updated_at'
+FIELDS='id,channel_id,export_id,pilot_id,short_task_id,short_sha256,thumbnail_detail,title,description,intent,primary_phrase,keywords,publication_metadata,privacy,made_for_kids,state,bytes_sent,total_bytes,video_id,actual_privacy,detail,created_at,updated_at'
 
 def ensure(c):
     c.execute('SELECT pg_advisory_xact_lock(192837480)')
@@ -34,6 +34,8 @@ def ensure(c):
         c.execute("ALTER TABLE youtube_publications ADD COLUMN keywords JSONB NOT NULL DEFAULT '[]'::jsonb")
     if not c.execute("SELECT 1 FROM pg_attribute WHERE attrelid='youtube_publications'::regclass AND attname='publication_metadata' AND NOT attisdropped").fetchone():
         c.execute("ALTER TABLE youtube_publications ADD COLUMN publication_metadata JSONB NOT NULL DEFAULT '{}'::jsonb")
+    c.execute('ALTER TABLE youtube_publications ADD COLUMN IF NOT EXISTS short_task_id UUID UNIQUE REFERENCES factory_tasks(id)')
+    c.execute('ALTER TABLE youtube_publications ADD COLUMN IF NOT EXISTS short_sha256 TEXT')
 
 
 
@@ -63,6 +65,83 @@ def validate_growth_receipt(c,channel_id,publication_metadata):
     if not task or task['kind']!='growth_packaging_20261024' or task['status']!='COMPLETED' or task['payload'].get('channel_id')!=str(channel_id) or not task['payload'].get('package'):
         raise HTTPException(422,'Gere novamente o pacote Growth para este canal antes de publicar.')
     return native
+
+
+def approved_short(c, task_id, channel_id, expected_sha=None):
+    """Return an approved Short only while its source, story and reviewed bytes still match."""
+    from .visual_workshop import digest
+    from .workshop_shorts import ShortSpec
+    task=c.execute('''SELECT t.*,p.id project_id,p.channel_id,p.data project_data
+      FROM factory_tasks t JOIN visual_projects p ON p.id=(t.payload->>'project_id')::uuid
+      WHERE t.id=%s AND t.kind='visual_workshop_v1' AND p.channel_id=%s''',(task_id,channel_id)).fetchone()
+    if not task:
+        raise HTTPException(404,'Short não encontrado neste canal.')
+    payload=task['payload']; report=payload.get('report') or {}; sha=report.get('sha256')
+    if (task['status']!='COMPLETED' or payload.get('operation')!='short_render' or not payload.get('video_key') or
+        payload.get('review_state')!='approved' or payload.get('review_sha256')!=sha or
+        (expected_sha and expected_sha!=sha) or payload.get('draft_sha256')!=digest(task['project_data'])):
+        raise HTTPException(409,'A aprovação do Short ficou desatualizada; revise a versão atual antes de publicar.')
+    try: spec=ShortSpec.model_validate(payload.get('spec'))
+    except Exception: raise HTTPException(409,'A história do Short não está íntegra; prepare uma nova versão.') from None
+    if spec.content_hash()!=payload.get('short_spec_sha256'):
+        raise HTTPException(409,'A história ou os metadados do Short mudaram; gere uma nova versão.')
+    asset=c.execute('SELECT data FROM visual_media WHERE id=%s AND project_id=%s',(payload.get('asset_id'),task['project_id'])).fetchone()
+    if not asset or asset['data'].get('kind')!='short' or asset['data'].get('sha256')!=sha or asset['data'].get('approved') is not True or asset['data'].get('review_sha256')!=sha:
+        raise HTTPException(409,'O asset derivado não corresponde ao Short aprovado.')
+    return {'task':task,'payload':payload,'spec':spec,'sha256':sha,'object_key':payload.get('video_key'),
+            'seconds':float(report.get('seconds') or spec.seconds)}
+
+
+class PrepareShort(BaseModel):
+    request_id:uuid.UUID
+    channel_id:uuid.UUID
+
+
+@router.get('/shorts/candidates')
+def short_candidates(channel_id:uuid.UUID):
+    with db() as c:
+        ensure(c);profile(c,channel_id)
+        rows=c.execute('''SELECT t.id,t.payload FROM factory_tasks t JOIN visual_projects p ON p.id=(t.payload->>'project_id')::uuid
+          LEFT JOIN youtube_publications y ON y.short_task_id=t.id
+          WHERE t.kind='visual_workshop_v1' AND t.status='COMPLETED' AND t.payload->>'operation'='short_render'
+            AND t.payload->>'review_state'='approved' AND p.channel_id=%s AND y.id IS NULL
+          ORDER BY t.updated_at DESC LIMIT 100''',(channel_id,)).fetchall()
+        items=[]
+        for row in rows:
+            try:
+                short=approved_short(c,row['id'],channel_id)
+                items.append({'short_id':str(row['id']),'channel_id':str(channel_id),'title':short['spec'].title,
+                    'story_title':short['spec'].story_title,'story_summary':short['spec'].story_summary,
+                    'seconds':short['seconds'],'sha256':short['sha256'],
+                    'video_url':f"/api/creator/workshop/projects/{short['payload']['project_id']}/shorts/{row['id']}/video"})
+            except HTTPException:
+                continue
+        c.commit()
+    return items
+
+
+@router.post('/shorts/{tid}/prepare')
+def prepare_short(tid:uuid.UUID,body:PrepareShort):
+    with db() as c:
+        ensure(c);profile(c,body.channel_id);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(tid),))
+        short=approved_short(c,tid,body.channel_id)
+        existing=c.execute('SELECT '+FIELDS+' FROM youtube_publications WHERE short_task_id=%s OR request_id=%s',(tid,body.request_id)).fetchone()
+        if existing:
+            if existing['short_task_id']!=tid or existing['channel_id']!=body.channel_id:raise HTTPException(409,'Este pedido já está ligado a outra publicação.')
+            c.commit();return existing
+        spec=short['spec'];payload=short['payload'];intent='coding_focus'
+        if payload.get('parent_pilot_id'):
+            parent=c.execute('SELECT plan FROM ambient_pilots WHERE id=%s AND channel_id=%s',(payload['parent_pilot_id'],body.channel_id)).fetchone()
+            candidate=(parent or {}).get('plan') or {}
+            if candidate.get('intent') in ('coding_focus','study_focus','reading_focus','sleep_relaxation'):intent=candidate['intent']
+        video_url=f"/api/creator/workshop/projects/{payload['project_id']}/shorts/{tid}/video"
+        jid=uuid.uuid4(); metadata={'seconds':short['seconds'],'content_format':'short','story_title':spec.story_title,'short_video_url':video_url,
+            'growth_context':{'theme':spec.story_title,'story_summary':spec.story_summary,'parent_video_id':spec.parent_video_id}}
+        c.execute('''INSERT INTO youtube_publications(id,request_id,channel_id,short_task_id,short_sha256,youtube_channel_id,title,description,intent,privacy,made_for_kids,state,detail,publication_metadata)
+          VALUES(%s,%s,%s,%s,%s,'',%s,%s,%s,'private',false,'ready','Short aprovado; revise o pacote antes de autorizar o envio',%s::jsonb)''',
+          (jid,body.request_id,body.channel_id,tid,short['sha256'],spec.title,spec.description,intent,json.dumps(metadata)))
+        audit(c,'SHORT_PUBLICATION_PREPARED',str(jid),json.dumps({'short_task_id':str(tid),'sha256':short['sha256'],'upload_started':False}));c.commit()
+        return c.execute('SELECT '+FIELDS+' FROM youtube_publications WHERE id=%s',(jid,)).fetchone()
 
 class Publication(BaseModel):
     request_id:uuid.UUID
@@ -99,12 +178,16 @@ def signature(c, export_id=None, pilot=None):
     return visual,audio
 
 
-def duplicates(c, channel_id, export_id=None, pilot=None):
+def duplicates(c, channel_id, export_id=None, pilot=None, short_sha256=None):
     """Uploaded publications on this channel sharing the visual or the audio of the candidate."""
     visual,audio=signature(c,export_id,pilot)
     found=[]
-    for row in c.execute('''SELECT y.id,y.title,y.video_id,y.created_at,y.export_id,y.pilot_id FROM youtube_publications y
+    for row in c.execute('''SELECT y.id,y.title,y.video_id,y.created_at,y.export_id,y.pilot_id,y.short_sha256 FROM youtube_publications y
       WHERE y.channel_id=%s AND y.state='uploaded' ORDER BY y.created_at''',(channel_id,)).fetchall():
+        if short_sha256 and row.get('short_sha256')==short_sha256:
+            found.append({'publication_id':str(row['id']),'title':row['title'],'video_id':row['video_id'],'created_at':row['created_at'].isoformat(),
+                          'same_audio':False,'same_visual':True})
+            continue
         other=c.execute('SELECT * FROM ambient_pilots WHERE id=%s',(row['pilot_id'],)).fetchone() if row['pilot_id'] else None
         v,a=signature(c,row['export_id'],other)
         same_audio=bool(audio&a);same_visual=bool(visual&v)
@@ -114,8 +197,8 @@ def duplicates(c, channel_id, export_id=None, pilot=None):
     return found
 
 
-def refuse_duplicates(c, channel_id, allow_repeat_visual, export_id=None, pilot=None):
-    found=duplicates(c,channel_id,export_id,pilot)
+def refuse_duplicates(c, channel_id, allow_repeat_visual, export_id=None, pilot=None, short_sha256=None):
+    found=duplicates(c,channel_id,export_id,pilot,short_sha256)
     def where(d):return f"“{d['title']}” (youtu.be/{d['video_id']}, {d['created_at'][:10]})"
     audio=[d for d in found if d['same_audio']]
     if audio:raise HTTPException(409,'Este vídeo já foi publicado neste canal com a mesma música: '+'; '.join(where(d) for d in audio)+'.')
@@ -208,16 +291,30 @@ def authorize_ready(jid:uuid.UUID,body:ReadyAuthorization):
         ensure(c)
         row=c.execute("SELECT * FROM youtube_publications WHERE id=%s FOR UPDATE",(jid,)).fetchone()
         if not row or row['state']!='ready':raise HTTPException(409,'Este item não está pronto para publicação.')
-        pilot=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(row['pilot_id'],row['channel_id'])).fetchone()
-        if not pilot or pilot['status']!='approved' or not ready_pilot(pilot):raise HTTPException(409,'Revise e aprove o vídeo completo antes de publicar.')
-        if pilot['report']['artifact_sha256']['video']!=row['pilot_sha256']:raise HTTPException(409,'O vídeo mudou desde a preparação da publicação.')
+        pilot=None; short=None
+        if row.get('short_task_id'):
+            short=approved_short(c,row['short_task_id'],row['channel_id'],row.get('short_sha256'))
+            if row['publication_metadata'].get('content_format')!='short':raise HTTPException(409,'O formato desta publicação não corresponde ao Short aprovado.')
+        else:
+            pilot=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(row['pilot_id'],row['channel_id'])).fetchone()
+            if not pilot or pilot['status']!='approved' or not ready_pilot(pilot):raise HTTPException(409,'Revise e aprove o vídeo completo antes de publicar.')
+            if pilot['report']['artifact_sha256']['video']!=row['pilot_sha256']:raise HTTPException(409,'O vídeo mudou desde a preparação da publicação.')
         phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase)
-        pilot_intent=(pilot.get('plan') or {}).get('intent','coding_focus')
+        pilot_intent=(pilot.get('plan') or {}).get('intent','coding_focus') if pilot else row['intent']
         if body.intent!=pilot_intent:raise HTTPException(409,'A intenção do vídeo mudou. Gere novamente a sugestão com a intenção atual.')
         growth_receipt=validate_growth_receipt(c,row['channel_id'],body.publication_metadata)
         from .provenance import publication_gate
-        publication_gate(c,pilot=pilot)
-        refuse_duplicates(c,row['channel_id'],body.allow_repeat_visual,pilot=pilot)
+        if pilot:publication_gate(c,pilot=pilot)
+        elif short:
+            audio=short['payload'].get('audio') or {}
+            if audio.get('program_id'):
+                publication_gate(c,program_id=audio['program_id'])
+            parent_id=short['payload'].get('parent_pilot_id')
+            if parent_id:
+                parent=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(parent_id,row['channel_id'])).fetchone()
+                if not parent:raise HTTPException(409,'Não foi possível validar o vídeo longo de origem neste canal.')
+                publication_gate(c,pilot=parent)
+        refuse_duplicates(c,row['channel_id'],body.allow_repeat_visual,pilot=pilot,short_sha256=row.get('short_sha256'))
         cred=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s',(row['channel_id'],)).fetchone()
         if not cred or not upload_allowed(json.loads(cipher().decrypt(cred['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio pelo Google no menu Canais.')
         metadata=(row.get('publication_metadata') or {})|body.publication_metadata
@@ -238,7 +335,8 @@ def release(jid:uuid.UUID,body:Release):
         held=c.execute("SELECT * FROM youtube_publications WHERE id=%s AND state='held' FOR UPDATE",(jid,)).fetchone()
         if not held:raise HTTPException(409,'Só um envio pausado pela agenda pode ser liberado.')
         pilot=c.execute('SELECT * FROM ambient_pilots WHERE id=%s',(held['pilot_id'],)).fetchone() if held['pilot_id'] else None
-        refuse_duplicates(c,held['channel_id'],body.allow_repeat_visual,export_id=held['export_id'],pilot=pilot)
+        if held.get('short_task_id'):approved_short(c,held['short_task_id'],held['channel_id'],held.get('short_sha256'))
+        refuse_duplicates(c,held['channel_id'],body.allow_repeat_visual,export_id=held['export_id'],pilot=pilot,short_sha256=held.get('short_sha256'))
         c.execute("UPDATE youtube_publications SET state='queued',detail='Liberado manualmente para envio',updated_at=now() WHERE id=%s",(jid,))
         audit(c,'YOUTUBE_PUBLICATION_RELEASED',str(jid));c.commit()
     return {'id':jid,'state':'queued'}
@@ -471,7 +569,7 @@ def run_one():
     with db() as lock:
         ensure(lock);lock.commit()
         if not lock.execute('SELECT pg_try_advisory_lock(192837479) ok').fetchone()['ok']:return False
-        row=lock.execute("SELECT p.*,COALESCE(e.object_key,a.video_key) object_key,CASE WHEN p.pilot_id IS NOT NULL THEN 'completed' ELSE e.state END export_state,a.report pilot_report FROM youtube_publications p LEFT JOIN export_jobs e ON e.id=p.export_id LEFT JOIN ambient_pilots a ON a.id=p.pilot_id WHERE p.state='queued' ORDER BY p.created_at LIMIT 1").fetchone()
+        row=lock.execute("SELECT p.*,COALESCE(e.object_key,a.video_key,t.payload->>'video_key') object_key,CASE WHEN p.short_task_id IS NOT NULL THEN lower(t.status) WHEN p.pilot_id IS NOT NULL THEN 'completed' ELSE e.state END export_state,a.report pilot_report,t.payload short_payload FROM youtube_publications p LEFT JOIN export_jobs e ON e.id=p.export_id LEFT JOIN ambient_pilots a ON a.id=p.pilot_id LEFT JOIN factory_tasks t ON t.id=p.short_task_id WHERE p.state='queued' ORDER BY p.created_at LIMIT 1").fetchone()
         # The session advisory lock still protects this worker. Do not hold a
         # table transaction across hashing, OAuth and a multi-gigabyte upload.
         lock.commit()
@@ -480,7 +578,8 @@ def run_one():
         try:
             if row['export_state']!='completed':raise ValueError('Export unavailable')
             total=storage().head_object(Bucket=os.environ['S3_BUCKET'],Key=row['object_key'])['ContentLength'];row['total_bytes']=total;progress(row['id'],total_bytes=total)
-            if row.get('pilot_id'):verify_pilot_media(row)
+            if row.get('short_task_id'):verify_short_media(row)
+            elif row.get('pilot_id'):verify_pilot_media(row)
             with httpx.Client(timeout=120,follow_redirects=False) as client:
                 headers={'Authorization':'Bearer '+access_token(client,row)}
                 if row['session_encrypted']:
@@ -489,8 +588,9 @@ def run_one():
                     if r.status_code in (200,201):
                         finish(row,r)
                         if row.get('pilot_id'):set_pilot_thumbnail(client,row,r.json()['id'])
-                        try:purge_uploaded_media(row['id'])
-                        except Exception:pass  # upload remains confirmed; the reconciler retries cleanup
+                        if not row.get('short_task_id'):
+                            try:purge_uploaded_media(row['id'])
+                            except Exception:pass  # upload remains confirmed; the reconciler retries cleanup
                         return True
                     if r.status_code!=308:r.raise_for_status();raise ValueError('Unexpected status')
                     offset=accepted_offset(r,total)
@@ -510,8 +610,9 @@ def run_one():
                     if r.status_code in (200,201):
                         finish(row,r)
                         if row.get('pilot_id'):set_pilot_thumbnail(client,row,r.json()['id'])
-                        try:purge_uploaded_media(row['id'])
-                        except Exception:pass  # upload remains confirmed; the reconciler retries cleanup
+                        if not row.get('short_task_id'):
+                            try:purge_uploaded_media(row['id'])
+                            except Exception:pass  # upload remains confirmed; the reconciler retries cleanup
                         return True
                     if r.status_code!=308:r.raise_for_status();raise ValueError('Unexpected status')
                     next_offset=accepted_offset(r,total)
@@ -541,7 +642,7 @@ def main():
                     if not c.execute("SELECT to_regclass('youtube_publications') found").fetchone()['found']:continue
                     c.execute("UPDATE youtube_publications SET state=CASE WHEN session_encrypted IS NULL THEN 'uncertain' ELSE 'interrupted' END,detail='Processo interrompido; confira ou retome a sessão existente.' WHERE state='uploading' AND updated_at<now()-interval '5 minutes'");c.commit()
                     cleanup=c.execute("""SELECT p.id FROM youtube_publications p LEFT JOIN export_jobs e ON e.id=p.export_id LEFT JOIN ambient_pilots a ON a.id=p.pilot_id
-                      WHERE p.state='uploaded' AND COALESCE(e.report->'media_purged',a.report->'media_purged') IS NULL
+                      WHERE p.short_task_id IS NULL AND p.state='uploaded' AND COALESCE(e.report->'media_purged',a.report->'media_purged') IS NULL
                       AND COALESCE(e.report->'media_purge'->>'state',a.report->'media_purge'->>'state','')<>'blocked'
                       AND (COALESCE(e.report->'media_purge'->>'state',a.report->'media_purge'->>'state','')<>'retrying'
                         OR COALESCE(e.report->'media_purge'->>'updated_at',a.report->'media_purge'->>'updated_at')::timestamptz<now()-interval '5 minutes')
@@ -675,6 +776,18 @@ def verify_pilot_media(row):
         for chunk in obj['Body'].iter_chunks(1024*1024):h.update(chunk)
     finally:obj['Body'].close()
     if h.hexdigest()!=expected:raise ValueError('Pilot integrity changed')
+
+
+def verify_short_media(row):
+    with db() as c:
+        approved=approved_short(c,row['short_task_id'],row['channel_id'],row['short_sha256'])
+    expected=approved['sha256']
+    if approved['object_key']!=row['object_key']:raise ValueError('Short object changed after authorization')
+    obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=row['object_key']);h=hashlib.sha256()
+    try:
+        for chunk in obj['Body'].iter_chunks(1024*1024):h.update(chunk)
+    finally:obj['Body'].close()
+    if h.hexdigest()!=expected:raise ValueError('Approved Short bytes changed')
 
 def set_pilot_thumbnail(client,row,video_id):
     try:

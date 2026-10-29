@@ -587,6 +587,18 @@ def test_approved_current_shorts_are_listed_in_library_but_stale_or_unreviewed_a
     assert items[0]['parent_video_id']==spec.parent_video_id
     assert items[0]['video_url'].endswith(f'/shorts/{task_ids[0]}/video')
 
+    candidates=client.get(f'/api/youtube/publications/shorts/candidates?channel_id={channel_id}')
+    assert candidates.status_code==200,candidates.text
+    assert [item['short_id'] for item in candidates.json()]==[str(task_ids[0])]
+    prepared=client.post(f"/api/youtube/publications/shorts/{task_ids[0]}/prepare",json={
+        'request_id':str(uuid.uuid4()),'channel_id':channel_id})
+    assert prepared.status_code==200,prepared.text
+    publication=prepared.json()
+    assert publication['state']=='ready' and publication['short_task_id']==str(task_ids[0])
+    assert publication['short_sha256']==valid_sha
+    assert publication['publication_metadata']['content_format']=='short'
+    assert publication['bytes_sent']==0 and publication['video_id'] is None
+
 
 @DB
 def test_creative_attempt_limit_is_scoped_to_channel_even_when_clip_ids_repeat(client,monkeypatch):
