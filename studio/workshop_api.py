@@ -208,19 +208,23 @@ def _published_still_sha256(bucket, key):
 
 
 def published_channel_identity_references(c, channel_id, limit=10, exclude_keys=None):
-    """Import original stills from this channel's already approved, uploaded pilots."""
+    """Import original stills from this channel's uploaded pilots under its approval policy."""
     if limit<=0 or not os.environ.get('S3_BUCKET'):
         return []
     available=c.execute("SELECT to_regclass('public.ambient_pilots') a,to_regclass('public.youtube_publications') y").fetchone()
     if not available or not available.get('a') or not available.get('y'):
         return []
-    rows=c.execute('''SELECT a.id,a.title FROM public.ambient_pilots a
+    from .visual_identity import REGISTRY, assert_usable
+    approval_clause=''
+    channel_binding=REGISTRY.get('channel_profiles',{}).get(str(channel_id),{})
+    if not channel_binding.get('published_uploads_approved_as_identity_references'):
+        approval_clause="AND a.status='approved'"
+    rows=c.execute(f'''SELECT a.id,a.title FROM public.ambient_pilots a
         JOIN public.youtube_publications y ON y.pilot_id=a.id AND y.channel_id=a.channel_id
-        WHERE a.channel_id=%s AND a.status='approved' AND y.state='uploaded'
+        WHERE a.channel_id=%s AND y.state='uploaded' {approval_clause}
         ORDER BY y.updated_at DESC LIMIT %s''',(channel_id,max(20,limit+10))).fetchall()
     bucket=os.environ['S3_BUCKET'];references=[]
     exclude_keys=exclude_keys or set()
-    from .visual_identity import REGISTRY, assert_usable
     for row in rows:
         key=f"ambient-pilots/{row['id']}/source.png"
         if key in exclude_keys:continue
@@ -715,6 +719,20 @@ def detail(pid: uuid.UUID):
     with db() as c:
         row = project(c, pid); media = assets(c, pid); draft = Draft.model_validate(row['data'])
         identity = identity_profile_for_channel(c,row['channel_id'])
+        # Legacy projects with no owner-approved outputs automatically inherit
+        # their own channel's established identity. Keep all existing media;
+        # do not silently rebind a project that already has approved visuals.
+        if identity and not draft.identity_profile:
+            prior_states=[status(draft,cl,media) for cl in clips(draft)]
+            has_approved_visual=any(s['image_approved'] or s['video_approved'] for s in prior_states)
+            if not has_approved_visual:
+                draft.identity_profile=identity['id']
+                bind_identity_reference(c,pid,identity)
+                save(c,row,draft)
+                audit(c,'VISUAL_PROJECT_IDENTITY_AUTO_BOUND',str(pid),identity['id'])
+                c.commit()
+                row=project(c,pid)
+                media=assets(c,pid)
         if identity and draft.identity_profile==identity['id']:
             bind_identity_reference(c,pid,identity)
             media=assets(c,pid)
