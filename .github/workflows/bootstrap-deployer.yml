@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   bootstrap:
-    if: github.ref == 'refs/heads/main' && inputs.confirm == 'INSTALL_PROTOCOL_2' && inputs.expected_installed_sha256 == '4b97425d9c53e5250de228aa01cbe48faa7a91e3b3a88871226a2272d8793a43'
+    if: github.ref == 'refs/heads/main' && inputs.confirm == 'INSTALL_PROTOCOL_2' && (inputs.expected_installed_sha256 == '4b97425d9c53e5250de228aa01cbe48faa7a91e3b3a88871226a2272d8793a43' || inputs.expected_installed_sha256 == 'bb39e6e2812db25bbd732d47ece5211a56eb169ff9eb7e8ee33fa0981412b957')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production-bootstrap
