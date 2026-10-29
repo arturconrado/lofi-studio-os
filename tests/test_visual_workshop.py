@@ -44,6 +44,55 @@ def test_changed_context_invalidates_insertions(change):
     with pytest.raises(ValueError):assemble(d,a)
 
 
+def test_channel_identity_profile_changes_image_signature_and_is_present_in_generation_prompt():
+    from studio.visual_workshop import prompt
+    d,_=fixture();before=signature(d,d.base,'image')
+    d.identity_profile='lofi-vibe-coding-canonical-v1'
+    assert signature(d,d.base,'image')!=before
+    brief='Canonical woman with curly brown hair and the same tabby cat.'
+    generated=prompt(d,d.base,'image',identity_prompt=brief)
+    assert 'first input reference is the primary approved identity anchor' in generated
+    assert 'Every following channel reference shows the same established characters' in generated
+    assert 'Follow this project theme and scene for a fresh composition' in generated
+    assert 'ignore its background, season, lighting and props' in generated
+
+
+def test_legacy_workshop_signature_is_unchanged_without_identity_profile():
+    from studio.visual_workshop import context
+    d,_=fixture()
+    assert 'identity_profile' not in context(d)
+
+
+def test_channel_identity_candidates_only_use_human_approved_assets_owned_by_that_channel():
+    from studio.workshop_api import identity_candidates
+    channel='channel-a';image={'kind':'image','key':'a.png','sha256':'a'*64,'approved':True,'review_sha256':'a'*64}
+    rejected={'kind':'image','key':'b.png','sha256':'b'*64,'approved':False,'review_sha256':'b'*64}
+    class Result:
+        def __init__(self,rows):self.rows=rows
+        def fetchall(self):return self.rows
+    class Store:
+        def execute(self,query,params):
+            assert params[0]==channel
+            if 'visual_library' in query:
+                return Result([{'id':'library-1','name':'Approved channel still','data':{'image':image}},
+                               {'id':'library-2','name':'Rejected still','data':{'image':rejected}}])
+            return Result([])
+    candidates=identity_candidates(Store(),channel,'project-1')
+    assert len(candidates)==1
+    assert candidates[0]['source_type']=='library' and candidates[0]['source_id']=='library-1'
+
+
+def test_unconfigured_channel_does_not_inherit_the_primary_channel_identity():
+    from studio.workshop_api import identity_profile_for_channel
+    class Result:
+        def fetchone(self):return None
+    class Store:
+        def execute(self,query,params):
+            assert params==('new-channel',)
+            return Result()
+    assert identity_profile_for_channel(Store(),'new-channel') is None
+
+
 def test_schedule_music_and_names_do_not_buy_new_pixels():
     d,a=fixture();d.insertions[0].minute=.15;d.minutes=2;d.name='Other title';d.music_program_id='LOFI-OTHER';d.clips[0].name='Reusable motion'
     assert status(d,d.clips[0],a)['video_approved']
@@ -131,19 +180,24 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
     draft=Draft(name='Real API test',minutes=1,scene='Room',characters=[Character(name='Cat',description='Orange')],base=Clip(name='Base',motion='Breathing'))
     pid=cl.post('/api/creator/workshop/projects',json={'channel_id':cid,'data':draft.model_dump(mode='json')}).json()['id']
     url=f'/api/creator/workshop/projects/{pid}'
+    initial=cl.get(url).json()
+    assert initial['identity']['required'] and initial['identity']['bound']
+    assert initial['data']['identity_profile']=='lofi-vibe-coding-canonical-v1'
     class Store:
         def put_object(self,**kw):pass
     monkeypatch.setenv('S3_BUCKET','test')
     monkeypatch.setattr(api,'storage',lambda:Store())
+    monkeypatch.setattr(api,'verify_identity_source',lambda identity:None)
     monkeypatch.setattr(provider,'quote',lambda kind,seconds:{'model':'test','usd':.1,'seconds':seconds})
     monkeypatch.setattr(financial,'check_available',lambda c,cap:None)
     png=io.BytesIO();Image.new('RGB',(16,9),'blue').save(png,'PNG')
-    paid_submit_calls=[]
+    paid_submit_calls=[];submitted_payloads=[]
     def submit(tid):
         # Completion uses the same tenant-scoped transaction as the real provider.
         paid_submit_calls.append(str(tid))
         with db() as c:
             t=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(tid,)).fetchone()
+            submitted_payloads.append(t['payload'])
             provider.complete(c,t,png.getvalue() if t['payload']['operation']=='image' else b'test-video',
                               'image/png' if t['payload']['operation']=='image' else 'video/mp4',8)
             c.commit()
@@ -153,6 +207,15 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
         return cl.post(url+f'/clips/{draft.base.id}/generate/{kind}',json={'request_id':str(uuid.uuid4()),'revision':revision,'max_usd':1,'confirm_cost':True})
     assert gen('video').status_code==409
     assert gen('image').status_code==200
+    initial=cl.get(url).json()
+    assert submitted_payloads[0]['references'][0]['sha256']==initial['identity']['reference_sha256']
+    identity_roles=submitted_payloads[0]['reference_roles']
+    assert len(identity_roles)==initial['identity']['reference_count']
+    assert identity_roles[0]['role']=='canonical_character_identity'
+    assert all(role['role']=='channel_character_identity_reference' for role in identity_roles[1:])
+    assert identity_roles[0]['sha256']==initial['identity']['reference_sha256']
+    assert [ref['sha256'] for ref in submitted_payloads[0]['references'][:3]]==[role['sha256'] for role in identity_roles]
+    assert 'ignore its background, season, lighting and props' in submitted_payloads[0]['prompt']
     state=cl.get(url).json();image=state['states'][str(draft.base.id)]['image']
     review_url=url+f'/clips/{draft.base.id}/review/'
     assert cl.post(review_url+'image',json={'sha256':image['sha256'],'approve':True}).status_code==422
@@ -260,7 +323,7 @@ def test_reuse_library_preserves_references_and_completed_assets(client, monkeyp
     from studio.visual_workshop import legacy_signature, prompt
     import json
     cl=client;_,identity=signup(cl);cl.headers.update({'X-CSRF-Token':identity['csrf_token']})
-    channel=cl.get('/api/channels').json()[0]['id']
+    channel=uuid.uuid4()
     draft, media=fixture()
     draft.clips=[];draft.insertions=[]
     pid=uuid.uuid4();ref=uuid.uuid4()
@@ -274,6 +337,8 @@ def test_reuse_library_preserves_references_and_completed_assets(client, monkeyp
         from studio.tenancy import schema_name
         c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         api.ensure(c)
+        c.execute('INSERT INTO radio_channels(id,name,niche) VALUES(%s,%s,%s)',
+                  (channel,'Legacy visual test channel','Legacy visual workshop test'))
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',(pid,channel,json.dumps(draft.model_dump(mode='json'))))
         for aid, asset in [(ref,{'kind':'reference'}),(draft.base.image_id,image),(draft.base.video_id,video)]:
             c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,pid,json.dumps(asset)))
@@ -407,13 +472,15 @@ def test_insertion_video_prepares_base_frame_without_paid_image(client, monkeypa
 
     cl = client; _, identity = signup(cl)
     cl.headers.update({'X-CSRF-Token': identity['csrf_token']})
-    channel = cl.get('/api/channels').json()[0]['id']
+    channel = uuid.uuid4()
     draft, media = fixture()
     draft.clips[0].image_id = draft.clips[0].video_id = None
     pid = uuid.uuid4()
     with db() as c:
         c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         api.ensure(c)
+        c.execute('INSERT INTO radio_channels(id,name,niche) VALUES(%s,%s,%s)',
+                  (channel,'Legacy visual test channel','Legacy visual workshop test'))
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',
                   (pid, channel, json.dumps(draft.model_dump(mode='json'))))
         for aid in (draft.base.image_id, draft.base.video_id):

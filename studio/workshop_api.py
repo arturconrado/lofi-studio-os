@@ -8,6 +8,7 @@ import tempfile
 import uuid
 import hmac
 import hashlib
+from functools import lru_cache
 import time
 from pathlib import Path
 from typing import Literal
@@ -36,6 +37,43 @@ def ensure(c):
     c.execute('''CREATE TABLE IF NOT EXISTS visual_library(
       id UUID PRIMARY KEY, channel_id UUID NOT NULL REFERENCES radio_channels(id),
       name TEXT NOT NULL, data JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+    c.execute('''CREATE TABLE IF NOT EXISTS visual_channel_identities(
+      channel_id UUID PRIMARY KEY REFERENCES radio_channels(id), identity_profile TEXT NOT NULL,
+      source_key TEXT NOT NULL, source_sha256 TEXT NOT NULL, source_mime TEXT NOT NULL DEFAULT 'image/png',
+      source_title TEXT NOT NULL, source_type TEXT NOT NULL, source_id UUID NOT NULL,
+      identity_references JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+    c.execute("ALTER TABLE visual_channel_identities ADD COLUMN IF NOT EXISTS identity_references JSONB NOT NULL DEFAULT '[]'::jsonb")
+    # Seed only owner-approved channel bindings already recorded in the visual baseline registry.
+    from .visual_identity import REGISTRY
+    for channel_id, binding in REGISTRY.get('channel_profiles', {}).items():
+        episode = next((item for item in REGISTRY.get('approved_episodes', [])
+                        if item['pilot_id'] == binding.get('reference_pilot_id')), None)
+        source = (episode or {}).get('files', {}).get('source')
+        if source:
+            refs=[]
+            approved_ids=binding.get('reference_pilot_ids',[binding.get('reference_pilot_id')])
+            for approved_id in approved_ids:
+                approved=next((item for item in REGISTRY.get('approved_episodes',[]) if item['pilot_id']==approved_id),None)
+                still=(approved or {}).get('files',{}).get('source')
+                if still and still['key'] not in REGISTRY.get('rejected_keys',[]) and still['sha256'] not in REGISTRY.get('rejected_sha256',[]):
+                    refs.append({'key':still['key'],'sha256':still['sha256'],'mime':'image/png','title':approved['title'],'pilot_id':approved['pilot_id']})
+            refs.extend(published_channel_identity_references(c,channel_id,limit=10-len(refs),exclude_keys={ref['key'] for ref in refs}))
+            # Add up to ten latest human-approved stills already owned by this channel.
+            # This lets a channel's posted-video library reinforce its identity pack
+            # without borrowing assets from another channel.
+            for candidate in identity_candidates(c,channel_id)[:10]:
+                if candidate['sha256'] not in {ref['sha256'] for ref in refs}:
+                    refs.append({'key':candidate['key'],'sha256':candidate['sha256'],'mime':candidate['mime'],
+                                 'title':candidate['title'],'pilot_id':None})
+                if len(refs)>=10:break
+            refs=dedupe_identity_references(refs,10)
+            c.execute('''INSERT INTO visual_channel_identities
+              (channel_id,identity_profile,source_key,source_sha256,source_mime,source_title,source_type,source_id,identity_references)
+              VALUES(%s,%s,%s,%s,'image/png',%s,'approved_baseline',%s,%s::jsonb)
+              ON CONFLICT(channel_id) DO UPDATE SET identity_references=EXCLUDED.identity_references,updated_at=now()
+              WHERE visual_channel_identities.source_type='approved_baseline' ''',
+              (channel_id,binding['identity_profile'],source['key'],source['sha256'],episode['title'],episode['pilot_id'],json.dumps(refs)))
     # A creative unit's cap intentionally follows copies within one channel;
     # channel_id prevents client-supplied clip UUIDs from crossing channels.
     c.execute('''CREATE TABLE IF NOT EXISTS visual_creative_attempts(
@@ -99,6 +137,159 @@ def assets(c, pid):
     return {str(a['id']): a['data'] | {'id': str(a['id']),
             'url': f'/api/creator/workshop/projects/{pid}/media/{a["id"]}'}
             for a in c.execute('SELECT * FROM visual_media WHERE project_id=%s', (pid,)).fetchall()}
+
+
+def identity_profile_for_channel(c, channel_id):
+    row = c.execute('SELECT * FROM visual_channel_identities WHERE channel_id=%s', (channel_id,)).fetchone()
+    if not row:
+        return None
+    from .visual_identity import REGISTRY, baseline
+    episode = baseline(row['source_id']) if row['source_type'] == 'approved_baseline' else None
+    references=row.get('identity_references') or [{'key':row['source_key'],'sha256':row['source_sha256'],'mime':row['source_mime'],'title':row['source_title'],'pilot_id':str(row['source_id']) if episode else None}]
+    if not references:references=[{'key':row['source_key'],'sha256':row['source_sha256'],'mime':row['source_mime'],'title':row['source_title'],'pilot_id':str(row['source_id']) if episode else None}]
+    return {'id':row['identity_profile'],'pilot_id':str(row['source_id']) if episode else None,
+            'title':row['source_title'],'key':row['source_key'],'sha256':row['source_sha256'],
+            'mime':row['source_mime'],'identity':REGISTRY.get('canonical_identity') if episode else None,
+            'references':references}
+
+
+def identity_candidates(c, channel_id, project_id=None):
+    """Approved stills already belonging to this channel; never cross channel boundaries."""
+    candidates=[];seen=set()
+    def add(source_type, source_id, title, asset):
+        if not asset or asset.get('kind')!='image' or not asset.get('approved') or asset.get('review_sha256')!=asset.get('sha256'):
+            return
+        if not asset.get('key') or not asset.get('sha256'):
+            return
+        key=(asset['key'],asset['sha256'])
+        if key in seen:return
+        seen.add(key);candidates.append({'source_type':source_type,'source_id':str(source_id),'title':title,
+            'url':f"/api/creator/workshop/projects/{project_id}/identity-candidates/{source_type}/{source_id}" if project_id else None,
+            'sha256':asset['sha256'],'key':asset['key'],'mime':asset.get('mime','image/png')})
+    for row in c.execute('SELECT id,name,data FROM visual_library WHERE channel_id=%s ORDER BY created_at DESC LIMIT 200',(channel_id,)).fetchall():
+        add('library',row['id'],row['name'],row['data'].get('image'))
+    rows=c.execute('''SELECT m.id,m.data,p.id project_id,p.data project_data FROM visual_media m
+        JOIN visual_projects p ON p.id=m.project_id WHERE p.channel_id=%s AND m.data->>'kind'='image'
+        ORDER BY m.created_at DESC LIMIT 500''',(channel_id,)).fetchall()
+    for row in rows:
+        add('project_media',row['id'],row['project_data'].get('name','Approved visual'),row['data'])
+    for reference in published_channel_identity_references(c,channel_id,limit=10):
+        if reference['sha256'] in seen:continue
+        seen.add(reference['sha256']);candidates.append({'source_type':'published_pilot','source_id':reference['pilot_id'],
+            'title':reference['title'],'url':f"/api/creator/workshop/projects/{project_id}/identity-candidates/published_pilot/{reference['pilot_id']}" if project_id else None,
+            'sha256':reference['sha256'],'key':reference['key'],'mime':reference['mime']})
+    return candidates
+
+
+def dedupe_identity_references(references, limit=10):
+    if limit<=0:return []
+    unique=[];seen=set()
+    for reference in references:
+        digest=reference.get('sha256')
+        if not digest or digest in seen:continue
+        seen.add(digest);unique.append(reference)
+        if len(unique)>=limit:break
+    return unique
+
+
+@lru_cache(maxsize=500)
+def _published_still_sha256(bucket, key):
+    obj=storage().get_object(Bucket=bucket,Key=key);size=obj.get('ContentLength',0)
+    if not size or size>20*1024**2:
+        obj['Body'].close();return None
+    digest=hashlib.sha256();read=0
+    try:
+        for chunk in obj['Body'].iter_chunks(1024*1024):
+            read+=len(chunk)
+            if read>20*1024**2:raise ValueError('Reference image exceeds limit')
+            digest.update(chunk)
+    finally:obj['Body'].close()
+    return digest.hexdigest() if read==size else None
+
+
+def published_channel_identity_references(c, channel_id, limit=10, exclude_keys=None):
+    """Import original stills from this channel's already approved, uploaded pilots."""
+    if limit<=0 or not os.environ.get('S3_BUCKET'):
+        return []
+    available=c.execute("SELECT to_regclass('public.ambient_pilots') a,to_regclass('public.youtube_publications') y").fetchone()
+    if not available or not available.get('a') or not available.get('y'):
+        return []
+    rows=c.execute('''SELECT a.id,a.title FROM public.ambient_pilots a
+        JOIN public.youtube_publications y ON y.pilot_id=a.id AND y.channel_id=a.channel_id
+        WHERE a.channel_id=%s AND a.status='approved' AND y.state='uploaded'
+        ORDER BY y.updated_at DESC LIMIT %s''',(channel_id,max(20,limit+10))).fetchall()
+    bucket=os.environ['S3_BUCKET'];references=[]
+    exclude_keys=exclude_keys or set()
+    from .visual_identity import REGISTRY, assert_usable
+    for row in rows:
+        key=f"ambient-pilots/{row['id']}/source.png"
+        if key in exclude_keys:continue
+        try:
+            assert_usable(key)
+            sha256=_published_still_sha256(bucket,key)
+            if not sha256:continue
+            references.append({'key':key,'sha256':sha256,'mime':'image/png','title':row['title'],'pilot_id':str(row['id'])})
+            if len(references)>=limit:break
+        except Exception:
+            # A missing historic still does not invalidate other approved references.
+            continue
+    return references
+
+
+def bind_identity_reference(c, pid, identity):
+    """Attach a verified, immutable channel reference without copying or deleting it."""
+    if not identity:
+        return []
+    bound=[]
+    for reference in identity.get('references') or [{'key':identity['key'],'sha256':identity['sha256'],'mime':identity['mime'],'title':identity['title'],'pilot_id':identity.get('pilot_id')}]:
+        current = c.execute('''SELECT id,data FROM visual_media WHERE project_id=%s
+            AND data->>'source'='channel_identity_reference' AND data->>'identity_profile'=%s AND data->>'sha256'=%s
+            ORDER BY created_at LIMIT 1''', (pid, identity['id'],reference['sha256'])).fetchone()
+        if current and current['data'].get('key') == reference['key']:
+            bound.append(str(current['id']));continue
+        aid = uuid.uuid4()
+        media = {'kind': 'reference', 'key': reference['key'], 'sha256': reference['sha256'], 'mime': reference.get('mime','image/png'),
+                 'approved': True, 'review_sha256': reference['sha256'], 'source': 'channel_identity_reference',
+                 'identity_profile': identity['id'], 'pilot_id': reference.get('pilot_id'), 'title': reference.get('title',identity['title'])}
+        c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)', (aid, pid, json.dumps(media)))
+        bound.append(str(aid))
+    return bound
+
+
+def identity_reference_status(pid, identity, draft, media):
+    references=(identity or {}).get('references') or ([identity] if identity else [])
+    bound_refs=[a for a in media.values() if a.get('source')=='channel_identity_reference' and a.get('identity_profile')==(identity or {}).get('id')]
+    bound_hashes={a.get('sha256') for a in bound_refs}
+    all_bound=bool(identity and references and all(ref['sha256'] in bound_hashes for ref in references))
+    return {'required': True, 'configured': bool(identity), 'profile_id': identity['id'] if identity else None,
+            'bound': bool(identity and all_bound and draft.identity_profile == identity['id']),
+            'title': identity['title'] if identity else None,
+            'reference_url': f'/api/creator/workshop/projects/{pid}/identity-reference' if identity else None,
+            'reference_sha256': identity['sha256'] if identity else None,
+            'reference_count':len(references)}
+
+
+def identity_selection_required(candidates, kind, draft, media):
+    """Require identity before new stills; keep a legacy project's approved base animation usable."""
+    if kind=='image':
+        return bool(candidates)
+    base=media.get(str(draft.base.image_id)) if draft.base.image_id else None
+    return not (base and base.get('kind')=='image' and base.get('approved')
+                and base.get('review_sha256')==base.get('sha256'))
+
+
+def verify_identity_source(identity):
+    if not identity:
+        return
+    from .visual_identity import verify_object
+    bucket = os.environ.get('S3_BUCKET')
+    if not bucket:
+        raise HTTPException(503, 'A referência canônica do canal não está configurada; nenhuma geração foi enviada.')
+    try:
+        for reference in identity.get('references') or [identity]:
+            verify_object(storage(), bucket, reference['key'], reference['sha256'], limit=20 * 1024**2)
+    except Exception:
+        raise HTTPException(503, 'A referência visual canônica está indisponível ou mudou; nenhuma geração foi enviada.') from None
 
 
 def save(c, row, draft):
@@ -170,6 +361,8 @@ def creative_spec_signature(draft, clip, operation, resolution, media):
              'scene_motion':draft.scene_motion if operation=='video' else None,
              'scene_references':ref_sha(draft.scene_references),
              'characters':[{'name':ch.name,'description':ch.description,'references':ref_sha(ch.references)} for ch in draft.characters]}
+    if draft.identity_profile:
+        context['identity_profile']=draft.identity_profile
     part_ids={item.id for item in parts}
     schedule=[{'clip_id':str(event.clip_id),'minute':round(event.minute*60*24)} for event in sorted(draft.insertions,key=lambda item:item.minute) if event.clip_id in part_ids]
     return digest({'version':1,'operation':operation,'resolution':resolution,'context':context,'schedule':schedule,
@@ -391,6 +584,12 @@ class Update(Strict):
     data: Draft
 
 
+class IdentitySelection(Strict):
+    source_type: Literal['library','project_media','published_pilot']
+    source_id: uuid.UUID
+    confirm_identity: bool = False
+
+
 @router.get('/projects')
 def listing(channel_id: uuid.UUID):
     ready()
@@ -405,10 +604,109 @@ def create(body: Create):
     pid = uuid.uuid4()
     with db() as c:
         profile(c, body.channel_id)
+        draft = body.data.model_copy(deep=True)
+        identity = identity_profile_for_channel(c, body.channel_id)
+        if identity:
+            draft.identity_profile = identity['id']
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',
-                  (pid, body.channel_id, json.dumps(body.data.model_dump(mode='json'))))
+                  (pid, body.channel_id, json.dumps(draft.model_dump(mode='json'))))
+        if identity:
+            bind_identity_reference(c, pid, identity)
         audit(c, 'VISUAL_PROJECT_CREATED', str(pid)); c.commit()
     return {'id': str(pid)}
+
+
+@router.get('/projects/{pid}/identity-reference')
+def project_identity_reference(pid: uuid.UUID, request: Request):
+    ready()
+    with db() as c:
+        row = project(c, pid)
+        identity = identity_profile_for_channel(c, row['channel_id'])
+    if not identity:
+        raise HTTPException(404, 'Este canal não possui referência canônica configurada')
+    verify_identity_source(identity)
+    from .miniobs import media as stream
+    return stream(request, identity['key'], identity['mime'])
+
+
+@router.post('/projects/{pid}/identity-reference/select')
+def select_project_identity_reference(pid: uuid.UUID, body: IdentitySelection):
+    ready()
+    with db() as c:
+        row=project(c,pid,True);draft=Draft.model_validate(row['data'])
+        candidate=next((item for item in identity_candidates(c,row['channel_id'],pid)
+                        if item['source_type']==body.source_type and item['source_id']==str(body.source_id)),None)
+        if not candidate:raise HTTPException(404,'Este asset aprovado não pertence a este canal ou não está disponível')
+        if not body.confirm_identity:raise HTTPException(422,'Confirme que este asset define a identidade visual do canal')
+        if body.source_type=='library':
+            source_row=c.execute('SELECT name,data FROM visual_library WHERE id=%s AND channel_id=%s',(body.source_id,row['channel_id'])).fetchone()
+            asset=(source_row['data'] or {}).get('image') if source_row else None
+            title=source_row['name'] if source_row else 'Approved channel visual'
+        elif body.source_type=='published_pilot':
+            published=next((item for item in published_channel_identity_references(c,row['channel_id'],limit=30)
+                            if item['pilot_id']==str(body.source_id)),None)
+            asset=({'key':published['key'],'sha256':published['sha256'],'mime':published['mime'],'approved':True,'review_sha256':published['sha256']} if published else None)
+            title=published['title'] if published else 'Published channel visual'
+            source_row=None
+        else:
+            source_row=c.execute('''SELECT m.id,m.project_id,m.data,p.data project_data FROM visual_media m JOIN visual_projects p ON p.id=m.project_id
+                WHERE m.id=%s AND p.channel_id=%s''',(body.source_id,row['channel_id'])).fetchone()
+            asset=source_row['data'] if source_row else None
+            title=(source_row['project_data'] or {}).get('name','Approved channel visual') if source_row else 'Approved channel visual'
+        if not asset or asset.get('approved') is not True or asset.get('review_sha256')!=asset.get('sha256'):
+            raise HTTPException(409,'O asset deixou de estar aprovado; atualize a tela')
+        identity={'id':f"channel-visual-{row['channel_id']}-{asset['sha256'][:12]}",'pilot_id':None,
+            'title':title,'key':asset['key'],'sha256':asset['sha256'],'mime':asset.get('mime','image/png'),'identity':None,
+            'references':[{'key':asset['key'],'sha256':asset['sha256'],'mime':asset.get('mime','image/png'),'title':title,'pilot_id':None}]}
+        for published in published_channel_identity_references(c,row['channel_id'],limit=10-len(identity['references']),exclude_keys={ref['key'] for ref in identity['references']}):
+            if published['sha256'] not in {ref['sha256'] for ref in identity['references']}:
+                identity['references'].append(published)
+        for channel_asset in identity_candidates(c,row['channel_id']):
+            if len(identity['references'])>=10:break
+            if channel_asset['sha256'] not in {ref['sha256'] for ref in identity['references']}:
+                identity['references'].append({'key':channel_asset['key'],'sha256':channel_asset['sha256'],'mime':channel_asset['mime'],
+                                               'title':channel_asset['title'],'pilot_id':None})
+        identity['references']=dedupe_identity_references(identity['references'],10)
+        verify_identity_source(identity)
+        c.execute('''INSERT INTO visual_channel_identities
+          (channel_id,identity_profile,source_key,source_sha256,source_mime,source_title,source_type,source_id,identity_references)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb) ON CONFLICT(channel_id) DO UPDATE SET
+          identity_profile=EXCLUDED.identity_profile,source_key=EXCLUDED.source_key,source_sha256=EXCLUDED.source_sha256,
+          source_mime=EXCLUDED.source_mime,source_title=EXCLUDED.source_title,source_type=EXCLUDED.source_type,
+          source_id=EXCLUDED.source_id,identity_references=EXCLUDED.identity_references,updated_at=now()''',
+          (row['channel_id'],identity['id'],identity['key'],identity['sha256'],identity['mime'],identity['title'],body.source_type,body.source_id,json.dumps(identity['references'])))
+        draft.identity_profile=identity['id'];bind_identity_reference(c,pid,identity)
+        # If the chosen still is already this project's approved base image, it is the
+        # canonical still itself and can safely seed animation without another image call.
+        if body.source_type=='project_media' and source_row and str(source_row['project_id'])==str(pid) and str(draft.base.image_id)==str(body.source_id):
+            asset['identity_profile']=identity['id'];asset['identity_reference_sha256']=identity['sha256']
+            asset['visual_signature']=signature(draft,draft.base,'image')
+            c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',(json.dumps(asset),body.source_id,pid))
+        save(c,row,draft);audit(c,'VISUAL_CHANNEL_IDENTITY_SET',str(row['channel_id']),identity['sha256']);c.commit()
+    return {'saved':True,'identity_profile':identity['id']}
+
+
+@router.get('/projects/{pid}/identity-candidates/{source_type}/{source_id}')
+def identity_candidate_media(pid: uuid.UUID, source_type: Literal['library','project_media','published_pilot'], source_id: uuid.UUID, request: Request):
+    ready()
+    with db() as c:
+        row=project(c,pid)
+        candidate=next((item for item in identity_candidates(c,row['channel_id'],pid)
+                        if item['source_type']==source_type and item['source_id']==str(source_id)),None)
+        if not candidate:raise HTTPException(404,'Asset aprovado não encontrado neste canal')
+        if source_type=='published_pilot':
+            asset=next(({'key':ref['key'],'mime':ref['mime']} for ref in published_channel_identity_references(c,row['channel_id'],limit=30)
+                        if ref['pilot_id']==str(source_id)),None)
+        elif source_type=='library':
+            item=c.execute('SELECT data FROM visual_library WHERE id=%s AND channel_id=%s',(source_id,row['channel_id'])).fetchone()
+            asset=(item['data'] or {}).get('image') if item else None
+        else:
+            item=c.execute('''SELECT m.data FROM visual_media m JOIN visual_projects p ON p.id=m.project_id
+                WHERE m.id=%s AND p.channel_id=%s''',(source_id,row['channel_id'])).fetchone()
+            asset=item['data'] if item else None
+    if not asset:raise HTTPException(404,'Asset aprovado não encontrado neste canal')
+    from .miniobs import media as stream
+    return stream(request,asset['key'],asset.get('mime','image/png'))
 
 
 @router.get('/projects/{pid}')
@@ -416,6 +714,12 @@ def detail(pid: uuid.UUID):
     ready()
     with db() as c:
         row = project(c, pid); media = assets(c, pid); draft = Draft.model_validate(row['data'])
+        identity = identity_profile_for_channel(c,row['channel_id'])
+        if identity and draft.identity_profile==identity['id']:
+            bind_identity_reference(c,pid,identity)
+            media=assets(c,pid)
+            c.commit()
+        candidates = identity_candidates(c,row['channel_id'],pid)
         jobs = c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s ORDER BY created_at DESC LIMIT 100", (KIND, str(pid))).fetchall()
         for job in jobs:
             if job['payload']['operation'] == 'preview':
@@ -442,7 +746,8 @@ def detail(pid: uuid.UUID):
     state_cache={};planning_errors=[]
     try:validate_continuations(draft)
     except ValueError as exc:planning_errors.append(str(exc))
-    return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,'planning_errors':planning_errors,
+    return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,
+            'identity': identity_reference_status(pid, identity, draft, media) | {'candidates':candidates}, 'planning_errors':planning_errors,
             'states': {str(cl.id): status(draft,cl,media,_cache=state_cache) for cl in clips(draft)},
             'jobs': [public_task(j) for j in jobs], 'music': music, 'parent_videos': parents,
             'library': [{'id': l['id'], 'name': l['name']} for l in library]}
@@ -462,11 +767,23 @@ def update(pid: uuid.UUID, body: Update):
                 image['visual_signature'] = signature(old, cl, 'image')
                 c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',
                           (json.dumps(image), cl.image_id, pid))
+        identity = identity_profile_for_channel(c,row['channel_id'])
+        # Do not silently migrate a pre-identity project during a metadata-only
+        # save: that changes its visual signature and invalidates approved work.
+        # New projects are bound at creation; existing projects opt into the
+        # channel identity when the owner explicitly creates a visual version.
+        if identity and (old.identity_profile == identity['id'] or body.edit_visual):
+            body.data.identity_profile = identity['id']
+        elif body.data.identity_profile:
+            raise HTTPException(422, 'Este canal não possui esse perfil de identidade aprovado')
         protected = any(status(old, cl, media)['image_approved'] for cl in clips(old))
         visual_changed = visual_context(old) != visual_context(body.data) or any(
             get_clip(body.data, cl.id) and cl.references != get_clip(body.data, cl.id).references for cl in clips(old))
         if protected and visual_changed and not body.edit_visual:
             raise HTTPException(409, 'Visual protegido. Use Editar visual para criar uma nova versão; seus arquivos aprovados serão preservados.')
+        if identity and body.data.identity_profile == identity['id']:
+            bind_identity_reference(c, pid, identity)
+            media = assets(c, pid)
         validate_refs(body.data, media); save(c, row, body.data)
         audit(c, 'VISUAL_PROJECT_EDITED', str(pid)); c.commit()
     return {'saved': True}
@@ -579,9 +896,14 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
         effective = occurrence_clip(draft,clip,group,media) if group else clip
         aid = getattr(effective,kind+'_id'); asset=media.get(str(aid))
         image = media.get(str(effective.image_id))
+        identity = identity_profile_for_channel(c,row['channel_id'])
         expected = signature(draft, effective, kind, image['sha256'] if kind == 'video' and image else None)
         if not asset or asset['sha256'] != body.sha256 or not (compatible_image(draft, clip, asset) if kind == 'image' else asset.get('signature') == expected):
             raise HTTPException(409, 'Material mudou; gere ou selecione uma versão compatível')
+        if identity and (draft.identity_profile != identity['id'] or asset.get('identity_profile') != identity['id']
+                         or (kind == 'image' and asset.get('identity_reference_sha256') != identity['sha256'])
+                         or (kind == 'video' and (not image or image.get('identity_profile') != identity['id']))):
+            raise HTTPException(409, 'Este material não carrega a referência canônica do canal. Gere novamente antes da revisão.')
         if body.approve:
             if not body.confirm_identity or (kind == 'video' and not body.confirm_motion_and_return):
                 raise HTTPException(422, 'Confira a identidade e, no vídeo, o movimento e a volta à base')
@@ -661,6 +983,16 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
         row=project(c,pid);draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'Gere diretamente o vídeo da inserção')
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        candidates=identity_candidates(c,row['channel_id'],pid) if not identity else []
+        if not identity and identity_selection_required(candidates,kind,draft,media):
+            raise HTTPException(409,'Escolha um still aprovado deste canal como referência de identidade antes de gerar. Se este canal ainda não tem assets aprovados, gere e aprove a primeira imagem-base para iniciar a identidade.')
+        if identity and (draft.identity_profile!=identity['id'] or not identity_reference_status(pid,identity,draft,media)['bound']):
+            raise HTTPException(409,'Este projeto ainda não está vinculado à referência canônica do canal. Salve uma nova versão visual antes de gerar.')
+        if identity and kind=='video':
+            source_image=media.get(str(clip.image_id))
+            if not source_image or source_image.get('identity_profile')!=identity['id']:
+                raise HTTPException(409,'Gere e aprove a imagem inicial com a referência canônica antes de animar.')
         groups=generation_targets(draft,clip,media,variant_key,resolution) if kind=='video' else [None]
         attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media,pid,row['channel_id'])
     q=(provider_quote(kind,clip.seconds,resolution) if resolution!='720p' else provider_quote(kind,clip.seconds)) if groups else {'usd':0,'seconds':clip.seconds}
@@ -689,6 +1021,24 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'A imagem inicial é aprovada uma vez na base; gere o vídeo da inserção')
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        media=assets(c,pid)
+        candidates=identity_candidates(c,row['channel_id'],pid) if not identity else []
+        if not identity and identity_selection_required(candidates,kind,draft,media):
+            raise HTTPException(409,'Escolha um still aprovado deste canal como referência de identidade antes de gerar. Se este canal ainda não tem assets aprovados, gere e aprove a primeira imagem-base para iniciar a identidade.')
+        if identity:
+            if draft.identity_profile!=identity['id'] or not identity_reference_status(pid,identity,draft,media)['bound']:
+                raise HTTPException(409,'Este projeto ainda não está vinculado à referência canônica do canal. Salve uma nova versão visual antes de gerar.')
+            if kind=='video':
+                source_image=media.get(str(clip.image_id))
+                if not source_image or source_image.get('identity_profile')!=identity['id']:
+                    raise HTTPException(409,'Gere e aprove a imagem inicial com a referência canônica antes de animar.')
+            if kind=='image':
+                verify_identity_source(identity)
+        identity_prompt = None
+        if identity:
+            from .visual_identity import channel_identity_prompt
+            identity_prompt = channel_identity_prompt(identity['id']) or 'Use the first input reference as this channel\'s canonical character still. Preserve the exact same subject identity, face, hair, clothing, proportions and illustration style; ignore the reference background, season, lighting and props.'
     q=provider_quote(kind,clip.seconds,body.resolution) if body.resolution!='720p' else provider_quote(kind,clip.seconds)
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
@@ -702,6 +1052,28 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if row['revision']!=body.revision: raise HTTPException(409,'Salve e confira a versão atual')
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        identity_asset=None
+        if identity:
+            bind_identity_reference(c,pid,identity)
+            media=assets(c,pid)
+        candidates=identity_candidates(c,row['channel_id'],pid) if not identity else []
+        if not identity and identity_selection_required(candidates,kind,draft,media):
+            raise HTTPException(409,'Escolha um still aprovado deste canal como referência de identidade antes de gerar. Se este canal ainda não tem assets aprovados, gere e aprove a primeira imagem-base para iniciar a identidade.')
+        if identity:
+            if draft.identity_profile!=identity['id'] or not identity_reference_status(pid,identity,draft,media)['bound']:
+                raise HTTPException(409,'Este projeto ainda não está vinculado à referência canônica do canal. Salve uma nova versão visual antes de gerar.')
+            identity_assets=[a for a in media.values() if a.get('source')=='channel_identity_reference'
+                             and a.get('identity_profile')==identity['id']
+                             and a.get('sha256') in {ref['sha256'] for ref in identity.get('references') or [identity]}]
+            identity_assets.sort(key=lambda a: next((i for i,ref in enumerate(identity.get('references') or [identity]) if ref['sha256']==a.get('sha256')),999))
+            if len(identity_assets)!=len(identity.get('references') or [identity]):
+                raise HTTPException(409,'A referência canônica deste projeto está indisponível; nenhum envio foi feito.')
+            identity_asset=identity_assets[0]
+            if kind=='video':
+                source_image=media.get(str(clip.image_id))
+                if not source_image or source_image.get('identity_profile')!=identity['id']:
+                    raise HTTPException(409,'Gere e aprove a imagem inicial com a referência canônica antes de animar.')
         if q['seconds']!=clip.seconds: raise HTTPException(409,'A duração mudou; consulte o custo novamente')
         groups=generation_targets(draft,clip,media,body.variant_key,body.resolution) if kind=='video' else [None]
         if not groups: raise HTTPException(409,'Os vídeos já estão disponíveis para revisão')
@@ -757,6 +1129,8 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                     source=group['source'];frame=group['frame'];raw=prepared[source['sha256']][frame]
                     origin={'source':'previous_video_end','continuation_sha256':source['sha256']} if group['source_kind']=='previous_video_end' else {
                         'source':'base_video_cut','base_video_sha256':source['sha256'],'base_cut_frame':frame}
+                    if identity:
+                        origin.update(identity_profile=identity['id'],identity_reference_sha256=identity['sha256'])
                     aid,derived=store_media(c,pid,raw,'image','image/png',origin|{
                         'clip_id':str(cid),'source_binding':group['key'],'signature':signature(draft,clip,'image'),
                         'visual_signature':signature(draft,clip,'image'),'approved':True,
@@ -780,7 +1154,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                             rid,return_frame=store_media(c,pid,raw,'image','image/png',{'source':'base_video_return','base_video_sha256':base['video']['sha256'],'continuity_policy_version':3})
                             media[str(rid)]=return_frame
                     selected.append(return_frame)
-            if len(selected)>14: raise HTTPException(422,'Use até 14 referências por imagem')
+            if len(selected)+(len(identity_assets) if identity and kind=='image' else 0)>14: raise HTTPException(422,'Use até 14 referências por imagem')
             from .tenancy import active_workspace
             payload={'project_id':str(pid),'clip_id':str(cid),'operation':kind,
                 'creative_unit_id':decision['unit_id'],'attempt_stage':attempt_stage,
@@ -790,10 +1164,16 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 'variant_key':group['key'] if group else None,'requested_variant_key':body.variant_key,
                 'occurrence_ids':group['event_ids'] if group else [],'batch_ids':[str(t) for t in tids],
                 'signature':signature(draft,effective,kind,image['sha256'] if kind=='video' else None),
-                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None),'seconds':clip.seconds,
+                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None,identity_prompt),'seconds':clip.seconds,
                 'resolution':body.resolution,
                 'visual_signature':signature(draft,clip,'image'),'source_image_id':str(effective.image_id) if effective.image_id else None,
-                'last_frame':bool(return_frame),'references':[{'key':a['key'],'sha256':a['sha256'],'mime':a['mime']} for a in selected]}
+                'identity_profile':identity['id'] if identity else None,
+                'identity_reference_sha256':identity['sha256'] if identity and kind=='image' else None,
+                'reference_roles':([{'index':i,'role':'canonical_character_identity' if i==0 else 'channel_character_identity_reference',
+                                    'sha256':a['sha256']} for i,a in enumerate(identity_assets)]
+                    if identity and kind=='image' else []),
+                'last_frame':bool(return_frame),'references':([{'key':a['key'],'sha256':a['sha256'],'mime':a['mime']} for a in identity_assets]
+                    if identity and kind=='image' else []) + [{'key':a['key'],'sha256':a['sha256'],'mime':a['mime']} for a in selected]}
             c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,%s,'Pedido reservado; envio único sem repetição automática')",(tids[index],KIND,q['model'],json.dumps(payload),q['usd'],'QUEUED' if queued else 'SUBMITTING'))
         if kind=='video' and clip.id!=draft.base.id: save(c,row,draft)
         audit(c,'VISUAL_GENERATION_RESERVED',str(body.request_id),str(total));c.commit()
@@ -1199,7 +1579,7 @@ def approved_short_soundtrack(c, row, program_id, required_seconds):
             'snapshot':snapshot,'source_type':'approved_channel_track_excerpt'}
 
 
-def _short_source_segments(c, pid, row, draft, spec, media, parent_render):
+def _short_source_segments(c, pid, row, draft, spec, media, parent_render, identity=None):
     planned = sorted(parent_render['payload'].get('segments') or [], key=lambda s: float(s['start']))
     expected = []
     for selected in spec.segments:
@@ -1224,6 +1604,8 @@ def _short_source_segments(c, pid, row, draft, spec, media, parent_render):
         asset = media.get(str(asset_id)) if asset_id else None
         if not asset or asset.get('kind') != 'video' or asset.get('sha256') != selected.source_sha256:
             raise HTTPException(409, 'Um arquivo fonte mudou; atualize o projeto antes de continuar')
+        if identity and (draft.identity_profile!=identity['id'] or asset.get('identity_profile')!=identity['id']):
+            raise HTTPException(409,'O Short só pode reutilizar movimentos aprovados com a identidade visual deste canal.')
         source_start = round(occurrence * 24) / 24
         matches = [s for s in planned if str(s.get('clip_id')) == str(clip.id)
                    and s.get('asset_sha256') == asset['sha256']
@@ -1235,7 +1617,9 @@ def _short_source_segments(c, pid, row, draft, spec, media, parent_render):
         expected.append({'clip_id': str(clip.id), 'asset_key': asset['key'],
                          'asset_sha256': asset['sha256'], 'source_start_seconds': selected.source_start_seconds,
                          'duration_seconds': selected.duration_seconds, 'occurrence_seconds': source_start,
-                         'beat': selected.beat})
+                         'beat': selected.beat,'identity_profile':asset.get('identity_profile'),
+                         'identity_reference_sha256':asset.get('identity_reference_sha256'),
+                         'identity_reference_sha256s':asset.get('identity_reference_sha256s',[])})
     ordered = sorted(zip(spec.segments, expected), key=lambda item: item[1]['occurrence_seconds'])
     if [segment.clip_id for segment, _ in ordered] != [segment.clip_id for segment in spec.segments]:
         raise HTTPException(422, 'Organize os movimentos do Short na ordem da timeline')
@@ -1293,7 +1677,12 @@ def render_short(pid: uuid.UUID, body: ShortRender):
         if not parent_render or parent_render['status'] != 'COMPLETED' or parent_render['payload'].get('report', {}).get('sha256') != Path(parent['video_key']).stem:
             raise HTTPException(409, 'O render de origem não tem recibo íntegro; o MP4 publicado pode ter sido purgado')
         draft = Draft.model_validate(row['data']); media = assets(c, pid)
-        sources = _short_source_segments(c, pid, row, draft, body.spec, media, parent_render)
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        if identity and draft.identity_profile!=identity['id']:
+            raise HTTPException(409,'Vincule este projeto à identidade visual aprovada do canal antes de montar o Short.')
+        if not identity and identity_candidates(c,row['channel_id']):
+            raise HTTPException(409,'Defina a identidade visual deste canal antes de montar o Short.')
+        sources = _short_source_segments(c, pid, row, draft, body.spec, media, parent_render,identity)
         if body.spec.audio_mode=='parent_excerpt':
             parent_audio = parent_render['payload'].get('audio') or {}
             audio = parent_soundtrack(c, row, draft, parent_audio)
@@ -1303,6 +1692,7 @@ def render_short(pid: uuid.UUID, body: ShortRender):
         payload = {'project_id': str(pid), 'operation': 'short_render', 'draft_sha256': digest(row['data']),
                    'short_spec_sha256': body.spec.content_hash(), 'spec': body.spec.model_dump(mode='json'),
                    'sources': sources, 'audio': audio, 'seconds': body.spec.seconds,
+                   'identity_profile':identity['id'] if identity else None,
                    'parent_publication_id': str(parent['publication_id']), 'parent_pilot_id': str(parent['pilot_id']),
                    'parent_render_id': str(parent_task_id), 'approved': False}
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_ffmpeg_short_v1',%s,0,'QUEUED','Compondo história vertical com os movimentos e a música originais')",
@@ -1333,6 +1723,9 @@ def review_short(pid: uuid.UUID, tid: uuid.UUID, body: ShortReview):
             raise HTTPException(409, 'O arquivo mudou; revise a versão mais recente')
         if payload.get('draft_sha256') != digest(row['data']):
             raise HTTPException(409, 'A origem do projeto mudou; prepare uma nova versão do Short')
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        if identity and (payload.get('identity_profile')!=identity['id'] or any(source.get('identity_profile')!=identity['id'] for source in payload.get('sources',[]))):
+            raise HTTPException(409,'O Short não preserva a identidade visual aprovada deste canal; monte uma nova versão a partir dos movimentos vinculados.')
         try:
             spec = ShortSpec.model_validate(payload.get('spec'))
         except Exception:

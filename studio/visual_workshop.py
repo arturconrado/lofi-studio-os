@@ -42,6 +42,7 @@ class Insertion(Strict):
 
 class Draft(Strict):
     name: str = Field(min_length=1, max_length=120)
+    identity_profile: str | None = Field(default=None, max_length=100)
     automatic_motion: bool = False
     minutes: float = Field(default=60, ge=1, le=1440)
     theme: str = Field(default='', max_length=1000)
@@ -114,8 +115,12 @@ def get_clip(draft, cid):
 
 def context(draft):
     # Labels, music and scheduling do not change generated pixels.
-    return {k: draft.model_dump(mode='json')[k] for k in
-            ('theme', 'scene', 'scene_motion', 'scene_references', 'characters')}
+    result = {k: draft.model_dump(mode='json')[k] for k in
+              ('theme', 'scene', 'scene_motion', 'scene_references', 'characters')}
+    # Keep legacy signatures stable; only identity-bound drafts include this key.
+    if draft.identity_profile:
+        result['identity_profile'] = draft.identity_profile
+    return result
 
 
 def legacy_signature(draft, clip, kind, image_sha=None):
@@ -337,11 +342,11 @@ def assemble(draft, assets, preview=False, preview_range=None):
     return segments
 
 
-def prompt(draft, clip, kind, previous_motion=None):
+def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None):
     cast = '\n'.join(c.name + ': ' + c.description for c in draft.characters)
-    return (f'Locked 16:9 camera. Theme: {draft.theme}. Scene: {draft.scene}. '
+    result = (f'Locked 16:9 camera. Theme: {draft.theme}. Scene: {draft.scene}. '
             f'Environment motion: {draft.scene_motion}. Characters: {cast}. '
-            'Preserve the exact identities, proportions, clothing, setting and illustration style from references. '
+            'Preserve the configured character identities, proportions and illustration style. Follow the scene brief for the setting and composition; reference backgrounds are not binding. '
             f'Action: {clip.motion}. '
             + (f'Complete action goal, shared across continuous parts: {clip.action_goal}. ' if clip.action_goal and kind=='video' else '')
             + ('Create one starting still image for human approval, no text or watermark.' if kind == 'image' else
@@ -353,6 +358,15 @@ def prompt(draft, clip, kind, previous_motion=None):
                    'Start exactly from the supplied frame and continue that ongoing motion before beginning the requested action. '
                    'Show the entire action from its beginning; never start with the hand already on the cat or the cup already lifted. '
                    'Finish in the first pose of the base loop so it resumes naturally.'))))
+    if identity_prompt:
+        if kind == 'image':
+            result += (' Channel identity lock: ' + identity_prompt +
+                       ' The first input reference is the primary approved identity anchor. Every following channel reference shows the same established characters in another approved scene. Compare them to preserve the same face, curly hair, headphones, clothing, proportions, tabby markings and illustration treatment. '
+                       'Use the references for character and channel-art identity only: ignore its background, season, lighting and props; do not copy the reference poses or story. Follow this project theme and scene for a fresh composition. Keep the recognizable channel framing language while allowing the requested setting, palette accents, weather, props and narrative moment to change. Do not redesign or replace the characters.')
+        else:
+            result += (' Channel identity lock: ' + identity_prompt +
+                       ' Preserve these identities throughout every frame from the approved identity-bound starting still; do not morph, replace or reinterpret the characters.')
+    return result
 
 
 def split_durations(seconds, accepted, limit=200):
