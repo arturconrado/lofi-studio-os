@@ -38,3 +38,15 @@ def test_reference_briefs_describe_each_approved_episode():
         assert ref['source_still_sha256']==next(e for e in REGISTRY['approved_episodes'] if e['pilot_id']==ref['pilot_id'])['files']['source']['sha256']
     assert reference_brief('city_sunset')['scene'] is None  # no approved episode: identity only
     assert 'face' in REGISTRY['canonical_identity']['invariants']
+
+
+def test_channel_identity_profile_is_scoped_and_uses_exact_approved_still():
+    from studio.visual_identity import channel_identity_profile, channel_identity_prompt
+    profile=channel_identity_profile('00000000-0000-0000-0000-000000000001')
+    assert profile['id']=='lofi-vibe-coding-canonical-v1'
+    assert profile['pilot_id']=='1192acca-4cea-5d5b-9cf2-0a436909fc0e'
+    assert profile['sha256']==baseline(profile['pilot_id'])['files']['source']['sha256']
+    prompt=channel_identity_prompt(profile['id'])
+    assert 'voluminous shoulder-length dark brown curly hair' in prompt
+    assert 'tabby' in prompt and 'cat markings and eye colour' in prompt
+    assert channel_identity_profile('another-channel-id') is None

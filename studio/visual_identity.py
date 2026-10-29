@@ -16,6 +16,35 @@ def baseline(pilot_id):
     return next((b for b in REGISTRY['approved_episodes'] if b['pilot_id'] == str(pilot_id)), None)
 
 
+def channel_identity_profile(channel_id):
+    """Resolve a channel's owner-approved identity and immutable reference still."""
+    binding = REGISTRY.get('channel_profiles', {}).get(str(channel_id))
+    entry = baseline(binding['reference_pilot_id']) if binding else None
+    source = (entry or {}).get('files', {}).get('source')
+    if not binding or not entry or not source:
+        return None
+    assert_usable(source['key'], source['sha256'])
+    return {'id': binding['identity_profile'], 'pilot_id': entry['pilot_id'],
+            'title': entry['title'], 'key': source['key'], 'sha256': source['sha256'],
+            'mime': 'image/png', 'identity': REGISTRY['canonical_identity']}
+
+
+def channel_identity_prompt(profile_id):
+    """Describe stable identity only; keep season, setting and props in the project brief."""
+    profile = None
+    for cid in REGISTRY.get('channel_profiles', {}):
+        candidate = channel_identity_profile(cid)
+        if candidate and candidate['id'] == profile_id:
+            profile = candidate
+            break
+    if not profile:
+        return None
+    identity = profile['identity']
+    invariants = ', '.join(identity.get('invariants', []))
+    return (f"{identity['style']} Canonical girl: {identity['girl']} Canonical cat: {identity['cat']} "
+            f"Composition: {identity['composition']} Preserve these invariants: {invariants}.")
+
+
 def reference_brief(scenario=None, pilot_id=None):
     """Text the harness carries about an approved episode: canonical identity plus that scene.
 

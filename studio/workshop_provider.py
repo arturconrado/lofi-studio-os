@@ -81,6 +81,8 @@ def complete(c, task, raw, mime, seconds=None):
                           'visual_signature': p.get('visual_signature'), 'source_image_id': p.get('source_image_id'),
                           'variant_key':p.get('variant_key'),'occurrence_ids':p.get('occurrence_ids',[]),
                           'resolution': p.get('resolution', '720p'),
+                          'identity_profile': p.get('identity_profile'),
+                          'identity_reference_sha256': p.get('identity_reference_sha256'),
                           'continuity_review_version': 1 if p['operation'] == 'video' else None})
     # A slow generation must not replace a newer edit or carry an approval forward.
     attached = False

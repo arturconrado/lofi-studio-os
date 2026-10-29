@@ -44,6 +44,23 @@ def test_changed_context_invalidates_insertions(change):
     with pytest.raises(ValueError):assemble(d,a)
 
 
+def test_channel_identity_profile_changes_image_signature_and_is_present_in_generation_prompt():
+    from studio.visual_workshop import prompt
+    d,_=fixture();before=signature(d,d.base,'image')
+    d.identity_profile='lofi-vibe-coding-canonical-v1'
+    assert signature(d,d.base,'image')!=before
+    brief='Canonical woman with curly brown hair and the same tabby cat.'
+    generated=prompt(d,d.base,'image',identity_prompt=brief)
+    assert 'first input reference is the approved canonical character image' in generated
+    assert 'ignore its background, season, lighting and props' in generated
+
+
+def test_legacy_workshop_signature_is_unchanged_without_identity_profile():
+    from studio.visual_workshop import context
+    d,_=fixture()
+    assert 'identity_profile' not in context(d)
+
+
 def test_schedule_music_and_names_do_not_buy_new_pixels():
     d,a=fixture();d.insertions[0].minute=.15;d.minutes=2;d.name='Other title';d.music_program_id='LOFI-OTHER';d.clips[0].name='Reusable motion'
     assert status(d,d.clips[0],a)['video_approved']
@@ -131,19 +148,24 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
     draft=Draft(name='Real API test',minutes=1,scene='Room',characters=[Character(name='Cat',description='Orange')],base=Clip(name='Base',motion='Breathing'))
     pid=cl.post('/api/creator/workshop/projects',json={'channel_id':cid,'data':draft.model_dump(mode='json')}).json()['id']
     url=f'/api/creator/workshop/projects/{pid}'
+    initial=cl.get(url).json()
+    assert initial['identity']['required'] and initial['identity']['bound']
+    assert initial['data']['identity_profile']=='lofi-vibe-coding-canonical-v1'
     class Store:
         def put_object(self,**kw):pass
     monkeypatch.setenv('S3_BUCKET','test')
     monkeypatch.setattr(api,'storage',lambda:Store())
+    monkeypatch.setattr(api,'verify_identity_source',lambda identity:None)
     monkeypatch.setattr(provider,'quote',lambda kind,seconds:{'model':'test','usd':.1,'seconds':seconds})
     monkeypatch.setattr(financial,'check_available',lambda c,cap:None)
     png=io.BytesIO();Image.new('RGB',(16,9),'blue').save(png,'PNG')
-    paid_submit_calls=[]
+    paid_submit_calls=[];submitted_payloads=[]
     def submit(tid):
         # Completion uses the same tenant-scoped transaction as the real provider.
         paid_submit_calls.append(str(tid))
         with db() as c:
             t=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(tid,)).fetchone()
+            submitted_payloads.append(t['payload'])
             provider.complete(c,t,png.getvalue() if t['payload']['operation']=='image' else b'test-video',
                               'image/png' if t['payload']['operation']=='image' else 'video/mp4',8)
             c.commit()
@@ -153,6 +175,10 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
         return cl.post(url+f'/clips/{draft.base.id}/generate/{kind}',json={'request_id':str(uuid.uuid4()),'revision':revision,'max_usd':1,'confirm_cost':True})
     assert gen('video').status_code==409
     assert gen('image').status_code==200
+    initial=cl.get(url).json()
+    assert submitted_payloads[0]['references'][0]['sha256']==initial['identity']['reference_sha256']
+    assert submitted_payloads[0]['reference_roles']==[{'index':0,'role':'canonical_character_identity','sha256':initial['identity']['reference_sha256']}]
+    assert 'ignore its background, season, lighting and props' in submitted_payloads[0]['prompt']
     state=cl.get(url).json();image=state['states'][str(draft.base.id)]['image']
     review_url=url+f'/clips/{draft.base.id}/review/'
     assert cl.post(review_url+'image',json={'sha256':image['sha256'],'approve':True}).status_code==422

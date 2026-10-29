@@ -101,6 +101,52 @@ def assets(c, pid):
             for a in c.execute('SELECT * FROM visual_media WHERE project_id=%s', (pid,)).fetchall()}
 
 
+def identity_profile_for_channel(channel_id):
+    from .visual_identity import channel_identity_profile
+    return channel_identity_profile(channel_id)
+
+
+def bind_identity_reference(c, pid, identity):
+    """Attach a verified, immutable channel reference without copying or deleting it."""
+    if not identity:
+        return None
+    current = c.execute('''SELECT id,data FROM visual_media WHERE project_id=%s
+        AND data->>'source'='channel_identity_reference' AND data->>'identity_profile'=%s
+        ORDER BY created_at LIMIT 1''', (pid, identity['id'])).fetchone()
+    if current and current['data'].get('key') == identity['key'] and current['data'].get('sha256') == identity['sha256']:
+        return str(current['id'])
+    aid = uuid.uuid4()
+    media = {'kind': 'reference', 'key': identity['key'], 'sha256': identity['sha256'], 'mime': identity['mime'],
+             'approved': True, 'review_sha256': identity['sha256'], 'source': 'channel_identity_reference',
+             'identity_profile': identity['id'], 'pilot_id': identity['pilot_id'], 'title': identity['title']}
+    c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)', (aid, pid, json.dumps(media)))
+    return str(aid)
+
+
+def identity_reference_status(pid, identity, draft, media):
+    asset = next((a for a in media.values() if a.get('source') == 'channel_identity_reference'
+                  and a.get('identity_profile') == identity['id']
+                  and a.get('key') == identity['key'] and a.get('sha256') == identity['sha256']), None) if identity else None
+    return {'required': bool(identity), 'profile_id': identity['id'] if identity else None,
+            'bound': bool(identity and asset and draft.identity_profile == identity['id']),
+            'title': identity['title'] if identity else None,
+            'reference_url': f'/api/creator/workshop/projects/{pid}/identity-reference' if identity else None,
+            'reference_sha256': identity['sha256'] if identity else None}
+
+
+def verify_identity_source(identity):
+    if not identity:
+        return
+    from .visual_identity import verify_object
+    bucket = os.environ.get('S3_BUCKET')
+    if not bucket:
+        raise HTTPException(503, 'A referência canônica do canal não está configurada; nenhuma geração foi enviada.')
+    try:
+        verify_object(storage(), bucket, identity['key'], identity['sha256'], limit=20 * 1024**2)
+    except Exception:
+        raise HTTPException(503, 'A referência visual canônica está indisponível ou mudou; nenhuma geração foi enviada.') from None
+
+
 def save(c, row, draft):
     c.execute('UPDATE visual_projects SET data=%s,revision=revision+1,updated_at=now() WHERE id=%s',
               (json.dumps(draft.model_dump(mode='json')), row['id']))
@@ -170,6 +216,8 @@ def creative_spec_signature(draft, clip, operation, resolution, media):
              'scene_motion':draft.scene_motion if operation=='video' else None,
              'scene_references':ref_sha(draft.scene_references),
              'characters':[{'name':ch.name,'description':ch.description,'references':ref_sha(ch.references)} for ch in draft.characters]}
+    if draft.identity_profile:
+        context['identity_profile']=draft.identity_profile
     part_ids={item.id for item in parts}
     schedule=[{'clip_id':str(event.clip_id),'minute':round(event.minute*60*24)} for event in sorted(draft.insertions,key=lambda item:item.minute) if event.clip_id in part_ids]
     return digest({'version':1,'operation':operation,'resolution':resolution,'context':context,'schedule':schedule,
@@ -405,10 +453,29 @@ def create(body: Create):
     pid = uuid.uuid4()
     with db() as c:
         profile(c, body.channel_id)
+        draft = body.data.model_copy(deep=True)
+        identity = identity_profile_for_channel(body.channel_id)
+        if identity:
+            draft.identity_profile = identity['id']
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',
-                  (pid, body.channel_id, json.dumps(body.data.model_dump(mode='json'))))
+                  (pid, body.channel_id, json.dumps(draft.model_dump(mode='json'))))
+        if identity:
+            bind_identity_reference(c, pid, identity)
         audit(c, 'VISUAL_PROJECT_CREATED', str(pid)); c.commit()
     return {'id': str(pid)}
+
+
+@router.get('/projects/{pid}/identity-reference')
+def project_identity_reference(pid: uuid.UUID, request: Request):
+    ready()
+    with db() as c:
+        row = project(c, pid)
+        identity = identity_profile_for_channel(row['channel_id'])
+    if not identity:
+        raise HTTPException(404, 'Este canal não possui referência canônica configurada')
+    verify_identity_source(identity)
+    from .miniobs import media as stream
+    return stream(request, identity['key'], identity['mime'])
 
 
 @router.get('/projects/{pid}')
@@ -442,7 +509,9 @@ def detail(pid: uuid.UUID):
     state_cache={};planning_errors=[]
     try:validate_continuations(draft)
     except ValueError as exc:planning_errors.append(str(exc))
-    return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,'planning_errors':planning_errors,
+    identity = identity_profile_for_channel(row['channel_id'])
+    return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,
+            'identity': identity_reference_status(pid, identity, draft, media), 'planning_errors':planning_errors,
             'states': {str(cl.id): status(draft,cl,media,_cache=state_cache) for cl in clips(draft)},
             'jobs': [public_task(j) for j in jobs], 'music': music, 'parent_videos': parents,
             'library': [{'id': l['id'], 'name': l['name']} for l in library]}
@@ -462,11 +531,19 @@ def update(pid: uuid.UUID, body: Update):
                 image['visual_signature'] = signature(old, cl, 'image')
                 c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',
                           (json.dumps(image), cl.image_id, pid))
+        identity = identity_profile_for_channel(row['channel_id'])
+        if identity:
+            body.data.identity_profile = identity['id']
+        elif body.data.identity_profile:
+            raise HTTPException(422, 'Este canal não possui esse perfil de identidade aprovado')
         protected = any(status(old, cl, media)['image_approved'] for cl in clips(old))
         visual_changed = visual_context(old) != visual_context(body.data) or any(
             get_clip(body.data, cl.id) and cl.references != get_clip(body.data, cl.id).references for cl in clips(old))
         if protected and visual_changed and not body.edit_visual:
             raise HTTPException(409, 'Visual protegido. Use Editar visual para criar uma nova versão; seus arquivos aprovados serão preservados.')
+        if identity:
+            bind_identity_reference(c, pid, identity)
+            media = assets(c, pid)
         validate_refs(body.data, media); save(c, row, body.data)
         audit(c, 'VISUAL_PROJECT_EDITED', str(pid)); c.commit()
     return {'saved': True}
@@ -579,9 +656,14 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
         effective = occurrence_clip(draft,clip,group,media) if group else clip
         aid = getattr(effective,kind+'_id'); asset=media.get(str(aid))
         image = media.get(str(effective.image_id))
+        identity = identity_profile_for_channel(row['channel_id'])
         expected = signature(draft, effective, kind, image['sha256'] if kind == 'video' and image else None)
         if not asset or asset['sha256'] != body.sha256 or not (compatible_image(draft, clip, asset) if kind == 'image' else asset.get('signature') == expected):
             raise HTTPException(409, 'Material mudou; gere ou selecione uma versão compatível')
+        if identity and (draft.identity_profile != identity['id'] or asset.get('identity_profile') != identity['id']
+                         or (kind == 'image' and asset.get('identity_reference_sha256') != identity['sha256'])
+                         or (kind == 'video' and (not image or image.get('identity_profile') != identity['id']))):
+            raise HTTPException(409, 'Este material não carrega a referência canônica do canal. Gere novamente antes da revisão.')
         if body.approve:
             if not body.confirm_identity or (kind == 'video' and not body.confirm_motion_and_return):
                 raise HTTPException(422, 'Confira a identidade e, no vídeo, o movimento e a volta à base')
@@ -661,6 +743,13 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
         row=project(c,pid);draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'Gere diretamente o vídeo da inserção')
+        identity=identity_profile_for_channel(row['channel_id'])
+        if identity and (draft.identity_profile!=identity['id'] or not identity_reference_status(pid,identity,draft,media)['bound']):
+            raise HTTPException(409,'Este projeto ainda não está vinculado à referência canônica do canal. Salve uma nova versão visual antes de gerar.')
+        if identity and kind=='video':
+            source_image=media.get(str(clip.image_id))
+            if not source_image or source_image.get('identity_profile')!=identity['id']:
+                raise HTTPException(409,'Gere e aprove a imagem inicial com a referência canônica antes de animar.')
         groups=generation_targets(draft,clip,media,variant_key,resolution) if kind=='video' else [None]
         attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media,pid,row['channel_id'])
     q=(provider_quote(kind,clip.seconds,resolution) if resolution!='720p' else provider_quote(kind,clip.seconds)) if groups else {'usd':0,'seconds':clip.seconds}
@@ -689,6 +778,21 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'A imagem inicial é aprovada uma vez na base; gere o vídeo da inserção')
+        identity=identity_profile_for_channel(row['channel_id'])
+        media=assets(c,pid)
+        if identity:
+            if draft.identity_profile!=identity['id'] or not identity_reference_status(pid,identity,draft,media)['bound']:
+                raise HTTPException(409,'Este projeto ainda não está vinculado à referência canônica do canal. Salve uma nova versão visual antes de gerar.')
+            if kind=='video':
+                source_image=media.get(str(clip.image_id))
+                if not source_image or source_image.get('identity_profile')!=identity['id']:
+                    raise HTTPException(409,'Gere e aprove a imagem inicial com a referência canônica antes de animar.')
+            if kind=='image':
+                verify_identity_source(identity)
+        identity_prompt = None
+        if identity:
+            from .visual_identity import channel_identity_prompt
+            identity_prompt = channel_identity_prompt(identity['id'])
     q=provider_quote(kind,clip.seconds,body.resolution) if body.resolution!='720p' else provider_quote(kind,clip.seconds)
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
@@ -702,6 +806,19 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if row['revision']!=body.revision: raise HTTPException(409,'Salve e confira a versão atual')
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
+        identity=identity_profile_for_channel(row['channel_id'])
+        identity_asset=None
+        if identity:
+            if draft.identity_profile!=identity['id'] or not identity_reference_status(pid,identity,draft,media)['bound']:
+                raise HTTPException(409,'Este projeto ainda não está vinculado à referência canônica do canal. Salve uma nova versão visual antes de gerar.')
+            identity_asset=next((a for a in media.values() if a.get('source')=='channel_identity_reference'
+                                 and a.get('identity_profile')==identity['id'] and a.get('sha256')==identity['sha256']),None)
+            if not identity_asset:
+                raise HTTPException(409,'A referência canônica deste projeto está indisponível; nenhum envio foi feito.')
+            if kind=='video':
+                source_image=media.get(str(clip.image_id))
+                if not source_image or source_image.get('identity_profile')!=identity['id']:
+                    raise HTTPException(409,'Gere e aprove a imagem inicial com a referência canônica antes de animar.')
         if q['seconds']!=clip.seconds: raise HTTPException(409,'A duração mudou; consulte o custo novamente')
         groups=generation_targets(draft,clip,media,body.variant_key,body.resolution) if kind=='video' else [None]
         if not groups: raise HTTPException(409,'Os vídeos já estão disponíveis para revisão')
@@ -751,12 +868,14 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         attempt_stage=reserve_attempt(c,decision,kind,body.correction_reason,draft=draft,project_id=pid)
         for index,group in enumerate(groups):
             effective=clip;image=media.get(str(clip.image_id));return_frame=None
-            selected=[media[str(r)] for r in refs]
+            selected=([identity_asset] if identity_asset and kind=='image' else []) + [media[str(r)] for r in refs]
             if kind=='video':
                 if group:
                     source=group['source'];frame=group['frame'];raw=prepared[source['sha256']][frame]
                     origin={'source':'previous_video_end','continuation_sha256':source['sha256']} if group['source_kind']=='previous_video_end' else {
                         'source':'base_video_cut','base_video_sha256':source['sha256'],'base_cut_frame':frame}
+                    if identity:
+                        origin.update(identity_profile=identity['id'],identity_reference_sha256=identity['sha256'])
                     aid,derived=store_media(c,pid,raw,'image','image/png',origin|{
                         'clip_id':str(cid),'source_binding':group['key'],'signature':signature(draft,clip,'image'),
                         'visual_signature':signature(draft,clip,'image'),'approved':True,
@@ -790,9 +909,13 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 'variant_key':group['key'] if group else None,'requested_variant_key':body.variant_key,
                 'occurrence_ids':group['event_ids'] if group else [],'batch_ids':[str(t) for t in tids],
                 'signature':signature(draft,effective,kind,image['sha256'] if kind=='video' else None),
-                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None),'seconds':clip.seconds,
+                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None,identity_prompt),'seconds':clip.seconds,
                 'resolution':body.resolution,
                 'visual_signature':signature(draft,clip,'image'),'source_image_id':str(effective.image_id) if effective.image_id else None,
+                'identity_profile':identity['id'] if identity else None,
+                'identity_reference_sha256':identity['sha256'] if identity and kind=='image' else None,
+                'reference_roles':[{'index':0,'role':'canonical_character_identity','sha256':identity['sha256']}]
+                    if identity and kind=='image' else [],
                 'last_frame':bool(return_frame),'references':[{'key':a['key'],'sha256':a['sha256'],'mime':a['mime']} for a in selected]}
             c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,%s,'Pedido reservado; envio único sem repetição automática')",(tids[index],KIND,q['model'],json.dumps(payload),q['usd'],'QUEUED' if queued else 'SUBMITTING'))
         if kind=='video' and clip.id!=draft.base.id: save(c,row,draft)
