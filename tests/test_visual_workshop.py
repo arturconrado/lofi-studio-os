@@ -61,6 +61,36 @@ def test_legacy_workshop_signature_is_unchanged_without_identity_profile():
     assert 'identity_profile' not in context(d)
 
 
+def test_channel_identity_candidates_only_use_human_approved_assets_owned_by_that_channel():
+    from studio.workshop_api import identity_candidates
+    channel='channel-a';image={'kind':'image','key':'a.png','sha256':'a'*64,'approved':True,'review_sha256':'a'*64}
+    rejected={'kind':'image','key':'b.png','sha256':'b'*64,'approved':False,'review_sha256':'b'*64}
+    class Result:
+        def __init__(self,rows):self.rows=rows
+        def fetchall(self):return self.rows
+    class Store:
+        def execute(self,query,params):
+            assert params[0]==channel
+            if 'visual_library' in query:
+                return Result([{'id':'library-1','name':'Approved channel still','data':{'image':image}},
+                               {'id':'library-2','name':'Rejected still','data':{'image':rejected}}])
+            return Result([])
+    candidates=identity_candidates(Store(),channel,'project-1')
+    assert len(candidates)==1
+    assert candidates[0]['source_type']=='library' and candidates[0]['source_id']=='library-1'
+
+
+def test_unconfigured_channel_does_not_inherit_the_primary_channel_identity():
+    from studio.workshop_api import identity_profile_for_channel
+    class Result:
+        def fetchone(self):return None
+    class Store:
+        def execute(self,query,params):
+            assert params==('new-channel',)
+            return Result()
+    assert identity_profile_for_channel(Store(),'new-channel') is None
+
+
 def test_schedule_music_and_names_do_not_buy_new_pixels():
     d,a=fixture();d.insertions[0].minute=.15;d.minutes=2;d.name='Other title';d.music_program_id='LOFI-OTHER';d.clips[0].name='Reusable motion'
     assert status(d,d.clips[0],a)['video_approved']

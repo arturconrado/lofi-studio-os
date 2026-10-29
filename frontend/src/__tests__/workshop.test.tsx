@@ -110,6 +110,23 @@ it('offers insertion video directly from the approved base without a separate im
   expect(view.queryByText('Continua uma parte anterior')).toBeNull();
 });
 
+it('lets a new channel select its own approved reference still without borrowing another channel identity', async () => {
+  const draft=initialDraft();
+  const candidate={source_type:'library',source_id:'asset-1',title:'My channel character',url:'/candidate.png',sha256:'a'.repeat(64)};
+  const unconfigured={id:'p',revision:1,data:draft,media:{},identity:{required:true,configured:false,profile_id:null,bound:false,title:null,reference_url:null,reference_sha256:null,candidates:[candidate]},states:{},jobs:[],library:[],music:[]};
+  const configured:any={...unconfigured,revision:2,identity:{...unconfigured.identity,configured:true,profile_id:'channel-visual-channel-a-aaaaaaaaaaaa',bound:true,title:candidate.title,reference_url:'/reference.png',reference_sha256:candidate.sha256,candidates:[]}};
+  let current=unconfigured;
+  const fetcher=vi.fn(async(url:string,init?:RequestInit)=>{if(init?.method==='POST')current=configured;return new Response(JSON.stringify(url.endsWith('/capabilities')?{durations:[8]}:init?.method==='POST'?{saved:true}:current),{status:200});});
+  vi.stubGlobal('fetch',fetcher);vi.stubGlobal('confirm',vi.fn(()=>true));
+  const view=render(<Workshop id="p" />);
+  await waitFor(()=>expect(view.queryByText('My channel character')).not.toBeNull());
+  fireEvent.click(view.getByText('Usar neste canal'));
+  await waitFor(()=>expect(fetcher.mock.calls.some(c=>String(c[0]).endsWith('/identity-reference/select'))).toBe(true));
+  const request=fetcher.mock.calls.find(c=>String(c[0]).endsWith('/identity-reference/select'));
+  expect(JSON.parse(String(request![1]!.body))).toEqual({source_type:'library',source_id:'asset-1',confirm_identity:true});
+  await waitFor(()=>expect(view.getByText(/A personagem vem de um asset aprovado deste canal/)).not.toBeNull());
+});
+
 
 it('keeps the tranquil preset in the single base and formats fractional minutes', async () => {
   vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({projects:[],durations:[8]}),{status:200})));

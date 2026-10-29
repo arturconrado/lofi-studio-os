@@ -12,7 +12,8 @@ type Draft = { automatic_motion?: boolean; identity_profile?: string | null; nam
 type Media = { id: string; url: string; sha256: string; kind: string; approved: boolean; clip_id?: string };
 type Variant = { key: string; minutes: number[]; event_ids: string[]; image_id: string | null; video_id: string | null; image_approved: boolean; video_ready: boolean; video_approved: boolean; seams_approved: boolean; source_ready: boolean };
 type Detail = { id: string; revision: number; data: Draft; media: Record<string, Media>;
-  identity?: { required: boolean; profile_id: string | null; bound: boolean; title: string | null; reference_url: string | null; reference_sha256: string | null };
+  identity?: { required: boolean; configured: boolean; profile_id: string | null; bound: boolean; title: string | null; reference_url: string | null; reference_sha256: string | null;
+    candidates: { source_type: 'library' | 'project_media'; source_id: string; title: string; url: string; sha256: string }[] };
   states: Record<string, { video_ready: boolean; image_approved: boolean; video_approved: boolean; seams_approved?: boolean; variants?: Variant[] }>;
   jobs: { id: string; status: string; detail: string; operation: string; clip_id?: string; variant_key?: string | null; url?: string; asset_url?: string; asset_id?: string; short_title?: string; created_at?: string; reserved_usd?: number; actual_usd?: number | null; attempt_stage?: 'initial' | 'correction'; reconciliation_state?: 'provider_polling' | 'callback_pending' | 'manual_reconciliation'; cancel_state?: 'requested' | 'confirmed' | 'remote_finished' | 'before_submission'; report?: { sha256: string; seconds?: number; width?: number; height?: number }; current?: boolean; preview_range?: [number,number]; approved: boolean }[];
   parent_videos?: { video_id: string; title: string; description: string; pilot_id: string }[];
@@ -356,11 +357,21 @@ export function Workshop({ id }: { id?: string }) {
       <label><input type="checkbox" checked={automatic} onChange={e => field('automatic_motion', e.currentTarget.checked)} /> Preparar continuidade automaticamente sem aprovar cada trecho</label>
       <p class="faint">Desativado: cada trecho e emenda exige sua aprovação antes da montagem. Projetos antigos continuam neste modo até você ativá-lo.</p>
       {visualLocked && <div class="notice">Visual aprovado e protegido. Duração, movimentos, música e horários continuam editáveis. <button class="btn" onClick={() => { if(confirm('Editar o visual cria uma nova versão. Os arquivos anteriores ficam preservados. Continuar?')) setEditVisual(true); }}>Editar visual — criar nova versão</button></div>}
-      {d?.identity?.required && <div class="card row wrap" aria-label="Referência canônica de identidade">
-        {d.identity.reference_url && <img src={d.identity.reference_url} alt="Referência visual canônica da personagem e do gato" style={{ width: 'min(240px, 100%)', maxHeight: '150px', objectFit: 'contain', borderRadius: '8px' }} />}
-        <div class="grow"><b>Identidade visual do canal</b><p class="faint">{d.identity.bound
-          ? 'Esta referência aprovada é vinculada automaticamente à geração da imagem inicial. O harness bloqueia a animação se a imagem não tiver sido gerada com ela.'
-          : 'Este projeto ainda não está vinculado à referência aprovada. Salve uma nova versão visual para vincular a personagem antes de gerar ou aprovar movimentos.'}</p><small class="faint">{d.identity.title}</small></div>
+      {d?.identity?.required && <div class="card stack" aria-label="Referência canônica de identidade">
+        {d.identity.configured ? <div class="row wrap">
+          {d.identity.reference_url && <img src={d.identity.reference_url} alt="Referência visual canônica deste canal" style={{ width: 'min(240px, 100%)', maxHeight: '150px', objectFit: 'contain', borderRadius: '8px' }} />}
+          <div class="grow"><b>Identidade visual deste canal</b><p class="faint">{d.identity.bound
+            ? 'A personagem vem de um asset aprovado deste canal e é vinculada à geração. A animação é bloqueada se a imagem inicial não tiver essa procedência.'
+            : 'A identidade do canal mudou. Salve a nova versão visual antes de gerar; materiais antigos continuam preservados.'}</p><small class="faint">{d.identity.title}</small></div>
+        </div> : <><b>Defina a identidade visual deste canal</b><p class="faint">Escolha um still já aprovado deste canal. Ele será a referência das novas cenas; assets de outros canais nunca serão usados.</p>
+          {d.identity.candidates.length ? <div class="grid cols-2">{d.identity.candidates.map(candidate => <div class="card stack" key={`${candidate.source_type}-${candidate.source_id}`}>
+            <img src={candidate.url} alt={`Asset aprovado: ${candidate.title}`} style={{ width: '100%', maxHeight: '180px', objectFit: 'contain', borderRadius: '8px' }} />
+            <small>{candidate.title}</small><button class="btn" disabled={busy || dirty} onClick={() => {
+              if (confirm(`Usar “${candidate.title}” como referência canônica de identidade deste canal?`))
+                run(() => post(`${prefix}/projects/${id}/identity-reference/select`, { source_type: candidate.source_type, source_id: candidate.source_id, confirm_identity: true }), 'Identidade deste canal definida a partir do asset aprovado.');
+            }}>Usar neste canal</button>
+          </div>)}</div> : <p class="faint">Este canal ainda não tem stills aprovados. Gere e aprove a imagem-base; depois poderá defini-la como referência permanente do canal.</p>}
+        </>}
       </div>}
       <div class="grid cols-2"><Field label="Nome do projeto"><input class="input" value={draft.name} onInput={e => field('name', e.currentTarget.value)} /></Field>
         <Field label="Duração total (minutos)"><input class="input" type="number" min={1} max={1440} step={0.1} value={draft.minutes} onInput={e => field('minutes', Number(e.currentTarget.value))} /></Field></div>
