@@ -1566,7 +1566,7 @@ def approved_short_soundtrack(c, row, program_id, required_seconds):
             'snapshot':snapshot,'source_type':'approved_channel_track_excerpt'}
 
 
-def _short_source_segments(c, pid, row, draft, spec, media, parent_render):
+def _short_source_segments(c, pid, row, draft, spec, media, parent_render, identity=None):
     planned = sorted(parent_render['payload'].get('segments') or [], key=lambda s: float(s['start']))
     expected = []
     for selected in spec.segments:
@@ -1591,6 +1591,8 @@ def _short_source_segments(c, pid, row, draft, spec, media, parent_render):
         asset = media.get(str(asset_id)) if asset_id else None
         if not asset or asset.get('kind') != 'video' or asset.get('sha256') != selected.source_sha256:
             raise HTTPException(409, 'Um arquivo fonte mudou; atualize o projeto antes de continuar')
+        if identity and (draft.identity_profile!=identity['id'] or asset.get('identity_profile')!=identity['id']):
+            raise HTTPException(409,'O Short só pode reutilizar movimentos aprovados com a identidade visual deste canal.')
         source_start = round(occurrence * 24) / 24
         matches = [s for s in planned if str(s.get('clip_id')) == str(clip.id)
                    and s.get('asset_sha256') == asset['sha256']
@@ -1602,7 +1604,9 @@ def _short_source_segments(c, pid, row, draft, spec, media, parent_render):
         expected.append({'clip_id': str(clip.id), 'asset_key': asset['key'],
                          'asset_sha256': asset['sha256'], 'source_start_seconds': selected.source_start_seconds,
                          'duration_seconds': selected.duration_seconds, 'occurrence_seconds': source_start,
-                         'beat': selected.beat})
+                         'beat': selected.beat,'identity_profile':asset.get('identity_profile'),
+                         'identity_reference_sha256':asset.get('identity_reference_sha256'),
+                         'identity_reference_sha256s':asset.get('identity_reference_sha256s',[])})
     ordered = sorted(zip(spec.segments, expected), key=lambda item: item[1]['occurrence_seconds'])
     if [segment.clip_id for segment, _ in ordered] != [segment.clip_id for segment in spec.segments]:
         raise HTTPException(422, 'Organize os movimentos do Short na ordem da timeline')
@@ -1660,7 +1664,12 @@ def render_short(pid: uuid.UUID, body: ShortRender):
         if not parent_render or parent_render['status'] != 'COMPLETED' or parent_render['payload'].get('report', {}).get('sha256') != Path(parent['video_key']).stem:
             raise HTTPException(409, 'O render de origem não tem recibo íntegro; o MP4 publicado pode ter sido purgado')
         draft = Draft.model_validate(row['data']); media = assets(c, pid)
-        sources = _short_source_segments(c, pid, row, draft, body.spec, media, parent_render)
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        if identity and draft.identity_profile!=identity['id']:
+            raise HTTPException(409,'Vincule este projeto à identidade visual aprovada do canal antes de montar o Short.')
+        if not identity and identity_candidates(c,row['channel_id']):
+            raise HTTPException(409,'Defina a identidade visual deste canal antes de montar o Short.')
+        sources = _short_source_segments(c, pid, row, draft, body.spec, media, parent_render,identity)
         if body.spec.audio_mode=='parent_excerpt':
             parent_audio = parent_render['payload'].get('audio') or {}
             audio = parent_soundtrack(c, row, draft, parent_audio)
@@ -1670,6 +1679,7 @@ def render_short(pid: uuid.UUID, body: ShortRender):
         payload = {'project_id': str(pid), 'operation': 'short_render', 'draft_sha256': digest(row['data']),
                    'short_spec_sha256': body.spec.content_hash(), 'spec': body.spec.model_dump(mode='json'),
                    'sources': sources, 'audio': audio, 'seconds': body.spec.seconds,
+                   'identity_profile':identity['id'] if identity else None,
                    'parent_publication_id': str(parent['publication_id']), 'parent_pilot_id': str(parent['pilot_id']),
                    'parent_render_id': str(parent_task_id), 'approved': False}
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_ffmpeg_short_v1',%s,0,'QUEUED','Compondo história vertical com os movimentos e a música originais')",
@@ -1700,6 +1710,9 @@ def review_short(pid: uuid.UUID, tid: uuid.UUID, body: ShortReview):
             raise HTTPException(409, 'O arquivo mudou; revise a versão mais recente')
         if payload.get('draft_sha256') != digest(row['data']):
             raise HTTPException(409, 'A origem do projeto mudou; prepare uma nova versão do Short')
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        if identity and (payload.get('identity_profile')!=identity['id'] or any(source.get('identity_profile')!=identity['id'] for source in payload.get('sources',[]))):
+            raise HTTPException(409,'O Short não preserva a identidade visual aprovada deste canal; monte uma nova versão a partir dos movimentos vinculados.')
         try:
             spec = ShortSpec.model_validate(payload.get('spec'))
         except Exception:

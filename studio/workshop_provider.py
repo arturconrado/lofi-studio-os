@@ -75,6 +75,10 @@ def reference_data(a):
 def complete(c, task, raw, mime, seconds=None):
     p = task['payload']; pid = p['project_id']
     row = project(c, pid, True); draft = Draft.model_validate(row['data']); clip = get_clip(draft, p['clip_id'])
+    identity_reference_sha256s=[item['sha256'] for item in p.get('reference_roles',[]) if item.get('sha256')]
+    if p.get('operation')=='video' and p.get('source_image_id'):
+        source_image=assets(c,pid).get(str(p['source_image_id']))
+        identity_reference_sha256s=(source_image or {}).get('identity_reference_sha256s') or ([source_image['identity_reference_sha256']] if source_image and source_image.get('identity_reference_sha256') else [])
     aid, _ = store_media(c, pid, raw, p['operation'], mime,
                          {'signature': p['signature'], 'seconds': seconds, 'task_id': str(task['id']), 'clip_id': p['clip_id'],
                           'prompt': p['prompt'], 'model': task['model'],
@@ -83,6 +87,7 @@ def complete(c, task, raw, mime, seconds=None):
                           'resolution': p.get('resolution', '720p'),
                           'identity_profile': p.get('identity_profile'),
                           'identity_reference_sha256': p.get('identity_reference_sha256'),
+                          'identity_reference_sha256s':identity_reference_sha256s,
                           'continuity_review_version': 1 if p['operation'] == 'video' else None})
     # A slow generation must not replace a newer edit or carry an approval forward.
     attached = False
