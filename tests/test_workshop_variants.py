@@ -568,6 +568,12 @@ def seed_project(cl,draft,media):
     with db() as c:
         c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         api.ensure(c)
+        # These variant workflow tests cover pre-identity projects. Keep them on
+        # an independent channel so the primary channel's canonical profile is
+        # exercised only by the dedicated identity integration tests.
+        channel=uuid.uuid4()
+        c.execute('INSERT INTO radio_channels(id,name,niche) VALUES(%s,%s,%s)',
+                  (channel,'Workshop test channel','Test channel for visual workshop variants'))
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',(pid,channel,json.dumps(draft.model_dump(mode='json'))))
         for aid,asset in media.items():c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,pid,json.dumps(asset)))
         c.commit()

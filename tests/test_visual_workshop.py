@@ -323,7 +323,7 @@ def test_reuse_library_preserves_references_and_completed_assets(client, monkeyp
     from studio.visual_workshop import legacy_signature, prompt
     import json
     cl=client;_,identity=signup(cl);cl.headers.update({'X-CSRF-Token':identity['csrf_token']})
-    channel=cl.get('/api/channels').json()[0]['id']
+    channel=uuid.uuid4()
     draft, media=fixture()
     draft.clips=[];draft.insertions=[]
     pid=uuid.uuid4();ref=uuid.uuid4()
@@ -337,6 +337,8 @@ def test_reuse_library_preserves_references_and_completed_assets(client, monkeyp
         from studio.tenancy import schema_name
         c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         api.ensure(c)
+        c.execute('INSERT INTO radio_channels(id,name,niche) VALUES(%s,%s,%s)',
+                  (channel,'Legacy visual test channel','Legacy visual workshop test'))
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',(pid,channel,json.dumps(draft.model_dump(mode='json'))))
         for aid, asset in [(ref,{'kind':'reference'}),(draft.base.image_id,image),(draft.base.video_id,video)]:
             c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,pid,json.dumps(asset)))
@@ -369,13 +371,15 @@ def test_approved_visual_lock_and_duration_edit(client):
     from studio.core import db
     import json
     cl=client;_,identity=signup(cl);cl.headers.update({'X-CSRF-Token':identity['csrf_token']})
-    channel=cl.get('/api/channels').json()[0]['id']
+    channel=uuid.uuid4()
     d,a=fixture();d.clips=[];d.insertions=[];pid=uuid.uuid4()
     with db() as c:
         from psycopg import sql
         from studio.tenancy import schema_name
         c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         api.ensure(c)
+        c.execute('INSERT INTO radio_channels(id,name,niche) VALUES(%s,%s,%s)',
+                  (channel,'Legacy visual test channel','Legacy visual workshop test'))
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',(pid,channel,json.dumps(d.model_dump(mode='json'))))
         for aid in (d.base.image_id,d.base.video_id):
             c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,pid,json.dumps(a[str(aid)])))
@@ -470,13 +474,15 @@ def test_insertion_video_prepares_base_frame_without_paid_image(client, monkeypa
 
     cl = client; _, identity = signup(cl)
     cl.headers.update({'X-CSRF-Token': identity['csrf_token']})
-    channel = cl.get('/api/channels').json()[0]['id']
+    channel = uuid.uuid4()
     draft, media = fixture()
     draft.clips[0].image_id = draft.clips[0].video_id = None
     pid = uuid.uuid4()
     with db() as c:
         c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         api.ensure(c)
+        c.execute('INSERT INTO radio_channels(id,name,niche) VALUES(%s,%s,%s)',
+                  (channel,'Legacy visual test channel','Legacy visual workshop test'))
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',
                   (pid, channel, json.dumps(draft.model_dump(mode='json'))))
         for aid in (draft.base.image_id, draft.base.video_id):

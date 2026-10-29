@@ -362,7 +362,7 @@ def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None):
         if kind == 'image':
             result += (' Channel identity lock: ' + identity_prompt +
                        ' The first input reference is the primary approved identity anchor. Every following channel reference shows the same established characters in another approved scene. Compare them to preserve the same face, curly hair, headphones, clothing, proportions, tabby markings and illustration treatment. '
-                       'Use the references for character and channel-art identity only: do not copy their backgrounds, season, lighting, props, poses or story. Follow this project theme and scene for a fresh composition. Keep the recognizable channel framing language while allowing the requested setting, palette accents, weather, props and narrative moment to change. Do not redesign or replace the characters.')
+                       'Use the references for character and channel-art identity only: ignore its background, season, lighting and props; do not copy the reference poses or story. Follow this project theme and scene for a fresh composition. Keep the recognizable channel framing language while allowing the requested setting, palette accents, weather, props and narrative moment to change. Do not redesign or replace the characters.')
         else:
             result += (' Channel identity lock: ' + identity_prompt +
                        ' Preserve these identities throughout every frame from the approved identity-bound starting still; do not morph, replace or reinterpret the characters.')
