@@ -273,7 +273,7 @@ def identity_reference_status(pid, identity, draft, media):
 def identity_selection_required(candidates, project_id, kind, draft, media):
     """Require channel identity for new art, while preserving a legacy project's approved base motion."""
     external=[candidate for candidate in candidates
-              if candidate.get('source_type')!='project_media' or candidate.get('project_id')!=str(project_id)]
+              if candidate.get('source_type')!='project_media' or str(candidate.get('source_id')) not in media]
     if external or kind=='image':
         return bool(external or candidates)
     base=media.get(str(draft.base.image_id)) if draft.base.image_id else None
