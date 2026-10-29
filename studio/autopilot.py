@@ -4,11 +4,12 @@ from pathlib import Path
 from decimal import Decimal
 import httpx
 from cryptography.fernet import Fernet
-from fastapi import APIRouter,HTTPException
+from fastapi import APIRouter,Depends,HTTPException
 from pydantic import BaseModel,Field
 from .core import db,audit,sha
 from . import runtime
 router=APIRouter(prefix='/api/autopilot')
+from .permissions import require_spend_permission
 MODEL='google/lyria-3-pro-preview'
 
 def config(c):return c.execute('SELECT * FROM factory_control WHERE id=1').fetchone()
@@ -74,7 +75,7 @@ def setup(body:Setup):
         audit(c,'GLOBAL_AI_BUDGET_CONFIGURED','1',str(body.budget_usd));c.commit()
     return {'ok':True}
 
-@router.post('/start')
+@router.post('/start',dependencies=[Depends(require_spend_permission)])
 def start():
     try:verify_key(runtime.key());verify_model()
     except ValueError as e:raise HTTPException(422,str(e))

@@ -11,13 +11,14 @@ import hashlib
 import time
 from pathlib import Path
 from typing import Literal
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import Field
 from PIL import Image
 from .core import db, storage, audit, ensure_once
 from .channels import profile
 from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame, seam_binding, variant_plan, occurrence_clip, _status, validate_continuations
 from .workshop_shorts import ShortSpec
+from .permissions import require_spend_permission
 
 router = APIRouter(prefix='/workshop')
 KIND = 'visual_workshop_v1'
@@ -670,7 +671,7 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
             'variants':[{'key':g['key'],'minutes':g['minutes']} for g in groups if g]}
 
 
-@router.post('/projects/{pid}/clips/{cid}/generate/{kind}')
+@router.post('/projects/{pid}/clips/{cid}/generate/{kind}',dependencies=[Depends(require_spend_permission)])
 def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], body: Generate):
     from .workshop_provider import quote as provider_quote, submit
     from .visual_workshop import prompt
@@ -1169,6 +1170,35 @@ def parent_soundtrack(c, row, draft, audio_proof):
     return {'program_id': program_id, 'key': key, 'sha256': sha, 'snapshot': snapshot}
 
 
+def approved_short_soundtrack(c, row, program_id, required_seconds):
+    """Resolve a separately selected, already reviewed channel track for a Short."""
+    from .miniobs import program_snapshot
+    if not isinstance(program_id,str) or not program_id:
+        raise HTTPException(422,'Escolha uma trilha aprovada do canal')
+    source=c.execute('''SELECT id,audio_key,manifest_key,seconds FROM production_batches
+      WHERE id=%s AND channel_id=%s AND state='ready' AND seconds>=%s''',
+      (program_id,row['channel_id'],required_seconds)).fetchone()
+    if not source or not source['audio_key'] or not source['manifest_key']:
+        raise HTTPException(409,'A trilha escolhida não está pronta, não pertence a este canal ou é curta demais')
+    try:_,snapshot=program_snapshot(c,source['id'])
+    except ValueError:raise HTTPException(409,'A revisão da trilha escolhida não está disponível') from None
+    review=c.execute('SELECT snapshot_sha256 FROM program_reviews WHERE program_id=%s',(source['id'],)).fetchone()
+    if not review or review['snapshot_sha256']!=snapshot:
+        raise HTTPException(409,'A trilha escolhida precisa de uma revisão de áudio atual')
+    obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=source['manifest_key'])
+    try:raw=obj['Body'].read(1024**2+1)
+    finally:obj['Body'].close()
+    if len(raw)>1024**2:raise HTTPException(409,'O manifesto da trilha escolhida é inválido')
+    try:manifest=json.loads(raw)
+    except (json.JSONDecodeError,UnicodeDecodeError):raise HTTPException(409,'O manifesto da trilha escolhida é inválido') from None
+    audio=manifest.get('audio') if isinstance(manifest,dict) else None
+    if not isinstance(manifest,dict) or manifest.get('batch')!=program_id or not isinstance(audio,dict) or not audio.get('sha256'):
+        raise HTTPException(409,'A origem da trilha escolhida não pôde ser comprovada')
+    storage().head_object(Bucket=os.environ['S3_BUCKET'],Key=source['audio_key'])
+    return {'program_id':program_id,'key':source['audio_key'],'sha256':audio['sha256'],
+            'snapshot':snapshot,'source_type':'approved_channel_track_excerpt'}
+
+
 def _short_source_segments(c, pid, row, draft, spec, media, parent_render):
     planned = sorted(parent_render['payload'].get('segments') or [], key=lambda s: float(s['start']))
     expected = []
@@ -1226,7 +1256,7 @@ def _short_source_segments(c, pid, row, draft, spec, media, parent_render):
             if next_source and (abs(float(next_source['start']) - ordered[index + 1][1]['occurrence_seconds']) > .05
                                 or next_source.get('asset_sha256') != ordered[index + 1][1]['asset_sha256']):
                 raise HTTPException(422, 'As partes da ação precisam ser consecutivas e preservar a mesma fonte')
-    if abs(spec.audio_start_seconds - expected[0]['occurrence_seconds']) > .05:
+    if spec.audio_mode=='parent_excerpt' and abs(spec.audio_start_seconds - expected[0]['occurrence_seconds']) > .05:
         raise HTTPException(422, 'Alinhe o início da música ao primeiro quadro da história original')
     return expected
 
@@ -1264,8 +1294,12 @@ def render_short(pid: uuid.UUID, body: ShortRender):
             raise HTTPException(409, 'O render de origem não tem recibo íntegro; o MP4 publicado pode ter sido purgado')
         draft = Draft.model_validate(row['data']); media = assets(c, pid)
         sources = _short_source_segments(c, pid, row, draft, body.spec, media, parent_render)
-        parent_audio = parent_render['payload'].get('audio') or {}
-        audio = parent_soundtrack(c, row, draft, parent_audio)
+        if body.spec.audio_mode=='parent_excerpt':
+            parent_audio = parent_render['payload'].get('audio') or {}
+            audio = parent_soundtrack(c, row, draft, parent_audio)
+            audio['source_type']='approved_parent_track_excerpt'
+        else:
+            audio = approved_short_soundtrack(c,row,body.spec.music_program_id,body.spec.seconds)
         payload = {'project_id': str(pid), 'operation': 'short_render', 'draft_sha256': digest(row['data']),
                    'short_spec_sha256': body.spec.content_hash(), 'spec': body.spec.model_dump(mode='json'),
                    'sources': sources, 'audio': audio, 'seconds': body.spec.seconds,

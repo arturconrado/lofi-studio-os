@@ -7,13 +7,14 @@ exported locally (no provider cost). 4h/8h live loops are queues of reviewed blo
 """
 import json,os,time,uuid
 from decimal import Decimal,ROUND_DOWN
-from fastapi import APIRouter,HTTPException,Request
+from fastapi import APIRouter,Depends,HTTPException,Request
 from pydantic import BaseModel,Field
 from typing import Any
 from .core import db,audit,ensure_once
 from .channels import profile
 from . import runtime
 from .production_state import derive,blocks as block_rows
+from .permissions import require_spend_permission
 
 router=APIRouter(prefix='/productions')
 TRACK_USD=Decimal('.08')
@@ -321,7 +322,7 @@ def quote(body:QuoteRequest):
     return out
 
 
-@router.post('')
+@router.post('',dependencies=[Depends(require_spend_permission)])
 def create(body:CreateRequest,request:Request):
     if not body.confirm_ceiling:raise HTTPException(422,'Confirme o teto de custo desta produção')
     ready()
@@ -398,7 +399,7 @@ def detail(pid:uuid.UUID):
         return view(c,p)
 
 
-@router.post('/{pid}/advance')
+@router.post('/{pid}/advance',dependencies=[Depends(require_spend_permission)])
 def advance_now(pid:uuid.UUID):
     ready()
     with db() as c:
@@ -406,7 +407,7 @@ def advance_now(pid:uuid.UUID):
         return view(c,load(c,pid))
 
 
-@router.post('/{pid}/resume')
+@router.post('/{pid}/resume',dependencies=[Depends(require_spend_permission)])
 def resume(pid:uuid.UUID):
     """Explicit human resume with the same ceiling; a failed batch restarts from its stored originals."""
     ready()

@@ -13,21 +13,8 @@ with db() as c:
 TARGET=int(config['target_seconds']);CAP=Decimal(config['budget'])-(Decimal('0') if config['data'].get('visual_reference') else Decimal('.15'))
 FADE=float(config['data'].get('mix_crossfade_seconds',0))
 MODEL='google/lyria-3-pro-preview'
-from studio.production_harness import audio_prompt
-# Recipe batches carry their music bible; legacy plans keep the free-direction prompt unchanged.
 RECIPE=config['data'].get('recipe') or {}
-MUSIC=RECIPE.get('music')
-REFERENCE=audio_prompt(MUSIC['style_id'],config['data']['music_brief'],MUSIC) if MUSIC else audio_prompt('custom',config['data']['music_brief'])
-MOODS=(MUSIC or {}).get('moods') or ['warm late-night calm','reflective rainy-window comfort','gentle hopeful intimacy','quiet moonlit warmth','soft morning contemplation','tender dusk nostalgia']
-KEYS=(MUSIC or {}).get('keys') or ['D minor','F major','A minor','B-flat major','G minor','E-flat major']
 DESCRIPTION=(config['data'].get('music_description') or 'Original instrumental '+RECIPE['copy']['style_title']+'.') if RECIPE.get('copy') else config['data'].get('music_description','Warm original instrumental lo-fi jazzhop.')
-
-def tempo(seq):
-    from studio.music_styles import requested_tempo
-    span=(MUSIC or {}).get('bpm_range')
-    if span and not __import__('re').search(r'\d{2,3}\s*bpm',config['data']['music_brief'],__import__('re').I):
-        return span[0]+(seq-1)%(span[1]-span[0]+1)
-    return requested_tempo(config['data']['music_brief'],seq)
 
 stop=threading.Event()
 original_settings=runtime.settings
@@ -68,12 +55,9 @@ def reserve_next():
         price=runtime.reserve(c,MODEL)
         seq=c.execute('SELECT count(*) n FROM jobs WHERE track_id LIKE %s',(BATCH+'-%',)).fetchone()['n']+1
         tid=f'{BATCH}-{seq:03}';jid=uuid.uuid4()
-        moods=MOODS;keys=KEYS
-        bpm=tempo(seq)
-        theme=['Tema I','Tema II','Tema III','Tema IV','Tema V','Tema VI'][(seq-1)%6]
-        title=f"{config['data']['title'][:55]} · {seq:03}"
-        prompt=REFERENCE+f'\nComposition title: {title}. Tempo: {bpm} BPM.'
-        prompt+=f'\nNew original composition {seq}, distinct from the previous radio batch: create a new melody and progression in {keys[(seq-1)%len(keys)]}, mood {moods[(seq-1)%len(moods)]}. Do not reuse an existing song. Preserve the restrained cozy lo-fi identity. Balance recognizable thematic returns with small harmonic surprises and gentle resolutions; never use sudden loudness changes or attention-grabbing effects. These are musical design intentions, not claims of neurological treatment. Complete around 120 seconds with a natural ending.'
+        from studio.music_direction import composition_request
+        direction=composition_request(config['data'],seq)
+        bpm,title,prompt=direction['bpm'],direction['title'],direction['prompt']
         c.execute("INSERT INTO tracks(id,title,collection,bpm,prompt,description,channel_id,status) VALUES(%s,%s,%s,%s,%s,%s,%s,'REVIEW')",(tid,title,config['data']['title'],bpm,prompt,DESCRIPTION,config['channel_id']))
         c.execute("INSERT INTO jobs(id,track_id,status,provider,model,estimated_cost,budget_reserved,prompt_snapshot,requested_seconds,submitted_at) VALUES(%s,%s,'RUNNING','openrouter',%s,%s,true,%s,120,now())",(jid,tid,MODEL,price,prompt))
         update(c);audit(c,'BATCH_REQUEST_RESERVED',tid,f'User authorized batch; target {TARGET}s; ceiling USD{CAP}; no auto retry');c.commit()

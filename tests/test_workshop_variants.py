@@ -275,6 +275,43 @@ finally:WORKSPACE.reset(marker)
 
 
 @DB
+def test_workshop_worker_error_log_omits_secret_exception_text(client,monkeypatch,tmp_path,caplog):
+    import logging
+    from studio import core,radio,workshop_worker
+    from studio.tenancy import WORKSPACE
+    from studio.workshop_api import KIND
+
+    _,identity=signup(client)
+    task_id=uuid.uuid4();secret='sentinel-private-provider-credential-987654'
+    payload={'operation':'short_render','project_id':str(uuid.uuid4()),
+             'sources':[{'asset_sha256':'a'*64,'asset_key':'private/source.mp4','clip_id':'clip'}]}
+    monkeypatch.setenv('LOFI_WORKSPACE_ID',str(identity['workspace_id']))
+    monkeypatch.setattr(radio,'CACHE',tmp_path)
+    def fail_fetch(*args,**kwargs):raise RuntimeError(secret)
+    monkeypatch.setattr(workshop_worker,'fetch',fail_fetch)
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with core.db() as c:
+            c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status) VALUES(%s,%s,'test',%s,0,'QUEUED')",
+                      (task_id,KIND,json.dumps(payload)))
+            c.commit()
+    finally:WORKSPACE.reset(marker)
+
+    with caplog.at_level(logging.ERROR,logger='studio.workshop_worker'):
+        assert workshop_worker.tick() is True
+    assert secret not in caplog.text
+    assert 'error_type=RuntimeError' in caplog.text
+    assert str(task_id) in caplog.text
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with core.db() as c:
+            row=c.execute('SELECT status,detail FROM factory_tasks WHERE id=%s',(task_id,)).fetchone()
+            assert row['status']=='FAILED'
+            assert secret not in row['detail']
+    finally:WORKSPACE.reset(marker)
+
+
+@DB
 def test_provider_callback_recovers_uncertain_video_job_and_deduplicates(client,monkeypatch):
     from studio.core import db
     from studio.tenancy import WORKSPACE
