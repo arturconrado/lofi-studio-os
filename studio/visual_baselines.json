@@ -141,18 +141,19 @@
    "face",
    "hair",
    "headphones",
+      "exact clothing, cardigan color and knit texture, top and necklace",
    "adult proportions",
-   "cat markings and eye colour",
+      "cat markings, coat, white areas and eye colour",
    "camera framing and lens",
    "illustration style",
-   "laptop position"
+      "laptop position",
+      "girl and cat positions in the composition"
   ],
   "adaptable": [
-   "cardigan colour by local mask recolor (never redrawn)",
    "weather overlay and intensity inside the window/sky region",
    "time-of-day light and lamp/fire glow",
-   "event poses from the reviewed action library",
-   "pixel-art rendering only as a reviewed variant of this same identity"
+      "environmental atmosphere and setting details that do not alter or obscure the characters",
+      "character motion from the reviewed action library, preserving face, outfit, proportions and identity"
   ]
  }
 }
