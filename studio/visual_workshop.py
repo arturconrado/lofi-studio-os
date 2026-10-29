@@ -346,7 +346,7 @@ def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None):
     cast = '\n'.join(c.name + ': ' + c.description for c in draft.characters)
     result = (f'Locked 16:9 camera. Theme: {draft.theme}. Scene: {draft.scene}. '
             f'Environment motion: {draft.scene_motion}. Characters: {cast}. '
-            'Preserve the exact identities, proportions, clothing, setting and illustration style from references. '
+            'Preserve the configured character identities, proportions and illustration style. Follow the scene brief for the setting and composition; reference backgrounds are not binding. '
             f'Action: {clip.motion}. '
             + (f'Complete action goal, shared across continuous parts: {clip.action_goal}. ' if clip.action_goal and kind=='video' else '')
             + ('Create one starting still image for human approval, no text or watermark.' if kind == 'image' else
@@ -361,8 +361,8 @@ def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None):
     if identity_prompt:
         if kind == 'image':
             result += (' Channel identity lock: ' + identity_prompt +
-                       ' The first input reference is the approved canonical character image. Use it for the girl and cat identity only; '
-                       'ignore its background, season, lighting and props. Follow this project scene for the new environment. Do not redesign the characters.')
+                       ' The first input reference is the primary approved identity anchor. Every following channel reference shows the same established characters in another approved scene. Compare them to preserve the same face, curly hair, headphones, clothing, proportions, tabby markings and illustration treatment. '
+                       'Use the references for character and channel-art identity only: do not copy their backgrounds, season, lighting, props, poses or story. Follow this project theme and scene for a fresh composition. Keep the recognizable channel framing language while allowing the requested setting, palette accents, weather, props and narrative moment to change. Do not redesign or replace the characters.')
         else:
             result += (' Channel identity lock: ' + identity_prompt +
                        ' Preserve these identities throughout every frame from the approved identity-bound starting still; do not morph, replace or reinterpret the characters.')

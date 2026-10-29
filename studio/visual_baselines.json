@@ -4,7 +4,12 @@
  "channel_profiles": {
   "00000000-0000-0000-0000-000000000001": {
    "identity_profile": "lofi-vibe-coding-canonical-v1",
-   "reference_pilot_id": "1192acca-4cea-5d5b-9cf2-0a436909fc0e"
+   "reference_pilot_id": "1192acca-4cea-5d5b-9cf2-0a436909fc0e",
+   "reference_pilot_ids": [
+    "1192acca-4cea-5d5b-9cf2-0a436909fc0e",
+    "277ef275-73f0-53fb-ba14-9046186151fd",
+    "013eb0ef-06e3-578f-a9c8-a49532b5478b"
+   ]
   }
  },
  "approved_episodes": [

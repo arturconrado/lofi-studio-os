@@ -51,7 +51,9 @@ def test_channel_identity_profile_changes_image_signature_and_is_present_in_gene
     assert signature(d,d.base,'image')!=before
     brief='Canonical woman with curly brown hair and the same tabby cat.'
     generated=prompt(d,d.base,'image',identity_prompt=brief)
-    assert 'first input reference is the approved canonical character image' in generated
+    assert 'first input reference is the primary approved identity anchor' in generated
+    assert 'Every following channel reference shows the same established characters' in generated
+    assert 'Follow this project theme and scene for a fresh composition' in generated
     assert 'ignore its background, season, lighting and props' in generated
 
 
@@ -207,7 +209,12 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
     assert gen('image').status_code==200
     initial=cl.get(url).json()
     assert submitted_payloads[0]['references'][0]['sha256']==initial['identity']['reference_sha256']
-    assert submitted_payloads[0]['reference_roles']==[{'index':0,'role':'canonical_character_identity','sha256':initial['identity']['reference_sha256']}]
+    identity_roles=submitted_payloads[0]['reference_roles']
+    assert len(identity_roles)==initial['identity']['reference_count']
+    assert identity_roles[0]['role']=='canonical_character_identity'
+    assert all(role['role']=='channel_character_identity_reference' for role in identity_roles[1:])
+    assert identity_roles[0]['sha256']==initial['identity']['reference_sha256']
+    assert [ref['sha256'] for ref in submitted_payloads[0]['references'][:3]]==[role['sha256'] for role in identity_roles]
     assert 'ignore its background, season, lighting and props' in submitted_payloads[0]['prompt']
     state=cl.get(url).json();image=state['states'][str(draft.base.id)]['image']
     review_url=url+f'/clips/{draft.base.id}/review/'
