@@ -92,6 +92,7 @@ class ProposalRequest(BaseModel):
     brief:str=Field(default='',max_length=600)
     creativity:Literal['low','medium']='low'
     draft_id:uuid.UUID|None=None
+    revision:int|None=Field(default=None,ge=1)
     confirm_cost:bool=False
 
 
@@ -106,12 +107,15 @@ def clean(raw):
 @router.post('',dependencies=[Depends(require_spend_permission)])
 def propose(body:ProposalRequest):
     if not body.confirm_cost:raise HTTPException(422,'Confirme a reserva de até US$0,10 para as sugestões')
+    if body.draft_id:
+        if body.revision is None:raise HTTPException(422,'Informe a revisão atual do roteiro antes de sugerir eventos')
+        require_draft_revision(body.channel_id,body.draft_id,body.revision)
     from .form_assistant import bounded_json_call
     user=json.dumps({'brief':body.brief,'creativity':body.creativity,'context':context(body.spec)},ensure_ascii=False)
     items,reused,cost=bounded_json_call(body.request_id,body.channel_id,KIND,{'draft_id':str(body.draft_id) if body.draft_id else None},
                                         SYSTEM,user,clean,'proposals','Sugestões de eventos')
-    if body.draft_id:mark_pending(body.channel_id,body.draft_id,True)
-    return {'proposals':[p|{'validation':validate(body.spec,Proposal.model_validate(p))} for p in items],'reused':reused,
+    revision=mark_pending(body.channel_id,body.draft_id,True,body.revision) if body.draft_id else None
+    return {'proposals':[p|{'validation':validate(body.spec,Proposal.model_validate(p))} for p in items],'reused':reused,'revision':revision,
             'cost_usd':cost,'generation_started':False}
 
 
@@ -120,6 +124,7 @@ class ApplyRequest(BaseModel):
     spec:ProductionSpec
     proposal:Proposal
     draft_id:uuid.UUID|None=None
+    revision:int|None=Field(default=None,ge=1)
     confirm_reviewed:bool=False
 
 
@@ -132,11 +137,29 @@ def apply(body:ApplyRequest):
     with db() as c:profile(c,body.channel_id)
     result=validate(body.spec,body.proposal)
     if not result['valid'] or not result.get('applies'):raise HTTPException(409,'Sugestão não aplicável: '+' · '.join(result.get('reasons',[])) if not result['valid'] else 'Sugestão registrada no backlog; nada a aplicar')
-    if body.draft_id:mark_pending(body.channel_id,body.draft_id,False)
-    return {'spec':result['patch'],'new_assets':result['new_assets'],'saved':False}
+    revision=body.revision
+    if body.draft_id:
+        if revision is None:raise HTTPException(422,'Informe a revisão atual do roteiro para aplicar a sugestão')
+        revision=mark_pending(body.channel_id,body.draft_id,False,revision)
+    return {'spec':result['patch'],'new_assets':result['new_assets'],'revision':revision,'saved':False}
 
 
-def mark_pending(channel_id, draft_id, pending):
+def require_draft_revision(channel_id,draft_id,expected):
     from .core import db
+    from fastapi import HTTPException
     with db() as c:
-        c.execute("UPDATE creator_plans SET data=jsonb_set(COALESCE(data,'{}'::jsonb),'{event_proposals_pending}',%s::jsonb) WHERE id=%s AND channel_id=%s",(json.dumps(pending),draft_id,channel_id));c.commit()
+        row=c.execute("SELECT revision FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft'",(draft_id,channel_id)).fetchone()
+    if not row:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
+    if row['revision']!=expected:raise HTTPException(409,'O roteiro mudou. Recarregue a revisão atual antes de sugerir eventos.')
+
+
+def mark_pending(channel_id, draft_id, pending, expected):
+    from .core import db
+    from fastapi import HTTPException
+    with db() as c:
+        row=c.execute("SELECT * FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' FOR UPDATE",(draft_id,channel_id)).fetchone()
+        if not row:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
+        if row['revision']!=expected:raise HTTPException(409,'O roteiro mudou. Recarregue a revisão atual antes de salvar o estado das sugestões.')
+        data=dict(row['data']);data['event_proposals_pending']=pending
+        from .creator_plan_versions import save_locked_revision
+        revision=save_locked_revision(c,row,data,expected);c.commit();return revision

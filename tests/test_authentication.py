@@ -582,17 +582,32 @@ def test_free_storyboard_is_saved_scoped_and_never_queues_generation(client):
     assert r.status_code==200,r.text
     saved=r.json()
     assert not saved['generation_started'] and not saved['harness']['render_ready']
-    body['draft_id']=saved['id'];body['spec']['shirt_color']='pink'
-    assert client.post('/api/creator/storyboard/save',json=body).json()['id']==saved['id']
+    assert saved['revision']==1
+    body['draft_id']=saved['id'];body['draft_revision']=saved['revision'];body['spec']['shirt_color']='pink'
+    updated=client.post('/api/creator/storyboard/save',json=body).json()
+    assert updated['id']==saved['id'] and updated['revision']==2
     rows=client.get('/api/creator/plans',params={'channel_id':cid}).json()['plans']
-    assert rows[0]['plan']['production_spec']['shirt_color']=='pink'
+    assert rows[0]['revision']==2 and rows[0]['plan']['production_spec']['shirt_color']=='pink'
+    revisions=client.get(f"/api/creator/plans/{saved['id']}/revisions").json()['revisions']
+    assert [row['revision'] for row in revisions]==[2,1]
+    old=client.get(f"/api/creator/plans/{saved['id']}/revisions/1").json()
+    assert old['data']['production_spec']['shirt_color']!='pink'
+    assert old['sha256'] and len(old['sha256'])==64
+    from studio.creator_plan_versions import content_hash
+    assert old['sha256']==content_hash(old['data'])
+    missing_revision=dict(body);missing_revision.pop('draft_revision')
+    assert client.post('/api/creator/storyboard/save',json=missing_revision).status_code==422
+    stale=client.post('/api/creator/storyboard/save',json=body)
+    assert stale.status_code==409
     assert client.post('/api/creator/produce',json={'plan_id':saved['id'],'plan':saved['plan'],'confirm_cost':True,'budget':12}).status_code==409
     client.cookies.clear();_,other=signup(client);client.headers['X-CSRF-Token']=other['csrf_token']
     assert client.post('/api/creator/storyboard/save',json=body).status_code==404
+    assert client.get(f"/api/creator/plans/{saved['id']}/revisions").status_code==404
+    assert client.get(f"/api/creator/plans/{saved['id']}/revisions/1").status_code==404
 
 
 def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeypatch):
-    import json,io,hashlib
+    import copy,json,io,hashlib
     from PIL import Image
     from decimal import Decimal
     from studio import motion_validation as mv
@@ -626,26 +641,65 @@ def test_motion_pilot_is_idempotent_and_uncertainty_never_retries(client,monkeyp
     monkeypatch.setattr(studio.financial,'check_available',lambda c,amount:None)
     monkeypatch.setenv('S3_BUCKET','disposable-test')
     saved=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':{'hours':8,'asset_budget_usd':2,'character_reference':'reviewed:'+source_sha+':girl','cat_reference':'reviewed:'+source_sha+':cat'}},headers=headers).json()
-    body=dict(request_id=tid,plan_id=saved['id'],channel_id=cid,batch_id=bid,scene_id='ref',max_reservation_usd='.64',confirm_cost=True)
+    body=dict(request_id=tid,plan_id=saved['id'],channel_id=cid,batch_id=bid,scene_id='ref',revision=saved['revision'],max_reservation_usd='.64',confirm_cost=True)
     r=client.post('/api/creator/motion-validation',json=body,headers=headers)
     assert r.status_code==200,r.text
     assert r.json()['state']=='UNCERTAIN'
+    assert r.json()['plan_revision']==saved['revision']
+    history=client.get(f"/api/creator/plans/{saved['id']}/revisions").json()['revisions']
+    assert history[0]['revision']==saved['revision']
+    snapshot=client.get(f"/api/creator/plans/{saved['id']}/revisions/{history[0]['revision']}").json()
+    assert 'production_assets' not in snapshot['data']
+    from studio.creator_plan_versions import content_hash
+    assert snapshot['sha256']==content_hash(snapshot['data'])
     assert client.post('/api/creator/motion-validation',json=body,headers=headers).json()['state']=='UNCERTAIN'
     assert Client.sends==1
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            plan=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(saved['id'],)).fetchone()
+            data=copy.deepcopy(plan['data']);data['title']='Edited while asset remains uncertain'
+            from studio.creator_plan_versions import save_locked_revision
+            changed_revision=save_locked_revision(c,plan,data,plan['revision']);c.commit()
+    finally:WORKSPACE.reset(marker)
+    assert changed_revision==saved['revision']+1
+    stale=dict(body,request_id=str(uuid.uuid4()))
+    assert client.post('/api/creator/motion-validation',json=stale,headers=headers).status_code==409
     for _ in range(2):
-        body['request_id']=str(uuid.uuid4());assert client.post('/api/creator/motion-validation',json=body,headers=headers).status_code==200
-    body['request_id']=str(uuid.uuid4())
+        body['request_id']=str(uuid.uuid4());body['revision']=client.get(f"/api/creator/assembly/plans/{saved['id']}").json()['revision']
+        assert client.post('/api/creator/motion-validation',json=body,headers=headers).status_code==200
+    body['request_id']=str(uuid.uuid4());body['revision']=client.get(f"/api/creator/assembly/plans/{saved['id']}").json()['revision']
     assert client.post('/api/creator/motion-validation',json=body,headers=headers).status_code==409
     assert Client.sends==3
     marker=WORKSPACE.set(identity['workspace_id'])
     try:
         with db() as c:
-            c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'approved','video_key':'cached.mp4'}),tid));c.commit()
+            plan=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(saved['id'],)).fetchone()
+            completed_revision=mv.update_asset_state(c,saved['id'],tid,'REVIEW',
+                {'video_key':'cached.mp4','sha256':'a'*64,'seconds':8,'human_review':'pending'})
+            assert completed_revision==plan['revision']==changed_revision
+            report={'sha256':'a'*64,'full_decode_pass':True,'duration_seconds':8}
+            c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'reference_review':'pending','video_key':'cached.mp4','report':report,'plan_revision':completed_revision}),tid));c.commit()
+    finally:WORKSPACE.reset(marker)
+    review_body={'sha256':'a'*64,'confirm_identity':True,'confirm_motion_contact':True,'revision':completed_revision}
+    assert client.post('/api/creator/motion-validation/'+tid+'/review',json=dict(review_body,revision=completed_revision-1),headers=headers).status_code==409
+    approved=client.post('/api/creator/motion-validation/'+tid+'/review',json=review_body,headers=headers)
+    assert approved.status_code==200,approved.text
+    assert approved.json()['revision']==completed_revision
+    approved_snapshot=client.get(f"/api/creator/plans/{saved['id']}/revisions/{approved.json()['revision']}").json()
+    assert 'production_assets' not in approved_snapshot['data']
+    from studio.creator_plan_versions import content_hash
+    assert approved_snapshot['sha256']==content_hash(approved_snapshot['data'])
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            asset=c.execute('SELECT data->\'production_assets\'->%s asset FROM creator_plans WHERE id=%s',(tid,saved['id'])).fetchone()['asset']
+            assert asset['human_review']=='approved' and asset['human_review_sha256']=='a'*64
     finally:WORKSPACE.reset(marker)
     def unavailable():raise AssertionError('Approved reuse must not call provider or request credentials')
     monkeypatch.setattr(mv,'catalog_quote',unavailable)
     monkeypatch.setattr(mv.runtime,'key',unavailable)
-    body['request_id']=str(uuid.uuid4())
+    body['request_id']=str(uuid.uuid4());body['revision']=client.get(f"/api/creator/assembly/plans/{saved['id']}").json()['revision']
     reused=client.post('/api/creator/motion-validation',json=body,headers=headers)
     assert reused.status_code==200,reused.text
     assert reused.json()['reused'] and reused.json()['id']==tid
