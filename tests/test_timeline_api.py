@@ -27,12 +27,46 @@ def test_missing_inputs_do_not_queue_or_charge_and_require_csrf(client):
     assert client.post(base+'/clips/not_an_action',files={'file':('x.mp4',b'invalid')},headers=headers).status_code==422
 
 
+def test_assembly_status_exposes_revision_digest_and_identity_source(client):
+    import json
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio.production_harness import production_spec_hash
+    from studio.creator_plan_versions import content_hash
+    target,headers,spec,cid=draft(client)
+    source=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers)
+    assert source.status_code==200,source.text
+    source=source.json()['id'];asset_id=str(uuid.uuid4());sha='a'*64
+    workspace=client.get('/api/auth/me').json()['workspace_id'];marker=WORKSPACE.set(workspace)
+    try:
+        with db() as c:
+            row=c.execute('SELECT data FROM creator_plans WHERE id=%s',(source,)).fetchone()
+            asset={'role':'interaction_reference','state':'APPROVED_REFERENCE','human_review':'approved',
+                   'sha256':sha,'human_review_sha256':sha,
+                   'spec_sha256':production_spec_hash(row['data']['production_spec'])}
+            c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',%s::jsonb) WHERE id=%s",
+                      (json.dumps({asset_id:asset}),source));c.commit()
+    finally:WORKSPACE.reset(marker)
+
+    selected=client.post(f'/api/creator/assembly/plans/{target}/identity',
+                         json={'source_plan_id':source,'revision':1},headers=headers)
+    assert selected.status_code==200,selected.text
+    assert selected.json()['revision']==2
+    status=client.get(f'/api/creator/assembly/plans/{target}').json()
+    saved=client.get(f'/api/creator/plans/{target}/revisions/2').json()
+    assert status['revision']==2 and status['revision_sha256']==saved['sha256']==content_hash(saved['data'])
+    assert status['identity_reference']=={'kind':'plan','id':source,'title':saved['data']['identity_reference']['title'],
+                                          'sha256':sha,'canonical':False}
+
+
 def test_regions_survive_budget_save_and_never_approve_full_program(client):
     pid,headers,spec,cid=draft(client);base='/api/creator/assembly/plans/'+pid
-    regions={'sky':[[.6,0],[1,0],[1,.3],[.6,.3]],'lights':[[.6,.3],[1,.3],[1,.6],[.6,.6]],'cushion_box':[.1,.7,.2,.1],'confirm_regions':True}
-    assert client.post(base+'/regions',json=regions,headers=headers).status_code==200
+    regions={'revision':1,'sky':[[.6,0],[1,0],[1,.3],[.6,.3]],'lights':[[.6,.3],[1,.3],[1,.6],[.6,.6]],'cushion_box':[.1,.7,.2,.1],'confirm_regions':True}
+    saved_regions=client.post(base+'/regions',json=regions,headers=headers)
+    assert saved_regions.status_code==200 and saved_regions.json()['revision']==2
+    assert client.post(base+'/regions',json=regions,headers=headers).status_code==409
     spec['program_budget_usd']=14
-    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':pid,'spec':spec},headers=headers).status_code==200
+    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':pid,'draft_revision':2,'spec':spec},headers=headers).status_code==200
     data=client.get(base).json();assert data['environment']['reviewed'] and not data['preflight']['ready']
     assert 'scene_regions_review_missing' not in data['preflight']['failures']
     regions['sky']=[[-1,0],[1,0],[1,.3]]
@@ -44,7 +78,7 @@ def test_materials_and_render_jobs_are_workspace_private(client):
     client.cookies.clear();_,other=signup(client);other_headers={'X-CSRF-Token':other['csrf_token']}
     assert client.get(base).status_code==404
     assert client.post(base+'/render',json={'request_id':str(uuid.uuid4()),'confirm_local_render':True},headers=other_headers).status_code==404
-    assert client.post(base+'/clips/typing_idle',files={'file':('x.mp4',b'invalid')},headers=other_headers).status_code==404
+    assert client.post(base+'/clips/typing_idle',files={'file':('x.mp4',b'invalid')},data={'revision':'1'},headers=other_headers).status_code==404
 
 
 def test_real_clip_upload_review_and_compatible_reuse_are_separate(client,monkeypatch,tmp_path):
@@ -58,22 +92,50 @@ def test_real_clip_upload_review_and_compatible_reuse_are_separate(client,monkey
     pid,headers,spec,cid=draft(client);base='/api/creator/assembly/plans/'+pid
     video=tmp_path/'idle.mp4'
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=1280x720:rate=24:duration=2','-c:v','libx264','-threads','1','-preset','ultrafast','-pix_fmt','yuv420p',str(video)],check=True)
-    with video.open('rb') as handle:r=client.post(base+'/clips/typing_idle',files={'file':('idle.mp4',handle,'video/mp4')},headers=headers)
+    with video.open('rb') as handle:r=client.post(base+'/clips/typing_idle',files={'file':('idle.mp4',handle,'video/mp4')},data={'revision':'1'},headers=headers)
     assert r.status_code==200,r.text
     clip=r.json();action=next(a for a in client.get(base).json()['actions'] if a['action']=='typing_idle')
+    assert clip['revision']==1
+    assert [entry['revision'] for entry in client.get(f'/api/creator/plans/{pid}/revisions').json()['revisions']]==[1]
     assert not action['ready']
-    review={'sha256':clip['sha256'],'confirm_identity_props':True,'confirm_motion':True,'confirm_pose_anchors':True}
+    assert action['clips'][0]['origin']=={'kind':'uploaded_to_plan','id':pid}
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    marker=WORKSPACE.set(client.get('/api/auth/me').json()['workspace_id'])
+    try:
+        with db() as c:
+            row=c.execute('SELECT * FROM creator_plans WHERE id=%s FOR UPDATE',(pid,)).fetchone()
+            data=dict(row['data']);data['editorial_note']='Keep the approved clip linked to its source hash.'
+            from studio.creator_plan_versions import save_locked_revision
+            current_revision=save_locked_revision(c,row,data,row['revision']);c.commit()
+    finally:WORKSPACE.reset(marker)
+    assert current_revision==2
+    review={'revision':current_revision,'sha256':clip['sha256'],'confirm_identity_props':True,'confirm_motion':True,'confirm_pose_anchors':True}
+    stale=dict(review,confirm_loop_seam=True);stale['revision']=1
+    assert client.post(base+'/clips/'+clip['id']+'/review',json=stale,headers=headers).status_code==409
     assert client.post(base+'/clips/'+clip['id']+'/review',json=review,headers=headers).status_code==422
     review['confirm_loop_seam']=True
-    assert client.post(base+'/clips/'+clip['id']+'/review',json=review,headers=headers).status_code==200
+    reviewed=client.post(base+'/clips/'+clip['id']+'/review',json=review,headers=headers)
+    assert reviewed.status_code==200,reviewed.text
+    assert reviewed.json()['revision']==2
+    approved=client.get(f'/api/creator/plans/{pid}/revisions/2').json()
+    assert 'production_assets' not in approved['data']
+    marker=WORKSPACE.set(client.get('/api/auth/me').json()['workspace_id'])
+    try:
+        with db() as c:
+            asset=c.execute("SELECT data->'production_assets'->%s asset FROM creator_plans WHERE id=%s",(clip['id'],pid)).fetchone()['asset']
+            assert asset['status']=='APPROVED_ACTION' and asset['human_review_sha256']==clip['sha256']
+    finally:WORKSPACE.reset(marker)
     new=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers).json()['id']
     newbase='/api/creator/assembly/plans/'+new
     assert client.get(newbase).json()['reusable_clips']==1
-    assert client.post(newbase+'/reuse',json={},headers=headers).json()['reused_clips']==1
-    assert client.post(newbase+'/reuse',json={},headers=headers).json()['reused_clips']==0
+    reused=client.post(newbase+'/reuse',json={'revision':1},headers=headers).json()
+    assert reused['reused_clips']==1 and reused['revision']==1
+    reused=client.post(newbase+'/reuse',json={'revision':1},headers=headers).json()
+    assert reused['reused_clips']==0 and reused['revision']==1
     assert next(a for a in client.get(newbase).json()['actions'] if a['action']=='typing_idle')['ready']
     spec['shirt_color']='pink'
-    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':new,'spec':spec},headers=headers).status_code==200
+    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':new,'draft_revision':1,'spec':spec},headers=headers).status_code==200
     assert not next(a for a in client.get(newbase).json()['actions'] if a['action']=='typing_idle')['ready']
 
 
@@ -100,7 +162,7 @@ def test_local_queue_is_idempotent_version_bound_and_cannot_review_unrendered_jo
     jid=first.json()['id'];review={'sha256':'a'*64,'confirm_actions_identity_props':True,'confirm_transitions_time':True,'confirm_audio_style_rights':True}
     assert client.post('/api/creator/assembly/jobs/'+jid+'/review',json=review,headers=headers).status_code==409
     spec['shirt_color']='pink'
-    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':pid,'spec':spec},headers=headers).status_code==200
+    assert client.post('/api/creator/storyboard/save',json={'channel_id':cid,'draft_id':pid,'draft_revision':1,'spec':spec},headers=headers).status_code==200
     assert client.post(base+'/render',json=body,headers=headers).status_code==409
 
 
@@ -149,24 +211,27 @@ def test_approved_scene_regions_need_no_cushion_and_clip_masks_bind_to_clip(clie
     spec|={'cadence':'custom_markers','markers':[{'minute':15,'sequence':'breath_pet'}],'contextual_actions':['fireplace_glow_rises']}
     pid=client.post('/api/creator/storyboard/save',json={'channel_id':cid,'spec':spec},headers=headers).json()['id']
     base='/api/creator/assembly/plans/'+pid
-    regions={'sky':[[.6,0],[1,0],[1,.3],[.6,.3]],'fire':[[0,.2],[.2,.2],[.2,.5]],'confirm_regions':True}
+    regions={'revision':1,'sky':[[.6,0],[1,0],[1,.3],[.6,.3]],'fire':[[0,.2],[.2,.2],[.2,.5]],'confirm_regions':True}
     r=client.post(base+'/regions',json=regions,headers=headers);assert r.status_code==200,r.text
+    assert r.json()['revision']==2
+    assert client.post(base+'/regions',json=regions,headers=headers).status_code==409
     env=client.get(base).json()['environment'];assert env['cushion_box'] is None and env['fire']
     video=tmp_path/'pet.mp4'
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=1280x720:rate=24:duration=11','-c:v','libx264','-threads','1','-preset','ultrafast','-pix_fmt','yuv420p',str(video)],check=True)
-    with video.open('rb') as handle:clip=client.post(base+'/clips/pet_cat',files={'file':('pet.mp4',handle,'video/mp4')},headers=headers).json()
+    with video.open('rb') as handle:clip=client.post(base+'/clips/pet_cat',files={'file':('pet.mp4',handle,'video/mp4')},data={'revision':'2'},headers=headers).json()
     frame={'shirt':[[.1,.5],[.3,.5],[.3,.9]],'protected_girl':[[.4,.1],[.6,.1],[.6,.4]]}
-    masks={'sha256':clip['sha256'],'keyframes':[{'t':0,**frame},{'t':5,**frame}],'confirm_every_frame':True}
+    masks={'revision':clip['revision'],'sha256':clip['sha256'],'keyframes':[{'t':0,**frame},{'t':5,**frame}],'confirm_every_frame':True}
     path=base+'/clips/'+clip['id']+'/masks'
     assert client.post(path,json=masks|{'confirm_every_frame':False},headers=headers).status_code==422
     uneven=masks|{'keyframes':[{'t':0,**frame},{'t':5,**frame|{'shirt':[[.1,.5],[.3,.5],[.3,.9],[.1,.9]]}}]}
     assert client.post(path,json=uneven,headers=headers).status_code==422
     assert client.post(path,json=masks|{'sha256':'f'*64},headers=headers).status_code==409
     assert client.post(path,json=masks|{'keyframes':[{'t':30,**frame}]},headers=headers).status_code==422
-    assert client.post(path,json=masks,headers=headers).status_code==200
+    saved_masks=client.post(path,json=masks,headers=headers);assert saved_masks.status_code==200,saved_masks.text
     saved=client.get(base).json()['environment']['clip_masks'][clip['sha256']]
     assert saved['reviewed'] and len(saved['keyframes'])==2
     # Re-saving fixed regions keeps per-clip masks.
+    regions['revision']=saved_masks.json()['revision']
     assert client.post(base+'/regions',json=regions,headers=headers).status_code==200
     assert clip['sha256'] in client.get(base).json()['environment']['clip_masks']
 
@@ -206,5 +271,5 @@ def test_baseline_motion_must_come_from_the_scenario_episode(client):
             init_ambient(c)
             c.execute("INSERT INTO ambient_pilots(id,channel_id,title,video_key,silent_key,report,plan) VALUES(%s,%s,'Greenhouse','v','s','{}','{}')",(greenhouse,cid));c.commit()
     finally:WORKSPACE.reset(marker)
-    r=client.post(f'/api/creator/assembly/plans/{pid}/baseline-motion',json={'source_pilot_id':greenhouse},headers=headers)
+    r=client.post(f'/api/creator/assembly/plans/{pid}/baseline-motion',json={'source_pilot_id':greenhouse,'revision':1},headers=headers)
     assert r.status_code==409 and 'cenário' in r.text

@@ -1,7 +1,7 @@
 """Private portal contract for reviewed inputs and durable local timeline jobs."""
-import hashlib,json,math,os,tempfile,uuid
+import copy,hashlib,json,math,os,tempfile,uuid
 from pathlib import Path
-from fastapi import APIRouter,HTTPException,UploadFile,File,Request
+from fastapi import APIRouter,HTTPException,UploadFile,File,Form,Request
 from typing import Literal
 from pydantic import BaseModel,Field,model_validator
 from .core import db,storage,audit
@@ -53,8 +53,12 @@ def compatible_assets(c,row):
     return result
 
 
+class PlanRevision(BaseModel):
+    revision:int=Field(ge=1)
+
+
 @router.post('/plans/{pid}/reuse')
-def reuse(pid:uuid.UUID):
+def reuse(pid:uuid.UUID,body:PlanRevision):
     with db() as c:
         row=get_plan(c,pid,True);available=compatible_assets(c,row)
         existing={(a.get('sha256'),a.get('cache_fingerprint')) for a in row['data'].get('production_assets',{}).values() if a.get('status')=='APPROVED_ACTION'}
@@ -65,8 +69,11 @@ def reuse(pid:uuid.UUID):
             existing.add((a['sha256'],a['cache_fingerprint']))
             additions[str(uuid.uuid4())]=a|{'reused_from_plan':str(entry['source_plan']),'spec_sha256':production_spec_hash(row['data']['production_spec'])}
         if additions:
-            c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',COALESCE(data->'production_assets','{}'::jsonb)||%s::jsonb) WHERE id=%s",(json.dumps(additions),pid));audit(c,'TIMELINE_ACTIONS_REUSED',str(pid),str(len(additions)));c.commit()
-    return {'reused_clips':len(additions),'paid_calls':0}
+            data=dict(row['data']);assets=dict(data.get('production_assets') or {});assets.update(additions);data['production_assets']=assets
+            from .creator_plan_versions import save_locked_revision
+            revision=save_locked_revision(c,row,data,body.revision);audit(c,'TIMELINE_ACTIONS_REUSED',str(pid),str(len(additions)));c.commit()
+        else:revision=row['revision']
+    return {'reused_clips':len(additions),'revision':revision,'paid_calls':0}
 
 
 def identity_sources(c,row):
@@ -82,15 +89,18 @@ def identity_sources(c,row):
                 sources.append({'plan_id':str(p['id']),'title':data.get('title','Referência do estúdio')+' · '+str(p['minutes'])+' min','sha256':a['sha256'],'reference_video_url':'/api/creator/motion-validation/'+str(uuid.UUID(key))+'/video'})
     from .visual_identity import REGISTRY
     for entry in REGISTRY['approved_episodes']:
-        owned=c.execute('SELECT id FROM ambient_pilots WHERE id=%s AND channel_id=%s',(uuid.UUID(entry['pilot_id']),row['channel_id'])).fetchone()
+        try:pilot_id=uuid.UUID(entry['pilot_id'])
+        except (ValueError,TypeError,AttributeError):continue
+        owned=c.execute('SELECT id FROM ambient_pilots WHERE id=%s AND channel_id=%s',(pilot_id,row['channel_id'])).fetchone()
         if owned:
-            sources.append({'pilot_id':entry['pilot_id'],'plan_id':'episode:'+entry['pilot_id'],'title':entry['title']+' · referência canônica','sha256':entry['files']['source']['sha256'],'canonical':True})
+            sources.append({'pilot_id':str(pilot_id),'plan_id':'episode:'+str(pilot_id),'title':entry['title']+' · referência canônica','sha256':entry['files']['source']['sha256'],'canonical':True})
     return sources
 
 
 class IdentitySelection(BaseModel):
     source_plan_id:uuid.UUID|None=None
     source_pilot_id:uuid.UUID|None=None
+    revision:int=Field(ge=1)
 
     @model_validator(mode='after')
     def one_source(self):
@@ -106,8 +116,16 @@ def select_identity(pid:uuid.UUID,body:IdentitySelection):
         source=next((s for s in sources if s['plan_id']==source_id),None)
         if not source:raise HTTPException(409,'Escolha uma referência aprovada neste canal')
         spec=dict(row['data']['production_spec']);spec.update(character_reference='reviewed:'+source['sha256']+':girl',cat_reference='reviewed:'+source['sha256']+':cat')
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_spec}',%s::jsonb) WHERE id=%s",(json.dumps(spec,ensure_ascii=False),pid));audit(c,'TIMELINE_IDENTITY_SELECTED',str(pid),source_id);c.commit()
-    return {'production_spec':spec,'paid_calls':0,'reviews_must_match_new_identity':True}
+        data=dict(row['data']);data['production_spec']=spec
+        data['identity_reference']={
+            'kind':'pilot' if body.source_pilot_id else 'plan',
+            'id':str(body.source_pilot_id or body.source_plan_id),
+            'title':source['title'],'sha256':source['sha256'],
+            'canonical':bool(source.get('canonical')),
+        }
+        from .creator_plan_versions import save_locked_revision
+        revision=save_locked_revision(c,row,data,body.revision);audit(c,'TIMELINE_IDENTITY_SELECTED',str(pid),source_id);c.commit()
+    return {'production_spec':spec,'revision':revision,'paid_calls':0,'reviews_must_match_new_identity':True}
 
 
 
@@ -119,6 +137,7 @@ def reuse_baseline_motion(pid:uuid.UUID,body:IdentitySelection):
     if not entry:raise HTTPException(404,'Referência canônica não encontrada')
     with db() as c:
         row=get_plan(c,pid);spec=row['data']['production_spec'];digest=production_spec_hash(spec)
+        if row['revision']!=body.revision:raise HTTPException(409,'O roteiro mudou. Recarregue a versão atual antes de reutilizar o clipe.')
         if not c.execute('SELECT id FROM ambient_pilots WHERE id=%s AND channel_id=%s',(body.source_pilot_id,row['channel_id'])).fetchone():raise HTTPException(404,'Referência não encontrada neste canal')
         # The base motion must come from the episode approved for this scenario; otherwise a
         # Greenhouse clip would carry the Snowy fingerprint and only a reviewer could notice.
@@ -150,8 +169,10 @@ def reuse_baseline_motion(pid:uuid.UUID,body:IdentitySelection):
     with db() as c:
         latest=get_plan(c,pid,True)
         if production_spec_hash(latest['data']['production_spec'])!=digest:raise HTTPException(409,'O roteiro mudou; selecione a referência novamente')
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',COALESCE(data->'production_assets','{}'::jsonb)||%s::jsonb) WHERE id=%s",(json.dumps({aid:asset}),pid));audit(c,'CANONICAL_MOTION_REUSED',str(pid),str(body.source_pilot_id));c.commit()
-    return {'reused':True,'paid_calls':0,'review_required':True}
+        data=dict(latest['data']);assets=dict(data.get('production_assets') or {});assets[aid]=asset;data['production_assets']=assets
+        from .creator_plan_versions import save_locked_revision
+        revision=save_locked_revision(c,latest,data,body.revision);audit(c,'CANONICAL_MOTION_REUSED',str(pid),str(body.source_pilot_id));c.commit()
+    return {'reused':True,'revision':revision,'paid_calls':0,'review_required':True}
 
 
 def inputs_hash(row,result):
@@ -185,6 +206,7 @@ def plan_economics(pid:uuid.UUID):
 def status(pid:uuid.UUID):
     with db() as c:
         row=get_plan(c,pid);compiled,result=materials(row);available=compatible_assets(c,row);identities=identity_sources(c,row)
+        revision_record=c.execute('SELECT sha256 FROM creator_plan_revisions WHERE plan_id=%s AND revision=%s',(pid,row['revision'])).fetchone()
         online=bool(c.execute("SELECT 1 FROM factory_tasks WHERE id=%s AND kind=%s AND updated_at>now()-interval '45 seconds'",(HEARTBEAT,WORKER)).fetchone())
         jobs=c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'plan_id'=%s ORDER BY created_at DESC LIMIT 10",(KIND,str(pid))).fetchall()
         scenes=c.execute('SELECT s.batch_id,s.id,s.title,s.image_key FROM program_scenes s JOIN production_batches b ON b.id=s.batch_id WHERE b.channel_id=%s AND s.image_key IS NOT NULL ORDER BY s.batch_id,s.position',(row['channel_id'],)).fetchall()
@@ -211,7 +233,8 @@ def status(pid:uuid.UUID):
     for task in compiled['asset_tasks']:
         pixel= row['data']['production_spec'].get('visual_variant') in ('pixel_art_original','pixel_art_reviewed')
         entries=[{'id':k,'seconds':a.get('seconds'),'reviewed':a.get('status')=='APPROVED_ACTION' and a.get('human_review_sha256')==a.get('sha256') and (not pixel or (a.get('visual_style_reviewed') is True and a.get('visual_style_review_sha256')==a.get('sha256'))),
-                  'sha256':a.get('sha256'),'preview_url':f'/api/creator/assembly/plans/{pid}/clips/{k}/video'}
+                  'sha256':a.get('sha256'),'origin':({'kind':'baseline_pilot','id':a['baseline_pilot_id']} if a.get('baseline_pilot_id') else {'kind':'reused_plan','id':a['reused_from_plan']} if a.get('reused_from_plan') else {'kind':'uploaded_to_plan','id':str(pid)}),
+                  'preview_url':f'/api/creator/assembly/plans/{pid}/clips/{k}/video'}
                  for k,a in row['data'].get('production_assets',{}).items() if a.get('role')=='action_clip' and a.get('cache_fingerprint')==task['cache_fingerprint']]
         contract=library()['actions'].get(task['action'],{})
         actions.append({'action':task['action'],'minimum_seconds':minimum_seconds(compiled,task['action']),'pose':contract,
@@ -221,7 +244,8 @@ def status(pid:uuid.UUID):
     if audio_binding.get('audio_sources'):audio_summary['source_programs']=[s['program_id'] for s in audio_binding['audio_sources']]
     from .scene_profiles import scene as scene_profile
     requirements=scene_profile(row['data']['production_spec']['scenario'])
-    return {'plan_id':pid,'input_sha256':inputs_hash(row,result),'preflight':result,'actions':actions,'audio_programs':programs,'scene_sources':scenes,
+    return {'plan_id':pid,'revision':row['revision'],'revision_sha256':revision_record['sha256'] if revision_record else None,
+            'identity_reference':row['data'].get('identity_reference'),'input_sha256':inputs_hash(row,result),'preflight':result,'actions':actions,'audio_programs':programs,'scene_sources':scenes,
             'scene_requires_lights_region':requirements['requires_lights_region'],'required_seconds':compiled['duration_seconds'],
             'required_music_style':row['data']['production_spec']['music_style'],
             'required_visual_variant':row['data']['production_spec'].get('visual_variant','canonical_illustrated'),
@@ -270,9 +294,10 @@ def clip_briefs(pid:uuid.UUID):
 
 
 @router.post('/plans/{pid}/clips/{action}')
-async def upload_clip(pid:uuid.UUID,action:str,file:UploadFile=File(...)):
+async def upload_clip(pid:uuid.UUID,action:str,file:UploadFile=File(...),revision:int=Form(...,ge=1)):
     with db() as c:
         row=get_plan(c,pid);compiled,_=materials(row)
+        if row['revision']!=revision:raise HTTPException(409,'O roteiro mudou. Recarregue a versão atual antes de enviar o clipe.')
     task=next((a for a in compiled['asset_tasks'] if a['action']==action),None)
     if not task:raise HTTPException(422,'Ação não prevista neste roteiro')
     cid=uuid.uuid4();digest=production_spec_hash(row['data']['production_spec'])
@@ -301,10 +326,12 @@ async def upload_clip(pid:uuid.UUID,action:str,file:UploadFile=File(...)):
                'full_decode_pass':True,'source_preserved':True,'human_review_sha256':None}
         with db() as c:
             latest=get_plan(c,pid,True)
-            if production_spec_hash(latest['data']['production_spec'])!=digest:raise HTTPException(409,'O roteiro mudou durante o envio. Reavalie o clipe na versão atual.')
-            c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{production_assets}',COALESCE(data->'production_assets','{}'::jsonb)||%s::jsonb) WHERE id=%s",(json.dumps({str(cid):asset}),pid))
+            if latest['revision']!=revision or production_spec_hash(latest['data']['production_spec'])!=digest:raise HTTPException(409,'O roteiro mudou durante o envio. Reavalie o clipe na versão atual.')
+            data=dict(latest['data']);assets=dict(data.get('production_assets') or {});assets[str(cid)]=asset;data['production_assets']=assets
+            from .creator_plan_versions import save_locked_revision
+            next_revision=save_locked_revision(c,latest,data,revision)
             audit(c,'ACTION_CLIP_IMPORTED',str(pid),str(cid));c.commit()
-        return {'id':cid,'sha256':sha,'seconds':seconds,'reviewed':False,'paid_calls':0}
+        return {'id':cid,'sha256':sha,'seconds':seconds,'revision':next_revision,'reviewed':False,'paid_calls':0}
     except HTTPException:raise
     except Exception:raise HTTPException(422,'Não foi possível validar o vídeo. Nenhuma geração foi enviada.') from None
     finally:await file.close()
@@ -320,6 +347,7 @@ def clip_video(pid:uuid.UUID,cid:uuid.UUID,request:Request):
 
 
 class ClipReview(BaseModel):
+    revision:int=Field(ge=1)
     sha256:str=Field(pattern=r'^[a-f0-9]{64}$')
     confirm_identity_props:bool=False
     confirm_motion:bool=False
@@ -332,20 +360,23 @@ class ClipReview(BaseModel):
 def review_clip(pid:uuid.UUID,cid:uuid.UUID,body:ClipReview):
     if not all((body.confirm_identity_props,body.confirm_motion,body.confirm_pose_anchors)):raise HTTPException(422,'Confira identidade, objetos, movimento e poses')
     with db() as c:
-        row=get_plan(c,pid,True);asset=row['data'].get('production_assets',{}).get(str(cid))
+        row=get_plan(c,pid,True);data=copy.deepcopy(row['data']);asset=data.get('production_assets',{}).get(str(cid))
         if not asset or asset.get('role')!='action_clip' or asset.get('sha256')!=body.sha256 or asset.get('spec_sha256')!=production_spec_hash(row['data']['production_spec']):raise HTTPException(409,'Clipe ou roteiro mudou; revise a versão atual')
         if asset['action']=='typing_idle' and not body.confirm_loop_seam:raise HTTPException(422,'Confira também a continuidade do loop de digitação')
         pixel=row['data']['production_spec'].get('visual_variant') in ('pixel_art_original','pixel_art_reviewed')
         if pixel and not body.confirm_visual_style:raise HTTPException(422,'Confira também o estilo pixel-art 8-bit do clipe')
         asset.update(status='APPROVED_ACTION',human_review_sha256=body.sha256,pose_anchors_reviewed=True,loop_seam_reviewed=body.confirm_loop_seam,
                      visual_style_reviewed=bool(body.confirm_visual_style),visual_style_review_sha256=body.sha256 if body.confirm_visual_style else None)
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,ARRAY['production_assets',%s],%s::jsonb) WHERE id=%s",(str(cid),json.dumps(asset),pid));audit(c,'ACTION_CLIP_REVIEWED',str(pid),str(cid));c.commit()
-    return {'reviewed':True,'program_approved':False}
+        assets=dict(data.get('production_assets') or {});assets[str(cid)]=asset;data['production_assets']=assets
+        from .creator_plan_versions import save_locked_revision
+        revision=save_locked_revision(c,row,data,body.revision);audit(c,'ACTION_CLIP_REVIEWED',str(pid),str(cid));c.commit()
+    return {'reviewed':True,'revision':revision,'program_approved':False}
 
 
 class Soundtrack(BaseModel):
     program_ids:list[str]=Field(min_length=1,max_length=8)
     confirm_style_and_listening:bool=False
+    revision:int=Field(ge=1)
 
 
 @router.post('/plans/{pid}/soundtrack')
@@ -383,8 +414,10 @@ def bind_soundtrack(pid:uuid.UUID,body:Soundtrack):
         value={'audio_sources':audio_sources,'sha256':sha,'human_review_sha256':sha,
                'seconds':seconds,'unique_measured_seconds':unique,'style_reviewed':True,'source_preserved':True,
                'spec_sha256':production_spec_hash(row['data']['production_spec'])}
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{assembly_audio}',%s::jsonb) WHERE id=%s",(json.dumps(value),pid));audit(c,'TIMELINE_SOUNDTRACK_SELECTED',str(pid),','.join(body.program_ids));c.commit()
-    return {'selected':True,'source_programs':body.program_ids,'seconds':seconds,'unique_measured_seconds':unique,'paid_calls':0}
+        data=dict(row['data']);data['assembly_audio']=value
+        from .creator_plan_versions import save_locked_revision
+        revision=save_locked_revision(c,row,data,body.revision);audit(c,'TIMELINE_SOUNDTRACK_SELECTED',str(pid),','.join(body.program_ids));c.commit()
+    return {'selected':True,'revision':revision,'source_programs':body.program_ids,'seconds':seconds,'unique_measured_seconds':unique,'paid_calls':0}
 
 
 Polygon=list[tuple[float,float]]
@@ -399,6 +432,7 @@ def check_polygon(polygon):
 
 
 class Regions(BaseModel):
+    revision:int=Field(ge=1)
     sky:Polygon=Field(min_length=3,max_length=30)
     lights:Polygon=Field(default_factory=list,max_length=30)
     cushion_box:tuple[float,float,float,float]|None=None
@@ -433,7 +467,7 @@ def save_regions(pid:uuid.UUID,body:Regions):
         if profile_['requires_lights_region'] and not body.lights:raise HTTPException(422,'Marque também a área das luzes')
         if 'cushion' in profile_['props'] and not body.cushion_box:raise HTTPException(422,'Marque a área do texto da almofada')
         if 'cushion' in profile_['props'] and body.recolor and not body.cushion_color:raise HTTPException(422,'Marque também a almofada para recolorir')
-        value=body.model_dump(exclude={'confirm_regions','confirm_recolor_frames'})|{'reviewed':True,'spec_sha256':production_spec_hash(spec),'scenario':spec['scenario']}
+        value=body.model_dump(exclude={'revision','confirm_regions','confirm_recolor_frames'})|{'reviewed':True,'spec_sha256':production_spec_hash(spec),'scenario':spec['scenario']}
         if 'cushion' not in profile_['props']:value['cushion_box']=None
         previous=row['data'].get('assembly_environment') or {}
         if previous.get('clip_masks'):value['clip_masks']=previous['clip_masks']
@@ -443,8 +477,10 @@ def save_regions(pid:uuid.UUID,body:Regions):
             if not result['assembly']['assets_ready']:raise HTTPException(409,'Confira todos os movimentos antes de aplicar máscaras fixas')
             value['recolor_asset_shas']=sorted({s['asset_sha256'] for s in result['assembly']['segments']})
             value['recolor_color']=spec['shirt_color']
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{assembly_environment}',%s::jsonb) WHERE id=%s",(json.dumps(value),pid));audit(c,'TIMELINE_REGIONS_REVIEWED',str(pid));c.commit()
-    return {'saved':True,'paid_calls':0}
+        data=dict(row['data']);data['assembly_environment']=value
+        from .creator_plan_versions import save_locked_revision
+        revision=save_locked_revision(c,row,data,body.revision);audit(c,'TIMELINE_REGIONS_REVIEWED',str(pid));c.commit()
+    return {'saved':True,'revision':revision,'paid_calls':0}
 
 
 class RenderRequest(BaseModel):
@@ -578,6 +614,7 @@ class MaskKeyframe(BaseModel):
 
 
 class ClipMasks(BaseModel):
+    revision:int=Field(ge=1)
     sha256:str=Field(pattern=r'^[a-f0-9]{64}$')
     keyframes:list[MaskKeyframe]=Field(min_length=1,max_length=60)
     confirm_every_frame:bool=False
@@ -606,5 +643,8 @@ def save_clip_masks(pid:uuid.UUID,cid:uuid.UUID,body:ClipMasks):
         if not environment or not environment.get('reviewed'):raise HTTPException(409,'Salve primeiro as áreas fixas da cena')
         masks=dict(environment.get('clip_masks') or {})
         masks[body.sha256]={'reviewed':True,'keyframes':[k.model_dump() for k in body.keyframes]}
-        c.execute("UPDATE creator_plans SET data=jsonb_set(data,'{assembly_environment,clip_masks}',%s::jsonb) WHERE id=%s",(json.dumps(masks),pid));audit(c,'TIMELINE_CLIP_MASKS_REVIEWED',str(pid),str(cid));c.commit()
-    return {'saved':True,'keyframes':len(body.keyframes),'paid_calls':0}
+        value=dict(environment);value['clip_masks']=masks
+        data=dict(row['data']);data['assembly_environment']=value
+        from .creator_plan_versions import save_locked_revision
+        revision=save_locked_revision(c,row,data,body.revision);audit(c,'TIMELINE_CLIP_MASKS_REVIEWED',str(pid),str(cid));c.commit()
+    return {'saved':True,'revision':revision,'keyframes':len(body.keyframes),'paid_calls':0}

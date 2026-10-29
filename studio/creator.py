@@ -16,7 +16,7 @@ def saved_plans(channel_id:uuid.UUID=uuid.UUID('00000000-0000-0000-0000-00000000
  with db() as c:
   from .channels import profile
   profile(c,channel_id)
-  rows=c.execute("SELECT p.id,p.theme,p.minutes,p.data AS plan,p.status,p.created_at,b.budget FROM creator_plans p LEFT JOIN production_batches b ON b.id=p.program_id WHERE p.channel_id=%s AND (p.status='draft' OR (p.status='failed' AND b.video_key IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.track_id LIKE b.id||'-%%'))) ORDER BY p.created_at DESC LIMIT 20",(channel_id,)).fetchall()
+  rows=c.execute("SELECT p.id,p.theme,p.minutes,p.data AS plan,p.status,p.revision,p.created_at,b.budget FROM creator_plans p LEFT JOIN production_batches b ON b.id=p.program_id WHERE p.channel_id=%s AND (p.status='draft' OR (p.status='failed' AND b.video_key IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.track_id LIKE b.id||'-%%'))) ORDER BY p.created_at DESC LIMIT 20",(channel_id,)).fetchall()
  from .production_harness import production_spec_hash
  for row in rows:
   if row['plan'].get('production_spec'):row['spec_sha256']=production_spec_hash(row['plan']['production_spec'])
@@ -25,6 +25,8 @@ def saved_plans(channel_id:uuid.UUID=uuid.UUID('00000000-0000-0000-0000-00000000
 def init(c):
  c.execute("CREATE TABLE IF NOT EXISTS creator_plans(id UUID PRIMARY KEY,request_id UUID UNIQUE NOT NULL,theme TEXT NOT NULL,minutes INTEGER NOT NULL,data JSONB,status TEXT NOT NULL,reserved NUMERIC NOT NULL DEFAULT .10,actual_cost NUMERIC,program_id TEXT UNIQUE,created_at TIMESTAMPTZ DEFAULT now())")
  c.execute('ALTER TABLE creator_plans ALTER COLUMN reserved SET DEFAULT .10')
+ from .creator_plan_versions import initialize as initialize_versions
+ initialize_versions(c)
  c.execute("CREATE TABLE IF NOT EXISTS program_metadata(program_id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT NOT NULL,theme TEXT NOT NULL,updated_at TIMESTAMPTZ DEFAULT now())")
  from .channels import init as init_channels
  init_channels(c)
@@ -65,7 +67,7 @@ def plan(body:PlanRequest):
   if not runtime.settings(c)['enabled']:raise HTTPException(409,'Geração paga desativada')
   previous=c.execute('SELECT * FROM creator_plans WHERE request_id=%s',(body.request_id,)).fetchone()
   if previous:
-   if previous['data']:return {'id':previous['id'],'plan':previous['data'],'minutes':previous['minutes'],'reused':True}
+   if previous['data']:return {'id':previous['id'],'plan':previous['data'],'minutes':previous['minutes'],'revision':previous['revision'],'reused':True}
    raise HTTPException(409,'Este pedido já foi enviado; confira o histórico antes de tentar outra vez')
   if c.execute("SELECT count(*) n FROM creator_plans WHERE status='planning'").fetchone()['n']:raise HTTPException(409,'Um plano já está sendo criado. Aguarde sua conclusão.')
   from .financial import check_available
@@ -116,8 +118,12 @@ def plan(body:PlanRequest):
   result['publication_metadata']={'native_growth':{'generated':True,'request_id':str(body.request_id),'primary_phrase_source':primary_phrase_source,
       'search_phrase_options':signals,'channel_memory_version':channel_memory['version'],'channel_memory_source_ids':[sid for item in channel_memory['items'] for sid in item.get('source_ids',[])],'cost_usd':cost},'growth_context':{'theme':body.theme,'intent':body.intent,
       'music_style':result.get('music_description',''),'scene':result.get('visual_prompt','')}}
-  with db() as c:c.execute("UPDATE creator_plans SET data=%s,status='draft',actual_cost=%s,reserved=COALESCE(%s,reserved) WHERE id=%s",(json.dumps(result,ensure_ascii=False),cost,cost,pid));audit(c,'CREATIVE_PLAN_GENERATED',str(pid),MODEL);c.commit()
-  return {'id':pid,'plan':result,'minutes':body.minutes,'cost_usd':cost,'research_context':result['research_context']}
+  with db() as c:
+   c.execute("UPDATE creator_plans SET data=%s,status='draft',actual_cost=%s,reserved=COALESCE(%s,reserved) WHERE id=%s",(json.dumps(result,ensure_ascii=False),cost,cost,pid))
+   from .creator_plan_versions import append
+   append(c,pid,1,result)
+   audit(c,'CREATIVE_PLAN_GENERATED',str(pid),MODEL);c.commit()
+  return {'id':pid,'plan':result,'minutes':body.minutes,'revision':1,'cost_usd':cost,'research_context':result['research_context']}
  except Exception as e:
   with db() as c:c.execute("UPDATE creator_plans SET status='failed' WHERE id=%s",(pid,));c.commit()
   raise HTTPException(502,'Não foi possível concluir o plano de IA. Não houve nova tentativa automática.') from None
@@ -132,7 +138,7 @@ def recipe_prompt(prompt,recipe):
   ref=reference_brief(v.get('default_scenario'))
   if ref:prompt+='. Keep the canonical identity exactly: '+ref['identity']['girl']+' '+ref['identity']['cat']
  return prompt+'. Channel recipe: '+recipe['copy']['style_title']+'. Musical direction: '+(m.get('bible') or DIRECTIONS[m['style_id']])+(' Instruments: '+', '.join(m['instruments'])+'.' if m.get('instruments') else '')
-def authorize_batch(c,plan_id,plan_data,minutes,channel_id,budget,covered_by_production_id=None):
+def authorize_batch(c,plan_id,plan_data,minutes,channel_id,budget,covered_by_production_id=None,expected_revision=None):
  """Book one bounded music batch for a plan. Caller holds lock 192837467 and checked paid generation."""
  if c.execute("SELECT 1 FROM production_batches WHERE channel_id=%s AND state IN ('producing','waiting','queued')",(channel_id,)).fetchone():raise HTTPException(409,'Este canal já tem um lote em produção ou na fila. Aguarde antes de criar outro para ele.')
  image_reserve=Decimal('0') if plan_data.get('visual_reference') else Decimal('.15')
@@ -150,9 +156,15 @@ def authorize_batch(c,plan_id,plan_data,minutes,channel_id,budget,covered_by_pro
       FROM productions p WHERE p.id=%s''',(covered_by_production_id,)).fetchone()
   if coverage:remaining+=Decimal(coverage['n'] or 0)
  if Decimal(budget)>remaining:raise HTTPException(409,f'O teto de US${Decimal(budget):.2f} supera o saldo global disponível de US${max(remaining,Decimal(0)):.2f}. Ajuste o limite em Ajustes.')
+ current=c.execute("SELECT * FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' FOR UPDATE",(plan_id,channel_id)).fetchone()
+ if not current:raise HTTPException(404,'Plano editável não encontrado neste canal')
+ if expected_revision is None:raise HTTPException(422,'Informe a revisão atual do plano antes de autorizar a produção')
+ if current['revision']!=expected_revision:raise HTTPException(409,'O plano mudou. Recarregue a revisão atual antes de autorizar a produção.')
+ from .creator_plan_versions import save_locked_revision
+ save_locked_revision(c,current,plan_data,expected_revision)
  bid='LOFI-'+str(plan_id).split('-')[0].upper()
  c.execute("INSERT INTO production_batches(id,state,target_seconds,budget,detail,channel_id) VALUES(%s,'queued',%s,%s,'Aguardando produção autorizada pelo usuário',%s)",(bid,minutes*60,budget,channel_id))
- c.execute("UPDATE creator_plans SET program_id=%s,data=%s,status='queued' WHERE id=%s",(bid,json.dumps(plan_data),plan_id))
+ c.execute("UPDATE creator_plans SET program_id=%s,status='queued' WHERE id=%s",(bid,plan_id))
  c.execute('INSERT INTO program_metadata(program_id,title,description,theme,music_description,alternatives,keywords,intent) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)',(bid,plan_data['title'],plan_data['description'],plan_data['theme'],plan_data.get('music_description',''),json.dumps(plan_data.get('alternative_titles',[])),json.dumps(plan_data.get('keywords',[])),plan_data.get('intent','coding_focus')));audit(c,'CREATOR_BATCH_AUTHORIZED',bid,str(budget))
  if plan_data.get('primary_phrase') or plan_data.get('publication_metadata'):
   c.execute('UPDATE program_metadata SET primary_phrase=%s,publication_metadata=%s::jsonb WHERE program_id=%s',(plan_data.get('primary_phrase',''),json.dumps(plan_data.get('publication_metadata') or {},ensure_ascii=False),bid))
@@ -163,6 +175,7 @@ class CreateRequest(BaseModel):
  budget:Decimal=Field(default=12,ge=Decimal('.08'),le=12)
  confirm_cost:bool=False
  visual_source_pilot_id:uuid.UUID|None=None
+ revision:int|None=Field(default=None,ge=1)
 @router.post('/produce',dependencies=[Depends(require_spend_permission)])
 def produce(body:CreateRequest):
  if body.plan.production_spec is not None:
@@ -184,6 +197,8 @@ def produce(body:CreateRequest):
     c.execute("UPDATE creator_plans SET status='queued' WHERE id=%s",(p['id'],))
     audit(c,'CREATOR_RESUME_BEFORE_AUDIO',bid,'Existing visual; no prior audio requests');c.commit()
    return {'id':bid,'reused':True}
+  if body.revision is None:raise HTTPException(422,'Informe a revisão atual do plano antes de autorizar a produção')
+  if body.revision!=p['revision']:raise HTTPException(409,'O plano mudou. Recarregue a revisão atual antes de autorizar a produção.')
   if c.execute("SELECT 1 FROM production_batches WHERE channel_id=%s AND state IN ('producing','waiting','queued')",(p.get('channel_id','00000000-0000-0000-0000-000000000001'),)).fetchone():raise HTTPException(409,'Este canal já tem um lote em produção ou na fila. Aguarde antes de criar outro para ele.')
   if not body.visual_source_pilot_id:raise HTTPException(422,'Escolha um dos vídeos de 1h do canal como referência visual; nenhuma imagem nova será gerada')
   reference=None
@@ -195,7 +210,7 @@ def produce(body:CreateRequest):
    raise HTTPException(409,'Este fluxo ainda não reinterpreta a imagem de referência; produzir está bloqueado para não copiar o MP4. Use a montagem temporal com clipes revisados. Nenhum custo foi reservado.')
   plan_data=body.plan.model_dump()
   if reference:plan_data['visual_reference']=reference
-  bid=authorize_batch(c,body.plan_id,plan_data,p['minutes'],p.get('channel_id','00000000-0000-0000-0000-000000000001'),body.budget);c.commit()
+  bid=authorize_batch(c,body.plan_id,plan_data,p['minutes'],p.get('channel_id','00000000-0000-0000-0000-000000000001'),body.budget,expected_revision=body.revision);c.commit()
  return {'id':bid}
 class Metadata(BaseModel):
  intent:str=Field(default='coding_focus',max_length=100)
@@ -251,6 +266,7 @@ class StoryboardRequest(BaseModel):
  channel_id:uuid.UUID=uuid.UUID('00000000-0000-0000-0000-000000000001')
  spec:ProductionSpec
  draft_id:uuid.UUID|None=None
+ draft_revision:int|None=Field(default=None,ge=1)
  youtube_metadata:dict[str,Any]|None=None
 @router.post('/storyboard')
 def storyboard(body:StoryboardRequest):
@@ -298,8 +314,11 @@ def save_storyboard(body:StoryboardRequest):
   from .recipes import require
   require(c,body.channel_id,body.spec.recipe_sha256,body.spec)
   if body.draft_id:
-   prior=c.execute("SELECT id,data FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL FOR UPDATE",(body.draft_id,body.channel_id)).fetchone()
+   if body.draft_revision is None:raise HTTPException(422,'Informe a revisão atual do roteiro para salvá-lo com segurança.')
+   from .creator_plan_versions import save_locked_revision
+   prior=c.execute("SELECT id,data,revision FROM creator_plans WHERE id=%s AND channel_id=%s AND status='draft' AND program_id IS NULL FOR UPDATE",(body.draft_id,body.channel_id)).fetchone()
    if not prior:raise HTTPException(404,'Roteiro editável não encontrado neste canal')
+   if prior['revision']!=body.draft_revision:raise HTTPException(409,'O roteiro mudou em outra janela. Recarregue a revisão atual antes de salvar.')
    pid=body.draft_id
    result['production_assets']=prior['data'].get('production_assets',{})
    if not metadata:
@@ -307,12 +326,31 @@ def save_storyboard(body:StoryboardRequest):
      if key in prior['data']:result[key]=prior['data'][key]
    for key in ('assembly_audio','assembly_environment'):
     if key in prior['data']:result[key]=prior['data'][key]
-   c.execute('UPDATE creator_plans SET theme=%s,minutes=%s,data=%s WHERE id=%s',(body.spec.scenario,body.spec.hours*60,json.dumps(result,ensure_ascii=False),pid))
+   current_revision=save_locked_revision(c,prior,result,body.draft_revision)
+   c.execute('UPDATE creator_plans SET theme=%s,minutes=%s WHERE id=%s',(body.spec.scenario,body.spec.hours*60,pid))
   else:
    c.execute("INSERT INTO creator_plans(id,request_id,theme,minutes,data,status,reserved,channel_id) VALUES(%s,%s,%s,%s,%s,'draft',0,%s)",(pid,pid,body.spec.scenario,body.spec.hours*60,json.dumps(result,ensure_ascii=False),body.channel_id))
+   from .creator_plan_versions import append
+   current_revision=1
+   append(c,pid,current_revision,result)
   audit(c,'STORYBOARD_DRAFT_SAVED',str(pid),'No generation or provider calls');c.commit()
  compiled['assembly']=assembly_plan(compiled,list(result.get('production_assets',{}).values()))
- return {'id':pid,'plan':result,'minutes':body.spec.hours*60,'harness':compiled,'generation_started':False}
+ return {'id':pid,'revision':current_revision,'plan':result,'minutes':body.spec.hours*60,'harness':compiled,'generation_started':False}
+
+@router.get('/plans/{pid}/revisions')
+def plan_revisions(pid:uuid.UUID):
+ from .creator_plan_versions import history
+ with db() as c:
+  if not c.execute('SELECT 1 FROM creator_plans WHERE id=%s',(pid,)).fetchone():raise HTTPException(404,'Roteiro não encontrado')
+  return {'revisions':history(c,pid)}
+
+@router.get('/plans/{pid}/revisions/{revision}')
+def plan_revision(pid:uuid.UUID,revision:int):
+ from .creator_plan_versions import get
+ with db() as c:
+  row=get(c,pid,revision)
+  if not row:raise HTTPException(404,'Versão do roteiro não encontrada')
+  return row
 
 @router.get('/music-styles')
 def music_styles():

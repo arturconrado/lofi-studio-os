@@ -20,11 +20,12 @@ def test_creator_never_copies_reference_episode_as_output(client,monkeypatch,tmp
             c.execute("INSERT INTO youtube_publications(id,request_id,channel_id,pilot_id,youtube_channel_id,title,description,privacy,made_for_kids,state) VALUES(%s,%s,%s,%s,'test','Greenhouse','','public',false,'uploaded')",(uuid.uuid4(),uuid.uuid4(),cid,episode));c.commit()
     finally:WORKSPACE.reset(marker)
     monkeypatch.setattr(creator.runtime,'settings',lambda c=None:{'enabled':True,'total_limit':100})
-    body={'plan_id':str(pid),'plan':plan,'budget':2.48,'confirm_cost':True};headers={'X-CSRF-Token':owner['csrf_token']}
+    body={'plan_id':str(pid),'plan':plan,'revision':1,'budget':2.48,'confirm_cost':True};headers={'X-CSRF-Token':owner['csrf_token']}
     assert client.post('/api/creator/produce',json=body,headers=headers).status_code==422
     body['visual_source_pilot_id']=str(uuid.uuid4())
     assert client.post('/api/creator/produce',json=body,headers=headers).status_code==404
     body['visual_source_pilot_id']=str(episode)
+    assert client.post('/api/creator/produce',json=body|{'revision':2},headers=headers).status_code==409
     response=client.post('/api/creator/produce',json=body,headers=headers)
     assert response.status_code==409 and 'não copia' in response.text.lower()
     marker=WORKSPACE.set(owner['workspace_id'])
