@@ -33,10 +33,14 @@ flock -n 9 || fail "outro deploy em andamento" 75
 sql() { docker exec -i "$PG" sh -c 'psql -U "$POSTGRES_USER" -d lofi_studio -tA' ; }
 
 # 1. Never interrupt renders, exports, paid batches, uploads or a live broadcast.
+# Editorial growth-packaging suggestions are advisory metadata calls; they do not
+# create media or publish anything, so an uncertain suggestion must not hold releases.
 busy=$(sql <<'EOF'
 SELECT (SELECT count(*) FROM production_batches WHERE state IN ('queued','producing','waiting'))
      + (SELECT count(*) FROM export_jobs WHERE state IN ('queued','running'))
-     + (SELECT count(*) FROM factory_tasks WHERE status IN ('QUEUED','RUNNING','SUBMITTING','UNCERTAIN'))
+     + (SELECT count(*) FROM factory_tasks
+        WHERE status IN ('QUEUED','RUNNING','SUBMITTING','UNCERTAIN')
+          AND kind <> 'growth_packaging_20261024')
      + (SELECT count(*) FROM youtube_publications WHERE state='uploading')
      + (SELECT count(*) FROM radio_channels WHERE desired='live')
      + (SELECT count(*) FROM broadcast_control WHERE desired='live');
