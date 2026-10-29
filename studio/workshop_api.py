@@ -759,7 +759,11 @@ def update(pid: uuid.UUID, body: Update):
                 c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',
                           (json.dumps(image), cl.image_id, pid))
         identity = identity_profile_for_channel(c,row['channel_id'])
-        if identity:
+        # Do not silently migrate a pre-identity project during a metadata-only
+        # save: that changes its visual signature and invalidates approved work.
+        # New projects are bound at creation; existing projects opt into the
+        # channel identity when the owner explicitly creates a visual version.
+        if identity and (old.identity_profile == identity['id'] or body.edit_visual):
             body.data.identity_profile = identity['id']
         elif body.data.identity_profile:
             raise HTTPException(422, 'Este canal não possui esse perfil de identidade aprovado')
@@ -768,7 +772,7 @@ def update(pid: uuid.UUID, body: Update):
             get_clip(body.data, cl.id) and cl.references != get_clip(body.data, cl.id).references for cl in clips(old))
         if protected and visual_changed and not body.edit_visual:
             raise HTTPException(409, 'Visual protegido. Use Editar visual para criar uma nova versão; seus arquivos aprovados serão preservados.')
-        if identity:
+        if identity and body.data.identity_profile == identity['id']:
             bind_identity_reference(c, pid, identity)
             media = assets(c, pid)
         validate_refs(body.data, media); save(c, row, body.data)

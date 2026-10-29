@@ -371,15 +371,13 @@ def test_approved_visual_lock_and_duration_edit(client):
     from studio.core import db
     import json
     cl=client;_,identity=signup(cl);cl.headers.update({'X-CSRF-Token':identity['csrf_token']})
-    channel=uuid.uuid4()
+    channel=cl.get('/api/channels').json()[0]['id']
     d,a=fixture();d.clips=[];d.insertions=[];pid=uuid.uuid4()
     with db() as c:
         from psycopg import sql
         from studio.tenancy import schema_name
         c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         api.ensure(c)
-        c.execute('INSERT INTO radio_channels(id,name,niche) VALUES(%s,%s,%s)',
-                  (channel,'Legacy visual test channel','Legacy visual workshop test'))
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',(pid,channel,json.dumps(d.model_dump(mode='json'))))
         for aid in (d.base.image_id,d.base.video_id):
             c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,pid,json.dumps(a[str(aid)])))
