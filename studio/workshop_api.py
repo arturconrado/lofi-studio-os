@@ -1058,7 +1058,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
             bind_identity_reference(c,pid,identity)
             media=assets(c,pid)
         candidates=identity_candidates(c,row['channel_id'],pid) if not identity else []
-        if not identity and (kind=='video' or candidates):
+        if not identity and identity_selection_required(candidates,kind,draft,media):
             raise HTTPException(409,'Escolha um still aprovado deste canal como referência de identidade antes de gerar. Se este canal ainda não tem assets aprovados, gere e aprove a primeira imagem-base para iniciar a identidade.')
         if identity:
             if draft.identity_profile!=identity['id'] or not identity_reference_status(pid,identity,draft,media)['bound']:
