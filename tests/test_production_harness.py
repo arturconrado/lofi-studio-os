@@ -13,6 +13,13 @@ def test_eight_hour_actions_are_nonoverlapping_and_return_to_idle():
     assert all(e['end']-e['start']==15 for e in events if e['action']=='look_outside_and_cat_stretch_approach')
 
 
+def test_proposal_metadata_is_emitted_only_when_present():
+    assert 'creative_intent' not in compile_spec(ProductionSpec())['spec']
+    compiled=compile_spec(ProductionSpec(creative_intent='Halloween coding night',proposal_rationale='Fits the brief.'))
+    assert compiled['spec']['creative_intent']=='Halloween coding night'
+    assert compiled['spec']['proposal_rationale']=='Fits the brief.'
+
+
 def test_scene_continuity_and_missing_assets_fail_closed():
     p=compile_spec(ProductionSpec(shirt_color='royal blue'))
     assert p['identity']['shirt_color']==p['identity']['cushion_color']
