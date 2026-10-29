@@ -124,7 +124,7 @@ it('lets a new channel select its own approved reference still without borrowing
   await waitFor(()=>expect(fetcher.mock.calls.some(c=>String(c[0]).endsWith('/identity-reference/select'))).toBe(true));
   const request=fetcher.mock.calls.find(c=>String(c[0]).endsWith('/identity-reference/select'));
   expect(JSON.parse(String(request![1]!.body))).toEqual({source_type:'library',source_id:'asset-1',confirm_identity:true});
-  await waitFor(()=>expect(view.getByText(/referência visual aprovada deste canal nas novas imagens/)).not.toBeNull());
+  await waitFor(()=>expect(view.getByText(/referência visual aprovada deste canal, incluindo quadros de vídeos já publicados, nas novas imagens/)).not.toBeNull());
 });
 
 
