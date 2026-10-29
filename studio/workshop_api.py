@@ -165,7 +165,6 @@ def identity_candidates(c, channel_id, project_id=None):
         if key in seen:return
         seen.add(key);candidates.append({'source_type':source_type,'source_id':str(source_id),'title':title,
             'url':f"/api/creator/workshop/projects/{project_id}/identity-candidates/{source_type}/{source_id}" if project_id else None,
-            'project_id':str(project_id) if source_type=='project_media' and project_id else None,
             'sha256':asset['sha256'],'key':asset['key'],'mime':asset.get('mime','image/png')})
     for row in c.execute('SELECT id,name,data FROM visual_library WHERE channel_id=%s ORDER BY created_at DESC LIMIT 200',(channel_id,)).fetchall():
         add('library',row['id'],row['name'],row['data'].get('image'))
@@ -270,12 +269,10 @@ def identity_reference_status(pid, identity, draft, media):
             'reference_count':len(references)}
 
 
-def identity_selection_required(candidates, project_id, kind, draft, media):
-    """Require channel identity for new art, while preserving a legacy project's approved base motion."""
-    external=[candidate for candidate in candidates
-              if candidate.get('source_type')!='project_media' or str(candidate.get('source_id')) not in media]
-    if external or kind=='image':
-        return bool(external or candidates)
+def identity_selection_required(candidates, kind, draft, media):
+    """Require identity before new stills; keep a legacy project's approved base animation usable."""
+    if kind=='image':
+        return bool(candidates)
     base=media.get(str(draft.base.image_id)) if draft.base.image_id else None
     return not (base and base.get('kind')=='image' and base.get('approved')
                 and base.get('review_sha256')==base.get('sha256'))
@@ -988,7 +985,7 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'Gere diretamente o vídeo da inserção')
         identity=identity_profile_for_channel(c,row['channel_id'])
         candidates=identity_candidates(c,row['channel_id'],pid) if not identity else []
-        if not identity and identity_selection_required(candidates,pid,kind,draft,media):
+        if not identity and identity_selection_required(candidates,kind,draft,media):
             raise HTTPException(409,'Escolha um still aprovado deste canal como referência de identidade antes de gerar. Se este canal ainda não tem assets aprovados, gere e aprove a primeira imagem-base para iniciar a identidade.')
         if identity and (draft.identity_profile!=identity['id'] or not identity_reference_status(pid,identity,draft,media)['bound']):
             raise HTTPException(409,'Este projeto ainda não está vinculado à referência canônica do canal. Salve uma nova versão visual antes de gerar.')
@@ -1027,7 +1024,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         identity=identity_profile_for_channel(c,row['channel_id'])
         media=assets(c,pid)
         candidates=identity_candidates(c,row['channel_id'],pid) if not identity else []
-        if not identity and identity_selection_required(candidates,pid,kind,draft,media):
+        if not identity and identity_selection_required(candidates,kind,draft,media):
             raise HTTPException(409,'Escolha um still aprovado deste canal como referência de identidade antes de gerar. Se este canal ainda não tem assets aprovados, gere e aprove a primeira imagem-base para iniciar a identidade.')
         if identity:
             if draft.identity_profile!=identity['id'] or not identity_reference_status(pid,identity,draft,media)['bound']:
