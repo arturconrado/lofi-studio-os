@@ -241,6 +241,10 @@ def compile_spec(spec: ProductionSpec, music=None):
     if scene['overlay']:lighting['overlay']=scene['overlay']
     if object_keyframes:lighting['object_keyframes']=object_keyframes
     dumped={k:v for k,v in spec.model_dump().items() if not (k in RECIPE_NEUTRAL and v==RECIPE_NEUTRAL[k])}
+    # Keep pre-proposal compiled specs byte-identical so existing approvals and
+    # cache fingerprints remain bound to the same content.
+    for key in ('creative_intent','proposal_rationale','proposal_open_questions','delivery_format'):
+        if dumped.get(key)==NEUTRAL[key]:dumped.pop(key,None)
     result={'render_policy':defaults(), 'spec':dumped, 'identity':identity, 'duration_seconds':spec.hours*3600,
             'cycle_seconds':3600, 'default_action':'typing_idle', 'events':events,
             'lighting':lighting,
