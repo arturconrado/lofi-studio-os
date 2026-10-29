@@ -30,6 +30,18 @@ def test_multi_block_soundtrack_is_verified_and_concatenated_once(tmp_path, monk
     output=timeline_worker.prepare_audio(binding,folder,3.8)
     duration,_=measure(output,'audio')
     assert 3.8 <= duration < 4.2
+    receipt=timeline_worker.audio_assembly_receipt(binding,folder,output)
+    assert receipt['assembly_method']=='verified_original_blocks_concatenated'
+    assert receipt['source_count']==2 and receipt['crossfade_seconds_between_selected_blocks']==0
+    assert [source['program_id'] for source in receipt['sources']]==['program-0','program-1']
+    assert [source['sha256'] for source in receipt['sources']]==[file_hash(path) for path in original]
+    assert receipt['sources'][0]['timeline_start_seconds']==0
+    assert receipt['sources'][1]['timeline_start_seconds']>1.9
+    assert receipt['assembled_mix_sha256']==file_hash(output)
+    assert receipt['mix_profile']['source_reencode']=='libmp3lame_q2'
+    assert receipt['mix_profile']['final_audio_codec'] in ('aac','mp3')
+    assert receipt['listening_review_required'] is True
+    assert receipt['style_reviewed'] is False and receipt['human_review_sha256'] is None
 
 
 def test_multi_block_soundtrack_rejects_duplicate_programs(tmp_path):

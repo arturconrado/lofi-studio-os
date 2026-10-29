@@ -81,7 +81,10 @@ def tick():
             fetch(p['audio']['key'], audio, p['audio']['sha256'], 1024**3)
             spec = ShortSpec.model_validate(p['spec'])
             final = folder / 'short.mp4'
-            report = render_short(spec, files, audio, p['audio']['sha256'], final, folder)
+            report = render_short(spec, files, audio, p['audio']['sha256'], final, folder, {
+                'source_type':p['audio'].get('source_type','approved_parent_track_excerpt'),
+                'source_program_id':p['audio']['program_id'],
+                'source_snapshot_sha256':p['audio']['snapshot']})
             key = f'visual-workshop/{p["project_id"]}/shorts/{t["id"]}/{report["sha256"]}.mp4'
             storage().upload_file(str(final), os.environ['S3_BUCKET'], key, ExtraArgs={'ContentType': 'video/mp4'})
             asset_id = uuid.uuid4()

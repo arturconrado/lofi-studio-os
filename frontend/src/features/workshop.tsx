@@ -70,6 +70,8 @@ export function Workshop({ id }: { id?: string }) {
   const [shortStoryTitle, setShortStoryTitle] = useState('Uma pausa para o colega mais sonolento');
   const [shortStory, setShortStory] = useState('Numa cafeteria chuvosa à noite, uma programadora pausa a sessão de código para acariciar seu gato sonolento; depois, volta ao teclado enquanto ele se ajeita na almofada.');
   const [shortDescription, setShortDescription] = useState('Rainy café coding focus, with a tiny break for the sleepiest coworker. Then settle into the full Lo-Fi Jazzhop session: https://youtu.be/8WPZo1LrRbc');
+  const [shortMusicProgramId, setShortMusicProgramId] = useState('');
+  const [shortSoundDirection, setShortSoundDirection] = useState<'continuous' | 'pause_at_turn' | 'chime_at_resolution' | 'story_punctuation'>('continuous');
   const [shortCaptions, setShortCaptions] = useState([
     'One more line of code…',
     'The sleepiest coworker needed a break.',
@@ -103,6 +105,21 @@ export function Workshop({ id }: { id?: string }) {
     ] };
   })();
   const shortDuration = shortSource?.segments.reduce((sum, item) => sum + item.duration, 0) || 24;
+  const shortAudioCues = (() => {
+    if (!shortSource) return [];
+    const turnStart = shortSource.segments[0].duration;
+    const resolutionStart = turnStart + shortSource.segments[1].duration;
+    const cues: {kind:'music_pause'|'soft_chime';start_seconds:number;end_seconds:number}[] = [];
+    if (shortSoundDirection === 'pause_at_turn' || shortSoundDirection === 'story_punctuation') {
+      const start = Math.min(turnStart + .6, turnStart + shortSource.segments[1].duration - .4);
+      cues.push({kind:'music_pause',start_seconds:start,end_seconds:start+.35});
+    }
+    if (shortSoundDirection === 'chime_at_resolution' || shortSoundDirection === 'story_punctuation') {
+      const start = resolutionStart + .2;
+      cues.push({kind:'soft_chime',start_seconds:start,end_seconds:Math.min(start+.4,shortDuration)});
+    }
+    return cues;
+  })();
   const shortCaptionCuts = [0, .23, .48, .71, 1].map(r => Math.round(shortDuration * r * 10) / 10);
   const visualLocked = !!d && Object.values(d.states).some(s => s.image_approved) && !editVisual;
   const pending = (clipId: string, kind: string) => d?.jobs.find(j => j.clip_id === clipId && j.operation === kind && ['SUBMITTING', 'RUNNING', 'UNCERTAIN', 'QUEUED'].includes(j.status));
@@ -196,7 +213,9 @@ export function Workshop({ id }: { id?: string }) {
     return run(() => post(`${prefix}/projects/${id}/shorts/render`, { request_id: uuid(), revision: d.revision,
       spec: { title: shortTitle, description: shortDescription, story_title: shortStoryTitle,
         story_summary: shortStory, parent_video_id: shortSource.parent.video_id,
-        audio_start_seconds: shortSource.audioStart, segments, captions } }),
+        audio_mode: shortMusicProgramId ? 'approved_channel_track' : 'parent_excerpt',
+        ...(shortMusicProgramId ? { music_program_id: shortMusicProgramId, audio_start_seconds: 0 } : { audio_start_seconds: shortSource.audioStart }),
+        audio_cues: shortAudioCues, segments, captions } }),
       'Short enviado ao montador local. Ele aparecerá na Caixa de Revisão quando estiver pronto.');
   };
   const save = () => run(async () => {
@@ -394,11 +413,15 @@ export function Workshop({ id }: { id?: string }) {
     {d && <section id="shorts-workflow" class="card stack" style={{border:'2px solid var(--accent, #7966ff)', scrollMarginTop:'90px'}}>
       <div class="row"><div class="grow"><h2>Fluxo de Shorts</h2><p class="muted">Vídeos verticais independentes, ligados a um vídeo longo publicado.</p></div><Pill tone="info">Revisão separada</Pill><button class="btn" disabled={busy || dirty} onClick={() => resource.reload()}>Atualizar Shorts</button></div>
       {shortSource ? <>
-      <p>Este Short reutiliza os movimentos do vídeo longo, organiza uma pequena história com legendas e usa a música do mesmo ponto da timeline. Duração prevista: {shortDuration} segundos.</p>
+      <p>Este Short reutiliza os movimentos do vídeo longo e organiza uma pequena história com legendas. Duração prevista: {shortDuration} segundos.</p>
       <p class="faint">Fontes: base {formatTime(shortSource.segments[0].minute)}–{formatTime(shortSource.segments[0].minute + shortSource.segments[0].duration / 60)} · pausa {formatTime(shortSource.segments[1].minute)}–{formatTime(shortSource.segments[1].minute + shortSource.segments[1].duration / 60)} · resolução {formatTime(shortSource.segments[2].minute)}–{formatTime(shortSource.segments[2].minute + shortSource.segments[2].duration / 60)}. Vídeo relacionado: <a href={`https://youtu.be/${shortSource.parent.video_id}`} target="_blank" rel="noreferrer">{shortSource.parent.title}</a></p>
       <Field label="Título para avaliação"><input class="input" maxLength={100} value={shortTitle} onInput={e => setShortTitle(e.currentTarget.value)} /></Field>
       <Field label="Nome da história"><input class="input" maxLength={120} value={shortStoryTitle} onInput={e => setShortStoryTitle(e.currentTarget.value)} /></Field>
       <Field label="Resumo narrativo"><textarea class="textarea" value={shortStory} onInput={e => setShortStory(e.currentTarget.value)} /></Field>
+      <Field label="Trilha do Short"><select class="select" value={shortMusicProgramId} onChange={e => setShortMusicProgramId(e.currentTarget.value)}><option value="">Usar trecho da música do vídeo longo</option>{d.music.filter(m => m.seconds >= shortDuration).map(m => <option value={m.id}>{m.id} · {Math.floor(m.seconds / 60)} min</option>)}</select></Field>
+      <p class="faint">Você pode manter o trecho sincronizado do vídeo longo ou escolher uma trilha pronta do canal. Antes de montar, a plataforma confirma que a trilha tem duração suficiente e uma revisão de áudio ainda válida.</p>
+      <Field label="Direção sonora"><select class="select" value={shortSoundDirection} onChange={e => setShortSoundDirection(e.currentTarget.value as typeof shortSoundDirection)}><option value="continuous">Música contínua, sem efeito extra</option><option value="pause_at_turn">Pausa breve da música na virada da história</option><option value="chime_at_resolution">Toque suave no desfecho</option><option value="story_punctuation">Pausa na virada e toque suave no desfecho</option></select></Field>
+      <p class="faint">Os cues são compostos localmente, sincronizados à narrativa e registrados na proveniência do áudio. A revisão humana do Short completo continua necessária.</p>
       {shortCaptions.map((caption, index) => <Field label={`Legenda ${index + 1} · ${shortCaptionCuts[index]}–${shortCaptionCuts[index + 1]}s`}><input class="input" maxLength={90} value={caption} onInput={e => setShortCaptions(shortCaptions.map((text,n) => n === index ? e.currentTarget.value : text))} /></Field>)}
       <Field label="Descrição"><textarea class="textarea" value={shortDescription} onInput={e => setShortDescription(e.currentTarget.value)} /></Field>
       <p class="faint">Montagem local, sem custo de geração. O Short não será publicado automaticamente e sua avaliação não aprova nem altera o vídeo longo.</p>

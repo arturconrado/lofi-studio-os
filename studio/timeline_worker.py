@@ -58,6 +58,51 @@ def prepare_audio(audio_binding,folder,target_seconds):
     return audio
 
 
+def audio_assembly_receipt(audio_binding,folder,assembled_audio):
+    """Record which verified originals formed the render soundtrack; never imply a listening review."""
+    sources=audio_binding.get('audio_sources') or []
+    entries=[];cursor=0.0
+    if sources:
+        for index,source in enumerate(sources):
+            sha=source['sha256']
+            path=folder/f'soundtrack-{index:02d}-{sha[:16]}.mp3'
+            if not path.exists() or file_hash(path)!=sha:
+                raise ValueError('Soundtrack source changed before provenance receipt')
+            seconds,_=measure(path,'audio')
+            declared=float(source.get('seconds') or 0)
+            if declared<=0 or abs(seconds-declared)>0.5:
+                raise ValueError('Soundtrack source duration differs from its reviewed manifest')
+            entries.append({'program_id':source['program_id'],'sha256':sha,
+                            'declared_seconds':declared,'measured_seconds':seconds,
+                            'timeline_start_seconds':round(cursor,3),
+                            'timeline_end_seconds':round(cursor+seconds,3)})
+            cursor+=seconds
+        method='verified_original_blocks_concatenated'
+    else:
+        path=folder/'source-audio.mp3'
+        if not path.exists() or file_hash(path)!=audio_binding.get('sha256'):
+            raise ValueError('Bound soundtrack changed before provenance receipt')
+        seconds,_=measure(path,'audio')
+        if seconds<=0:raise ValueError('Bound soundtrack has no measured duration')
+        entries.append({'sha256':audio_binding['sha256'],'declared_seconds':audio_binding.get('seconds'),
+                        'measured_seconds':seconds,'timeline_start_seconds':0.0,
+                        'timeline_end_seconds':round(seconds,3)})
+        cursor=seconds;method='single_verified_original'
+    assembled_seconds,stream=measure(assembled_audio,'audio')
+    return {'assembly_method':method,'sources':entries,'source_count':len(entries),
+            'source_seconds_measured':round(cursor,3),'assembled_mix_sha256':file_hash(assembled_audio),
+            'assembled_mix_seconds':assembled_seconds,'crossfade_seconds_between_selected_blocks':0,
+            'silence_padding_added':False,'source_preserved':True,
+            'selection_binding_sha256':audio_binding.get('sha256'),
+            'mix_profile':{'block_assembly':method,
+                           'source_reencode':'libmp3lame_q2' if sources else 'none',
+                           'inter_block_crossfade_seconds':0,'silence_padding':False,
+                           'final_audio_codec':stream.get('codec_name'),
+                           'sample_rate_hz':int(stream['sample_rate']) if stream.get('sample_rate','').isdigit() else None,
+                           'channels':stream.get('channels')},
+            'listening_review_required':True,'style_reviewed':False,'human_review_sha256':None}
+
+
 def tick():
     from .radio import CACHE
     with db() as c:
@@ -91,8 +136,10 @@ def tick():
         subprocess.run(['ffmpeg','-v','error','-y','-threads','1','-i',str(final),'-vn','-c:a','copy',str(soundtrack)],check=True,timeout=300,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         subprocess.run(['ffmpeg','-v','error','-xerror','-threads','1','-i',str(soundtrack),'-f','null','-'],check=True,timeout=max(300,p['compiled']['duration_seconds']),stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         seconds,_=measure(soundtrack,'audio')
-        report['audio']={'sha256':file_hash(soundtrack),'duration_seconds':seconds,'full_decode_pass':True,
-                         'unique_measured_seconds':p['audio']['unique_measured_seconds'],'style_reviewed':False}
+        report['audio']=audio_assembly_receipt(p['audio'],folder,soundtrack)|{
+                         'sha256':file_hash(soundtrack),'duration_seconds':seconds,'full_decode_pass':True,
+                         'unique_measured_seconds':p['audio']['unique_measured_seconds'],'style_reviewed':False,
+                         'human_review_sha256':None,'listening_review_required':True}
         key=f'creator-timelines/{row["id"]}/{report["video"]["sha256"]}.mp4'
         storage().upload_file(str(final),os.environ['S3_BUCKET'],key,ExtraArgs={'ContentType':'video/mp4'})
         extra={}
