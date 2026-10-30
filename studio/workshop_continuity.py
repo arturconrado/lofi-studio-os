@@ -15,6 +15,10 @@ POLICY = {**BASE_POLICY, 'version':4, 'joins':'dense_optical_flow_in_quiet_base'
           'base_anchor_version':3, 'preserve_all_action_frames':True}
 
 
+class CycleBoundaryError(ValueError):
+    """The encoded cycle did not meet the existing boundary tolerance."""
+
+
 def inspect_cycle(path, expected_frames):
     """Reject incomplete periods and boundary outliers before multiplying them."""
     raw = subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(path),
@@ -29,7 +33,7 @@ def inspect_cycle(path, expected_frames):
     boundary = difference(frames[-1], frames[0])
     p95 = changes[int(len(changes)*.95)]
     if boundary > max(p95*1.5, .1):
-        raise ValueError('Cyclic continuity: boundary exceeds motion tolerance')
+        raise CycleBoundaryError('Cyclic continuity: boundary exceeds motion tolerance')
     return {'frame_count': len(frames), 'boundary_mae': boundary,
             'internal_p95_mae': p95, 'technical_check_passed': True,
             'artistic_acceptance': False}
@@ -75,7 +79,7 @@ def prepare(plan, sources, folder, width, height, fps, profile=None):
     # queue limits are a resource setting, not another visual transformation.
     preparation_profile={k:v for k,v in profile.items() if k!='lookahead_frames'} if profile else None
 
-    def encode(path, args, graph, label, frames):
+    def encode(path, args, graph, label, frames, crf=None):
         if not path.exists():
             temp = path.with_suffix('.partial.mp4')
             subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y',
@@ -83,7 +87,7 @@ def prepare(plan, sources, folder, width, height, fps, profile=None):
                             '-filter_complex', graph, '-map', f'[{label}]',
                             '-an', '-frames:v', str(frames), '-r', str(fps),
                             '-c:v', 'libx264', '-threads', '2', '-preset', (profile or {}).get('preset','veryfast'),
-                            '-crf', str((profile or {}).get('crf',19)), *encoder_memory_options(profile), '-pix_fmt', 'yuv420p', str(temp)],
+                            '-crf', str(crf if crf is not None else (profile or {}).get('crf',19)), *encoder_memory_options(profile), '-pix_fmt', 'yuv420p', str(temp)],
                            check=True, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             temp.replace(path)
         sha = file_hash(path); sources[sha] = path
@@ -106,14 +110,24 @@ def prepare(plan, sources, folder, width, height, fps, profile=None):
                      f'[c]trim=end={w},setpts=PTS-STARTPTS[head];'
                      f"[tail][head]blend=all_expr='A*(1-({weight}))+B*({weight})'[seam];"
                      f'[core][seam]concat=n=2:v=1:a=0[out]')
-            s['asset_sha256'] = encode(path, ['-i', str(src)], graph, 'out', frames)
-            receipt = path.with_suffix('.quality.json')
+            def checked_cycle(candidate, crf=None):
+                sha = encode(candidate, ['-i', str(src)], graph, 'out', frames, crf)
+                receipt = candidate.with_suffix('.quality.json')
+                try:
+                    checked = json.loads(receipt.read_text())
+                except (OSError, ValueError):
+                    checked = {}
+                if checked.get('sha256') != sha or checked.get('technical_check_passed') is not True:
+                    receipt.write_text(json.dumps({**inspect_cycle(candidate, frames), 'sha256': sha}))
+                return sha
             try:
-                checked = json.loads(receipt.read_text())
-            except (OSError, ValueError):
-                checked = {}
-            if checked.get('sha256') != s['asset_sha256']:
-                receipt.write_text(json.dumps({**inspect_cycle(path, frames), 'sha256': s['asset_sha256']}))
+                s['asset_sha256'] = checked_cycle(path)
+            except CycleBoundaryError:
+                # Compression artifacts can make a quiet seam fail. Retry the
+                # same frames at higher quality, then apply the identical check.
+                # No source, duration, thresholds, or paid generation changes.
+                fallback_crf = min(10, max(0, int((profile or {}).get('crf', 19)) - 5))
+                s['asset_sha256'] = checked_cycle(folder / f'loop-{key}-crf{fallback_crf}.mp4', fallback_crf)
         else:
             sha = file_hash(src); sources[sha] = src; s['asset_sha256'] = sha
         s['prepared_geometry']=[width,height,fps]
