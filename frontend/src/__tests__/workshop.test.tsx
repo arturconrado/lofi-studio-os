@@ -68,7 +68,7 @@ it('records the already approved base identity without requesting a new generati
   const draft = initialDraft(); draft.base.image_id = 'image'; draft.base.video_id = 'video';
   const detail = { id: 'p', revision: 3, data: draft, media: {
     image: { id: 'image', kind: 'image', url: '/image', sha256: 'a'.repeat(64), approved: true },
-    video: { id: 'video', kind: 'video', url: '/video', sha256: 'b'.repeat(64), approved: false }
+    video: { id: 'video', kind: 'video', url: '/video', sha256: 'b'.repeat(64), approved: false, resolution: '720p' }
   }, identity: { required: false, configured: true }, states: {
     [draft.base.id]: { image_approved: true, video_ready: false, video_approved: false }
   }, jobs: [], library: [], music: [] };
@@ -78,6 +78,7 @@ it('records the already approved base identity without requesting a new generati
   vi.stubGlobal('fetch', fetcher); vi.stubGlobal('confirm', () => true);
   const view = render(<Workshop id="p" />);
   await waitFor(() => expect(view.queryByText('Registrar identidade da animação já aprovada')).not.toBeNull());
+  expect(view.getByText(/A base selecionada foi gerada em 720p/)).not.toBeNull();
   fireEvent.click(view.getByText('Registrar identidade da animação já aprovada'));
   await waitFor(() => expect(fetcher.mock.calls.some(([url, init]) => url.endsWith('/base/identity-review') && init?.method === 'POST')).toBe(true));
   const request = fetcher.mock.calls.find(([url]) => url.endsWith('/base/identity-review'))!;
