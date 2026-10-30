@@ -63,6 +63,37 @@ def test_existing_base_identity_review_requires_explicit_confirmation():
     assert error.value.status_code == 422
 
 
+def test_existing_base_identity_review_saves_only_confirmed_current_version(monkeypatch):
+    import json
+    from studio import workshop_api as api
+    d, media = fixture(); d.identity_profile = 'channel-a'
+    identity = {'id': 'channel-a', 'references': [{'sha256': 'd' * 64}]}
+    image = media[str(d.base.image_id)]; video = media[str(d.base.video_id)]
+    image.update(identity_profile='channel-a', identity_reference_sha256s=['d' * 64], signature=signature(d, d.base, 'image'))
+    video.update(identity_profile='channel-a', source_image_id=str(d.base.image_id), signature=signature(d, d.base, 'video', image['sha256']))
+    row = {'revision': 7, 'data': d.model_dump(mode='json'), 'channel_id': uuid.uuid4()}
+    class Connection:
+        def __init__(self): self.updates = []; self.committed = False
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def execute(self, sql, params): self.updates.append((sql, params))
+        def commit(self): self.committed = True
+    c = Connection(); monkeypatch.setattr(api, 'db', lambda: c)
+    monkeypatch.setattr(api, 'project', lambda *_: row)
+    monkeypatch.setattr(api, 'assets', lambda *_: media)
+    monkeypatch.setattr(api, 'identity_profile_for_channel', lambda *_: identity)
+    monkeypatch.setattr(api, 'identity_reference_status', lambda *_: {'bound': True})
+    audit_events = []; monkeypatch.setattr(api, 'audit', lambda *args: audit_events.append(args))
+    body = api.ExistingBaseIdentityReview(revision=7, sha256=video['sha256'], confirm_identity_and_motion=True)
+    assert api.review_existing_base_identity(uuid.uuid4(), body) == {'reviewed': True}
+    assert c.committed and len(c.updates) == 1 and audit_events
+    saved = json.loads(c.updates[0][1][0])
+    assert api.identity_asset_matches(saved, identity) and saved['human_identity_review']['source_image_sha256'] == image['sha256']
+    c.updates.clear(); row['revision'] = 8
+    with pytest.raises(api.HTTPException): api.review_existing_base_identity(uuid.uuid4(), body)
+    assert not c.updates
+
+
 def test_base_fills_every_gap_and_returns_after_each_insertion():
     d, a = fixture(); segments = assemble(d, a)
     assert [(s['start'], s['end'], s['loop']) for s in segments] == [(0,6,True),(6,8,False),(8,18,True),(18,20,False),(20,60,True)]
