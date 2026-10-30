@@ -3,10 +3,13 @@ import { api, post, put, uuid } from '../lib/api';
 import { useResource } from '../lib/resource';
 import { channel } from '../lib/store';
 import { href, navigate } from '../lib/router';
-import { Field, Empty, Skeleton, Pill } from '../ds/ui';
+import { Field, Empty, Skeleton, Pill, Dialog } from '../ds/ui';
 
 type Clip = { action_goal?: string | null; continues_from?: string | null; id: string; name: string; motion: string; seconds: number; references: string[]; image_id: string | null; video_id: string | null };
 type Character = { name: string; description: string; references: string[] };
+type AttemptReasonRequest =
+  | { mode: 'scope'; message: string }
+  | { mode: 'correction'; clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string };
 type Draft = { automatic_motion?: boolean; identity_profile?: string | null; name: string; minutes: number; theme: string; scene: string; scene_motion: string; scene_references: string[];
   characters: Character[]; base: Clip; clips: Clip[]; insertions: { id: string; clip_id: string; minute: number }[]; music_program_id: string | null };
 type Media = { id: string; url: string; sha256: string; kind: string; approved: boolean; clip_id?: string };
@@ -61,6 +64,8 @@ export function Workshop({ id }: { id?: string }) {
   const [resolution, setResolution] = useState<'720p' | '1080p'>('720p');
   const [editVisual, setEditVisual] = useState(false);
   const [actionKey, setActionKey] = useState('');
+  const [attemptReasonRequest, setAttemptReasonRequest] = useState<AttemptReasonRequest | null>(null);
+  const [attemptReason, setAttemptReason] = useState('');
   const [splitSeconds, setSplitSeconds] = useState<Record<string,number>>({});
   const [splitPlan, setSplitPlan] = useState<{clip_id:string;total_seconds:number;usd_max:number;new_clips_max:number;parts:{seconds:number;motion:string}[]} | null>(null);
   const polling = useRef(false);
@@ -205,6 +210,29 @@ export function Workshop({ id }: { id?: string }) {
     catch (e: any) { setMessage(e.message || 'Não foi possível concluir'); }
     finally { running.current=false; setBusy(false); }
   };
+  const requestAttemptReason = (request: AttemptReasonRequest) => {
+    setAttemptReason('');
+    setAttemptReasonRequest(request);
+  };
+  const submitAttemptReason = () => {
+    const request = attemptReasonRequest;
+    const reason = attemptReason.trim();
+    if (!request || !reason) return;
+    setAttemptReasonRequest(null);
+    setAttemptReason('');
+    if (request.mode === 'scope') {
+      return run(() => post(`${prefix}/projects/${id}/attempt-scope/review`, {
+        request_id: uuid(), revision: d!.revision, reason, confirm_current_actions: true
+      }), 'Escopo da entrega revisado. Confira novamente o orçamento e confirme a geração separadamente.');
+    }
+    const q = request.quote;
+    const attemptLabel = q.attempt?.stage === 'correction' ? 'Único ciclo de correção' : 'Tentativa inicial';
+    if (!confirm(`${request.history}\n\n${attemptLabel}: gerar ${request.kind === 'image' ? 'imagem' : 'vídeo'} de “${request.clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. ${q.waiting_variants || 0} versão(ões) aguardam o vídeo anterior. Não haverá repetição paga automática.`)) return;
+    return run(() => post(`${prefix}/projects/${id}/clips/${request.clip.id}/generate/${request.kind}`, {
+      request_id: uuid(), revision: d!.revision, max_usd: q.usd, confirm_cost: true, variant_key: request.variantKey || null,
+      correction_reason: reason, ...(request.kind === 'video' ? { resolution } : {})
+    }), 'Pedido incluído na fila. Acompanhe em Fila e histórico.');
+  };
   const createShort = () => {
     if (!id || !d || !shortSource) return;
     const segments = shortSource.segments.map(s => ({ clip_id: s.clip.id, source_sha256: s.media.sha256,
@@ -244,22 +272,17 @@ export function Workshop({ id }: { id?: string }) {
     const historyAndAlternatives=attemptContext(q.attempt);
     if(q.attempt?.scope_review_required){
       if(!confirm(`${q.attempt.message}\n\nA revisão salva somente o escopo atual; não inicia geração nem amplia o orçamento financeiro.`))return;
-      const reason=prompt('Descreva por que a entrega precisa incluir estas ações adicionais.');
-      if(!reason?.trim())return;
-      await post(`${prefix}/projects/${id}/attempt-scope/review`,{request_id:uuid(),revision:d!.revision,reason:reason.trim(),confirm_current_actions:true});
-      setMessage('Escopo da entrega revisado. Confira novamente o orçamento e confirme a geração separadamente.');
+      requestAttemptReason({mode:'scope',message:q.attempt.message});
       return;
     }
     if(q.attempt?.allowed===false){setMessage([q.attempt.message || 'O limite desta unidade criativa foi atingido.',historyAndAlternatives].filter(Boolean).join('\n\n'));return;}
-    let correctionReason: string | undefined;
     if(q.attempt?.requires_reason){
-      const reason=prompt(`${historyAndAlternatives}\n\nA tentativa inicial já foi usada. Descreva a falha observada e a mudança concreta que justifica o único ciclo de correção paga.`);
-      if(!reason?.trim())return;
-      correctionReason=reason.trim();
+      requestAttemptReason({mode:'correction',clip,kind,variantKey,quote:q,history:historyAndAlternatives});
+      return;
     }
     const attemptLabel=q.attempt?.stage==='correction'?'Único ciclo de correção':'Tentativa inicial';
     if (!confirm(`${historyAndAlternatives}\n\n${attemptLabel}: gerar ${kind === 'image' ? 'imagem' : 'vídeo'} de “${clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. ${q.waiting_variants || 0} versão(ões) aguardam o vídeo anterior. Não haverá repetição paga automática.`)) return;
-    await post(`${prefix}/projects/${id}/clips/${clip.id}/generate/${kind}`, { request_id: uuid(), revision: d!.revision, max_usd: q.usd, confirm_cost: true, variant_key:variantKey || null, ...(correctionReason ? {correction_reason:correctionReason} : {}), ...(kind === 'video' ? { resolution } : {}) });
+    await post(`${prefix}/projects/${id}/clips/${clip.id}/generate/${kind}`, { request_id: uuid(), revision: d!.revision, max_usd: q.usd, confirm_cost: true, variant_key:variantKey || null, ...(kind === 'video' ? { resolution } : {}) });
   }); };
   const review = (clip: Clip, kind: 'image' | 'video', approve: boolean, variantKey?: string) => run(async () => {
     const asset = d!.media[String(kind === 'image' ? clip.image_id : clip.video_id)];
@@ -340,6 +363,13 @@ export function Workshop({ id }: { id?: string }) {
   if (id && resource.loading) return <Skeleton />;
   if (id && resource.error) return <Empty title="Não foi possível abrir o projeto"><p>{resource.error}</p><button class="btn" onClick={resource.reload}>Tentar novamente</button></Empty>;
   return <div class="stack">
+    <Dialog open={!!attemptReasonRequest} onClose={() => { setAttemptReasonRequest(null); setAttemptReason(''); }} title={attemptReasonRequest?.mode === 'scope' ? 'Justificar o escopo atual' : 'Justificar correção paga'}>
+      {attemptReasonRequest?.mode === 'scope'
+        ? <p>{attemptReasonRequest.message} A justificativa apenas registra o escopo atual; não amplia o orçamento nem inicia uma geração.</p>
+        : <><p>{attemptReasonRequest?.history}</p><p>A tentativa inicial já foi usada. Descreva a falha observada e a mudança concreta para justificar o único ciclo de correção paga.</p></>}
+      <Field label="Motivo"><textarea class="textarea" rows={4} autoFocus value={attemptReason} onInput={e => setAttemptReason(e.currentTarget.value)} /></Field>
+      <div class="row"><button class="btn ghost" onClick={() => { setAttemptReasonRequest(null); setAttemptReason(''); }}>Cancelar</button><button class="btn primary" disabled={!attemptReason.trim() || busy} onClick={submitAttemptReason}>{attemptReasonRequest?.mode === 'scope' ? 'Registrar escopo' : 'Continuar para confirmação de custo'}</button></div>
+    </Dialog>
     <div class="page-head" style={{position:"sticky",top:0,zIndex:5,background:"var(--bg, #fff)",padding:"12px"}}><div><h1>Criar vídeo</h1><p class="muted">Aprove o cenário com os personagens, defina as inserções e a música. O motor cuida das emendas.</p></div><div class="row">
       {id && <><a class="btn ghost" href={href('/criar-video')}>Meus projetos / novo projeto</a><button class="btn" disabled={busy || dirty} onClick={() => run(async () => { const r = await post(`${prefix}/projects/${id}/duplicate`); navigate('/criar-video/' + r.id); })}>Duplicar projeto</button></>}<button class="btn primary" disabled={busy || !channel.value} onClick={save}>{id ? 'Salvar projeto' : 'Criar projeto'}</button></div></div>
     <div class="card row"><b class="grow">Próximo passo do vídeo longo: {nextLabel}</b><button class="btn primary" disabled={busy || !!activeRender || scheduleIssue || (!!nextClip && !!pending(nextClip.id,"video")) || !!pending(draft.base.id,"image") || (!!completeVideo?.approved && allApproved && !dirty) || !channel.value} onClick={nextAction}>{nextLabel}</button></div>
