@@ -422,7 +422,17 @@ export function Workshop({ id }: { id?: string }) {
       <button class="btn" disabled={visualLocked || draft.characters.length >= 6} onClick={() => field('characters', [...draft.characters, { name: 'Novo personagem', description: 'Descreva sua aparência.', references: [] }])}>Adicionar personagem</button>
     </section>
     {card(draft.base, true)}
-    <section class="card stack"><h3>3. Inserções e biblioteca</h3><p class="faint">Crie quantos trechos precisar (até 200 por projeto). Um mesmo trecho pode entrar em vários horários. Cada inserção toca uma vez e volta à base.</p>
+    <section class="card stack"><h3>3. Inserções e biblioteca</h3><p class="faint">Projetos novos já recebem um arco visual de seis momentos, criado a partir do tema, do cenário e da identidade aprovada deste canal. O plano só cria rascunhos: nenhuma imagem ou animação é gerada e nenhum crédito é consumido até você pedir a geração. As animações usam o FFmpeg existente na montagem, com retorno à base entre inserções.</p>
+      {id && draft.insertions.length < 6 && <button class="btn secondary" disabled={busy || dirty} onClick={async () => {
+        const applied = await run(async () => {
+        const plan = await post(`${prefix}/projects/${id}/editorial-plan`, { revision: d!.revision });
+        if (!plan.clips.length) return false;
+        change({ ...draft, clips: [...draft.clips, ...plan.clips], insertions: [...draft.insertions, ...plan.insertions] });
+        return plan;
+        });
+        if (applied === false) setMessage('O projeto já tem o número previsto de inserções ou não há horários seguros disponíveis.');
+        else if (applied) setMessage(`Plano nativo aplicado: ${applied.clips.length} novos rascunhos; geração paga: nenhuma. ${applied.note}`);
+      }}>Planejar inserções com o harness</button>}
       <button class="btn" onClick={() => field('clips', [...draft.clips, newClip('Inserção ' + (draft.clips.length + 1))])} disabled={draft.clips.length >= 200}>Adicionar trecho</button>
       {d?.library.length ? <Field label="Reaproveitar trecho salvo"><select class="select" value="" disabled={busy || dirty} onChange={e => { const lid = e.currentTarget.value; if (lid) run(() => post(`${prefix}/projects/${id}/library/${lid}`), 'Trecho adicionado. Se o tema mudou, gere e aprove a nova versão.'); }}><option value="">Escolha na biblioteca…</option>{d.library.map(l => <option value={l.id}>{l.name}</option>)}</select></Field> : null}
     </section>

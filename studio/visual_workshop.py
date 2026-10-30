@@ -113,6 +113,70 @@ def get_clip(draft, cid):
     return next((c for c in clips(draft) if str(c.id) == str(cid)), None)
 
 
+def plan_editorial_insertions(draft):
+    """Create a low-cost, identity-safe story arc; this drafts clips but never generates media."""
+    # Wait until the creator supplies a real theme; do not seed generic content
+    # into an untouched form or infer a seasonal topic from the channel name.
+    if not draft.theme.strip() or len(draft.insertions) >= 6:
+        return draft.model_copy(deep=True), []
+    planned = draft.model_copy(deep=True)
+    text = ' '.join((draft.theme, draft.scene, draft.scene_motion)).casefold()
+    halloween = any(word in text for word in ('halloween', 'hallowe', 'witch', 'pumpkin', 'spooky', 'outubro'))
+    coding = any(word in text for word in ('code', 'coding', 'program', 'developer', 'terminal', 'software'))
+    cat = next((character for character in draft.characters
+                if any(word in (character.name + ' ' + character.description).casefold()
+                       for word in ('cat', 'gato', 'tabby', 'feline'))), None)
+    protagonist = next((character for character in draft.characters if character is not cat), draft.characters[0])
+    if halloween:
+        beats = [
+            ('A tiny seasonal clue', 'A faint, warm Halloween-colored reflection passes across the existing window; the characters continue their established activity. Let the clue settle, then return exactly to the base pose and lighting.'),
+            ('The clue catches her eye', f'{protagonist.name} notices the soft reflection with a brief eye movement and gentle expression, without changing posture or identity; return gaze, hands and expression to the exact base pose.'),
+            ('A quiet companion reaction', (f'{cat.name} gives one small, calm ear flick toward the window, then settles into the exact original pose and tail position.' if cat else 'A subtle shadow of an autumn leaf crosses the existing window and fades; return to the exact base lighting and composition.')),
+            ('A small coding breakthrough', (f'{protagonist.name} makes one restrained typing gesture as the terminal glow steadies, then returns both hands and gaze to the exact base pose.' if coding else f'{protagonist.name} gives one small satisfied nod as the seasonal clue fades, then returns to the exact base pose.')),
+            ('Autumn moves outside', 'A few leaves drift past the existing window while all furniture and characters remain fixed; the motion clears and returns to the exact base environment.'),
+            ('The mystery resolves softly', 'The warm seasonal reflection resolves into a steady cozy glow; hold the established composition and return every moving element to the exact base state.'),
+        ]
+    else:
+        beats = [
+            ('A detail in the scene', 'A small environmental detail already implied by the scene briefly draws attention, then settles back to the exact base state.'),
+            ('A focused pause', f'{protagonist.name} makes one subtle eye or head movement, then restores the exact base gaze, posture and expression.'),
+            ('A companion moment', (f'{cat.name} makes one gentle, natural micro-movement and settles back into the exact base pose and markings.' if cat else 'A soft environmental motion passes through the existing setting and clears, returning to the exact base state.')),
+            ('A moment of progress', (f'{protagonist.name} makes one small, deliberate typing gesture, then restores both hands and gaze to the exact base pose.' if coding else f'{protagonist.name} makes one quiet, purposeful gesture and returns to the exact base pose.')),
+            ('The room breathes', 'Existing ambient elements shift gently for a moment; keep the camera, furniture and character positions fixed, then return to the exact base state.'),
+            ('A calm payoff', 'A subtle visual cue from the project theme reaches a quiet resolution; hold the familiar composition and restore the exact base state.'),
+        ]
+    duration_seconds = 8
+    occupied = [(round(event.minute * 60), round(event.minute * 60) + get_clip(planned, event.clip_id).seconds)
+                for event in planned.insertions]
+    free_indices = [index for index in range(6) if index >= len(planned.insertions)]
+    if len(planned.clips) + len(free_indices) > 200:
+        free_indices = free_indices[:max(0, 200 - len(planned.clips))]
+    added = []
+    for index in free_indices:
+        name, motion = beats[index]
+        target = draft.minutes * (0.08 + 0.84 * index / 5)
+        # Find a nearby unoccupied 8-second slot, preserving the fixed story arc and source schedule.
+        candidates = [target]
+        for step in range(1, 61):
+            offset = step * (duration_seconds / 60)
+            candidates.extend((target - offset, target + offset))
+        minute = next((candidate for candidate in candidates if candidate >= 0 and
+                       candidate * 60 + duration_seconds <= draft.minutes * 60 and
+                       all(candidate * 60 + duration_seconds <= start or candidate * 60 >= end
+                           for start, end in occupied)), None)
+        if minute is None:
+            continue
+        clip = Clip(name=name, motion=motion, seconds=duration_seconds)
+        insertion = Insertion(clip_id=clip.id, minute=minute)
+        planned.clips.append(clip)
+        planned.insertions.append(insertion)
+        occupied.append((round(minute * 60), round(minute * 60) + duration_seconds))
+        added.append({'clip': clip.model_dump(mode='json'), 'insertion': insertion.model_dump(mode='json')})
+    planned.insertions.sort(key=lambda event: event.minute)
+    Draft.model_validate(planned.model_dump())
+    return planned, added
+
+
 def context(draft):
     # Labels, music and scheduling do not change generated pixels.
     result = {k: draft.model_dump(mode='json')[k] for k in
@@ -343,7 +407,10 @@ def assemble(draft, assets, preview=False, preview_range=None):
 
 
 def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None, editorial_evidence=None):
-    cast = '\n'.join(c.name + ': ' + c.description for c in draft.characters)
+    # The channel's owner-approved identity pack is authoritative. Generic or stale
+    # project cast fields must not contradict the known canonical girl and cat.
+    cast = ('Use only the exact canonical characters described by the channel identity lock below.'
+            if identity_prompt else '\n'.join(c.name + ': ' + c.description for c in draft.characters))
     result = (f'Locked 16:9 camera. Theme: {draft.theme}. Scene: {draft.scene}. '
             f'Environment motion: {draft.scene_motion}. Characters: {cast}. '
             'Preserve the configured character identities, proportions and illustration style. Follow the scene brief for the setting and composition; reference backgrounds are not binding. '
