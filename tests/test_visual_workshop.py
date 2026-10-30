@@ -386,7 +386,18 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
     monkeypatch.setattr(workshop_worker,'ready',lambda:None)
     monkeypatch.setattr(workshop_worker,'storage',lambda:RenderStore())
     monkeypatch.setattr(workshop_worker,'fetch',lambda key,path,sha,limit:Path(path).write_bytes(b'cached-source'))
-    def resumed_render(segments,sources,audio,final,seconds,preview_range=None):
+    # This orchestration test uses dummy media; keep decoding at the mocked
+    # media boundary while asserting that the director's plan reaches rendering.
+    from studio import audiovisual_director
+    prepared = {}
+    def prepare_director(plan,sources,folder,width,height,fps,profile):
+        prepared.update(plan)
+        prepared['director']={'technical_passed':True,'plan_sha256':'1'*64}
+        return prepared,sources
+    monkeypatch.setattr(audiovisual_director,'prepare',prepare_director)
+    monkeypatch.setattr(workshop_worker,'measure',lambda path,kind:(8,{'width':1280,'height':720}))
+    def resumed_render(segments,sources,audio,final,seconds,preview_range=None,prepared_plan=None):
+        assert prepared_plan is prepared and prepared_plan['director']['technical_passed']
         assert segments==original['payload']['segments'] and seconds==original['payload']['seconds']
         assert len(sources)>=1 and Path(audio).exists()
         Path(final).write_bytes(b'recovered-render')
