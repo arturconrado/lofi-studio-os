@@ -37,3 +37,42 @@ def test_creator_ambience_keeps_music_only_master(tmp_path):
     r=apply_ambience({'ambient_bed':'fireplace'},audio,tmp_path,'b',Store(),'x')
     assert uploads==[('programs/b/audio-music-only.mp3',original)] and r['music_only_sha256']==original
     assert audio.exists() and hashlib.sha256(audio.read_bytes()).hexdigest()==r['sha256']!=original
+
+
+@pytest.mark.skipif(not shutil.which('ffmpeg'),reason='FFmpeg required')
+@pytest.mark.parametrize('count', [1, 68])
+def test_soundtrack_uses_at_most_two_short_inputs_and_cleans_pcm(tmp_path, monkeypatch, count):
+    from studio import audio_mix
+    source=tmp_path/'original.wav'
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
+                    'sine=frequency=330:duration=1.2',str(source)],check=True)
+    before=source.read_bytes(); calls=[]; run=audio_mix._run
+    def record(args, seconds):
+        calls.append((list(args),seconds));return run(args,seconds)
+    monkeypatch.setattr(audio_mix,'_run',record)
+    expected=coverage(1.2*count,count,.1)
+    report=mix([source]*count,tmp_path/'complete.mp3',.1,expected-.01)
+    assert report['duration_seconds']==pytest.approx(expected,abs=.05)
+    assert len(report['tracks'])==count
+    assert report['duration_basis']=='decoded_pcm_samples'
+    assert all(args.count('-i')<=2 for args,_ in calls)
+    assert all(seconds==.2 for args,seconds in calls if args.count('-i')==2)
+    assert source.read_bytes()==before
+    assert not list(tmp_path.glob('.audio-mix-*'))
+
+
+@pytest.mark.skipif(not shutil.which('ffmpeg'),reason='FFmpeg required')
+def test_failed_mix_keeps_originals_and_removes_only_derived_pcm(tmp_path,monkeypatch):
+    from studio import audio_mix
+    source=tmp_path/'original.wav'
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
+                    'sine=frequency=220:duration=2',str(source)],check=True)
+    before=source.read_bytes();run=audio_mix._run
+    def fail_transition(args, seconds):
+        if args.count('-i')==2:raise subprocess.CalledProcessError(1,'ffmpeg')
+        return run(args,seconds)
+    monkeypatch.setattr(audio_mix,'_run',fail_transition)
+    with pytest.raises(subprocess.CalledProcessError):
+        mix([source,source],tmp_path/'complete.mp3',.5,3)
+    assert source.read_bytes()==before
+    assert not list(tmp_path.glob('.audio-mix-*'))

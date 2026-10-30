@@ -62,6 +62,37 @@ def test_interrupted_generation_keeps_previously_persisted_track(monkeypatch,tmp
     assert saved[-1]['failed_generation']['sequence']==2
 
 
+def test_complete_preserved_soundtrack_probes_once_and_never_regenerates(monkeypatch,tmp_path):
+    from studio import audio_mix, timeline_compositor
+    monkeypatch.setenv('S3_BUCKET','test')
+    measured=[];saved=[]
+    tracks=[{'sequence':i,'key':f'track-{i}','sha256':'a'*64,'seconds':120,
+             'estimated_cost_usd':'.08','cost_exact':False} for i in range(1,69)]
+    p=task()['payload']['audio_plan'] | {'tracks':tracks,'track_count':70,
+        'target_duration_seconds':8000,'template_plan':{},
+        'template_program_id':'p','template_snapshot_sha256':'b'*64}
+    p.pop('failed_generation')
+    monkeypatch.setattr(workshop_worker,'fetch',lambda key,path,sha,limit:Path(path).write_bytes(b'original'))
+    def measured_once(path,kind):
+        measured.append(path.name);return 120,{}
+    monkeypatch.setattr(timeline_compositor,'measure',measured_once)
+    def no_generation(*args):raise AssertionError('Preserved audio must not be generated again')
+    monkeypatch.setattr(provider,'generate',no_generation)
+    def mixed(paths,path,fade,target):
+        assert len(paths)==68
+        path.write_bytes(b'mix')
+        return {'sha256':'c'*64,'duration_seconds':8059.5}
+    monkeypatch.setattr(audio_mix,'mix',mixed)
+    class Store:
+        def upload_file(self,*args,**kwargs):pass
+    monkeypatch.setattr(workshop_worker,'storage',lambda:Store())
+    monkeypatch.setattr(workshop_worker,'_save_task_audio_plan',lambda *args:saved.append(args))
+    info,plan=workshop_worker.generate_ephemeral_soundtrack('task',{'audio_plan':p,'project_id':'p'},tmp_path)
+    assert len(measured)==len(set(measured))==68
+    assert len(plan['tracks'])==68 and len(saved)==1
+    assert info['sha256']=='c'*64
+
+
 def test_paid_resume_reserves_once_and_reuses_same_job(monkeypatch):
     item=task();item['id']=uuid.uuid4();item['reserved_cost']=Decimal('0.24')
     item['payload'].update(operation='render',project_id=str(uuid.uuid4()),
