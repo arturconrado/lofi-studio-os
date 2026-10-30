@@ -184,7 +184,9 @@ def render_segments(segments, sources, audio, destination, seconds, preview_rang
         raise ValueError('Unsupported output resolution')
     native_full_hd=bool(native_sizes) and all(w>=1920 and h>=1080 for w,h in native_sizes)
     full_hd=native_full_hd or output_resolution=='1080p_upscaled'
-    if full_hd:compiled['encoding_profile']={'crf':15,'preset':'medium','threads':2,'lookahead_frames':8}
+    if full_hd:
+        from .render_resources import encoder_threads
+        compiled['encoding_profile']={'crf':15,'preset':'medium','threads':encoder_threads(),'lookahead_frames':8}
     report = render(compiled, plan, sources, audio, {}, destination,width=1920 if full_hd else 1280,height=1080 if full_hd else 720)
     source_audio_seconds, _ = measure(audio, 'audio')
     measured, _ = measure(destination, 'video')
