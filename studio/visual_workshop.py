@@ -426,6 +426,12 @@ def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None, editor
                    'Start exactly from the supplied frame and continue that ongoing motion before beginning the requested action. '
                    'Show the entire action from its beginning; never start with the hand already on the cat or the cup already lifted. '
                    'Finish in the first pose of the base loop so it resumes naturally.'))))
+    if kind == 'video':
+        result += (' Audiovisual direction: preserve the channel identity and complete a readable action with entry, development and return. '
+                   'Maintain object ownership, hand contact, eyelines, lighting and screen direction. '
+                   'Match the incoming and outgoing motion velocity, not merely a similar pose. '
+                   'Do not freeze, teleport objects, reset abruptly or morph faces to return to base. '
+                   'Express the requested distinct action clearly within the calm channel style; do not substitute generic tiny motion. ')
     if identity_prompt:
         if kind == 'image':
             result += (' Channel identity lock: ' + identity_prompt +

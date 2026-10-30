@@ -353,7 +353,7 @@ def render(compiled,plan,sources,audio,environment,output,progress=None,width=12
     if not windows and duration+.001<target+compiled.get('audio_offset_seconds',0):raise ValueError('Audio shorter than target')
     needed=math.ceil(target*2_000_000/8*3+512*1024**2)
     if shutil.disk_usage(folder).free<needed:raise ValueError('Insufficient local scratch capacity')
-    if compiled.get('continuity_policy'):
+    if compiled.get('continuity_policy') and not plan.get('continuity_prepared'):
         from .workshop_continuity import prepare
         plan,sources=prepare(plan,sources,folder,width,height,fps,profile)
         segments=plan['segments']

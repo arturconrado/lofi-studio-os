@@ -21,6 +21,7 @@ from .channels import profile
 from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame, seam_binding, variant_plan, occurrence_clip, _status, validate_continuations, plan_editorial_insertions
 from .workshop_shorts import ShortSpec
 from .permissions import require_spend_permission
+from .audiovisual_director import channel_reviews
 
 router = APIRouter(prefix='/workshop')
 KIND = 'visual_workshop_v1'
@@ -394,6 +395,10 @@ def public_task(t):
             'actual_usd': float(t['actual_cost']) if t.get('actual_cost') is not None else None,
             'attempt_stage': p.get('attempt_stage'),
             'current': p.get('current', True),
+            'director_proof': p.get('director_proof', False),
+            'reedit_parent_id': p.get('reedit_source', {}).get('task_id'),
+            'director': p.get('director_contract'),
+            'continuity_diagnostics': p.get('continuity_diagnostics'),
             'preview_range': p.get('preview_range'),
             'report': p.get('report'), 'approved': p.get('approved', False),
             'url': f'/api/creator/workshop/projects/{p["project_id"]}/renders/{t["id"]}' if p.get('video_key') else None}
@@ -1481,7 +1486,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 'variant_key':group['key'] if group else None,'requested_variant_key':body.variant_key,
                 'occurrence_ids':group['event_ids'] if group else [],'batch_ids':[str(t) for t in tids],
                 'signature':signature(draft,effective,kind,image['sha256'] if kind=='video' else None),
-                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None,identity_prompt,editorial_evidence),'seconds':clip.seconds,
+                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None,identity_prompt,{'research':editorial_evidence,'human_reviews':channel_reviews(c,row['channel_id'])} if kind=='video' else editorial_evidence),'seconds':clip.seconds,
                 'editorial_memory':editorial_memory,
                 'resolution':body.resolution,
                 'visual_signature':signature(draft,clip,'image'),'source_image_id':str(effective.image_id) if effective.image_id else None,
@@ -2199,11 +2204,15 @@ def render(pid: uuid.UUID, body: Render):
             budget = c.execute('SELECT limit_usd FROM visual_project_budgets WHERE project_id=%s', (pid,)).fetchone()
             if budget and project_generation_usage(c, pid) + quote['usd'] > budget['limit_usd']:
                 raise HTTPException(409, 'O teto autorizado deste projeto não cobre a nova trilha. Nenhuma geração foi iniciada.')
+        from .audiovisual_director import contract, channel_reviews
+        editorial_evidence, editorial_meta = visual_editorial_memory(c, profile(c,row['channel_id']), draft, draft.base)
+        director = contract(row['channel_id'], draft, identity, {'research':editorial_evidence,'human_reviews':channel_reviews(c,row['channel_id'])})
         draft_sha=digest(row['data'])
         identity_hashes=identity_reference_hashes(identity)
         payload = {'project_id': str(pid), 'operation': 'render', 'draft_sha256': digest(row['data']),
                    'output_resolution': body.output_resolution,
                    'seconds': segments[-1]['end'], 'segments': segments,
+                   'director_contract': director, 'editorial_memory': editorial_meta,
                    'creative_contract': {'version':1,'theme':draft.theme,'scene':draft.scene,
                                          'scene_motion':draft.scene_motion,
                                          'identity_profile':draft.identity_profile,
@@ -2310,7 +2319,7 @@ def retry_render(pid:uuid.UUID,tid:uuid.UUID):
         if t['status'] in ('QUEUED','RUNNING'):return public_task(t)
         if t['status'] not in ('FAILED','INTERRUPTED'):raise HTTPException(409,'A montagem não está interrompida.')
         audio_plan=t['payload'].get('audio_plan') or {}
-        if not audio_plan.get('mix_key'):
+        if not t['payload'].get('reedit_source') and not audio_plan.get('mix_key'):
             from .audio_mix import coverage
             tracks=audio_plan.get('tracks') or []
             reusable_seconds=coverage(sum(float(item.get('seconds') or 0) for item in tracks),
@@ -2340,6 +2349,79 @@ def render_video(pid: uuid.UUID, tid: uuid.UUID, request: Request):
     return stream(request, t['payload']['video_key'], 'video/mp4')
 
 
+class ReeditRequest(Strict):
+    request_id: uuid.UUID
+    revision: int
+    proof_id: uuid.UUID | None = None
+
+
+@router.post('/projects/{pid}/renders/{tid}/reedit')
+def reedit(pid: uuid.UUID, tid: uuid.UUID, body: ReeditRequest):
+    """A new immutable edit; no provider invocation and no asset/identity mutation."""
+    from .audiovisual_director import contract, channel_reviews
+    with db() as c:
+        row=project(c,pid,True); parent=task(c,tid,pid); original=parent['payload']
+        old=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone()
+        if old:
+            prior=task(c,body.request_id,pid)
+            if prior['payload'].get('reedit_source',{}).get('task_id')!=str(tid) or prior['payload'].get('proof_id')!=(str(body.proof_id) if body.proof_id else None):
+                raise HTTPException(409,'Pedido já usado com outra edição')
+            return public_task(prior)
+        if row['revision']!=body.revision:raise HTTPException(409,'Salve a versão atual antes de reeditar')
+        if parent['status']!='COMPLETED' or original.get('operation')!='render' or not original.get('video_key') or not original.get('report',{}).get('sha256'):
+            raise HTTPException(409,'Escolha um vídeo completo concluído como origem')
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'operation' IN ('render','preview') AND status IN ('QUEUED','RUNNING')",(KIND,str(pid))).fetchone():
+            raise HTTPException(409,'Aguarde a montagem em andamento')
+        draft=Draft.model_validate(row['data']); media=assets(c,pid)
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        require_current_identity_assets(identity,draft,media)
+        try:segments=assemble(draft,media)
+        except ValueError as exc:raise HTTPException(409,str(exc)) from None
+        seconds=segments[-1]['end']
+        if abs(seconds-float(original['report'].get('audio_seconds',0)))>.15:
+            raise HTTPException(409,'Esta reedição preserva a duração da trilha original')
+        if not worker_online(c):raise HTTPException(503,'O montador está offline')
+        evidence,metadata=visual_editorial_memory(c,profile(c,row['channel_id']),draft,draft.base)
+        direction=contract(row['channel_id'],draft,identity,{'research':evidence,'human_reviews':channel_reviews(c,row['channel_id'])})
+        source={'task_id':str(tid),'key':original['video_key'],'sha256':original['report']['sha256']}
+        binding=digest({'source':source,'draft':row['data'],'segments':segments,
+                        'identity':direction['channel_memory']['reference_sha256s'],
+                        'identity_profile':draft.identity_profile,'version':direction['version']})
+        if body.proof_id:
+            proof=task(c,body.proof_id,pid); p=proof['payload']
+            if (proof['status']!='COMPLETED' or not p.get('director_proof') or not p.get('approved')
+                or p.get('reedit_binding')!=binding or p.get('review_sha256')!=p.get('report',{}).get('sha256')
+                or not p.get('report',{}).get('director',{}).get('technical_passed')):
+                raise HTTPException(409,'Revise a amostra de continuidade desta versão antes da montagem longa')
+        payload={'project_id':str(pid),'operation':'render' if body.proof_id else 'preview',
+                 'director_proof':not bool(body.proof_id),'proof_id':str(body.proof_id) if body.proof_id else None,
+                 'draft_sha256':digest(row['data']),'segments':segments,'seconds':seconds,
+                 'output_resolution':original.get('output_resolution','auto'),
+                 'reedit_source':source,'reedit_binding':binding,'director_contract':direction,
+                 'editorial_memory':metadata,'approved':False}
+        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_director_reedit',%s,0,'QUEUED','Preparando continuidade com a memória deste canal; sem geração paga')",
+                  (body.request_id,KIND,json.dumps(payload)))
+        audit(c,'WORKSHOP_REEDIT_REQUESTED',str(body.request_id),'Parent '+str(tid)+'; channel '+str(row['channel_id']))
+        c.commit()
+    return {'id':str(body.request_id),'status':'QUEUED'}
+
+
+@router.post('/projects/{pid}/renders/{tid}/continuity-review')
+def review_continuity(pid: uuid.UUID, tid: uuid.UUID, body: Review):
+    with db() as c:
+        row=project(c,pid,True); t=task(c,tid,pid); p=t['payload']
+        if not p.get('director_proof') or t['status']!='COMPLETED' or p.get('draft_sha256')!=digest(row['data']):
+            raise HTTPException(409,'Prepare a amostra da versão atual')
+        if body.sha256!=p.get('report',{}).get('sha256'):raise HTTPException(409,'Arquivo mudou')
+        if body.approve and (not body.confirm_identity or not body.confirm_motion_and_return or not p['report'].get('director',{}).get('technical_passed')):
+            raise HTTPException(409,'Resolva os bloqueios e confira a identidade, os movimentos e todas as emendas')
+        p.update(approved=body.approve,review_sha256=body.sha256,review_note=body.note)
+        c.execute('UPDATE factory_tasks SET payload=%s WHERE id=%s',(json.dumps(p),tid))
+        audit(c,'WORKSHOP_CONTINUITY_REVIEWED',str(tid),json.dumps({'channel_id':str(row['channel_id']),'approved':body.approve,'note':body.note}))
+        c.commit()
+    return {'approved':body.approve}
+
+
 @router.post('/projects/{pid}/renders/{tid}/review')
 def review_render(pid: uuid.UUID, tid: uuid.UUID, body: Review):
     with db() as c:
@@ -2348,6 +2430,12 @@ def review_render(pid: uuid.UUID, tid: uuid.UUID, body: Review):
             raise HTTPException(409, 'Monte a versão atual antes de aprovar')
         if p.get('report', {}).get('sha256') != body.sha256: raise HTTPException(409, 'Arquivo mudou')
         if body.approve:
+            current_draft=Draft.model_validate(row['data'])
+            current_identity=identity_profile_for_channel(c,row['channel_id'])
+            require_current_identity_assets(current_identity,current_draft,assets(c,pid))
+            memory=p.get('director_contract',{}).get('channel_memory')
+            if memory and (memory['identity_profile']!=current_draft.identity_profile or memory['reference_sha256s']!=sorted(identity_reference_hashes(current_identity))):
+                raise HTTPException(409,'A memória de identidade mudou; prepare uma revisão atualizada')
             if not body.confirm_identity or not body.confirm_motion_and_return: raise HTTPException(422, 'Confira todos os movimentos e o retorno à base')
             try: assemble(Draft.model_validate(row['data']), assets(c, pid))
             except ValueError as e: raise HTTPException(409, str(e)) from None

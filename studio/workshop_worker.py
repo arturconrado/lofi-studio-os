@@ -4,6 +4,8 @@ import hashlib
 import logging
 import os
 import uuid
+import subprocess
+import shutil
 from decimal import Decimal
 from pathlib import Path
 from .core import db, storage
@@ -152,12 +154,12 @@ def discard_incomplete_soundtrack(task_id):
     _save_task_audio_plan(task_id,plan)
 
 
-def render_segments(segments, sources, audio, destination, seconds, preview_range=None, output_resolution='auto'):
+def render_segments(segments, sources, audio, destination, seconds, preview_range=None, output_resolution='auto', prepared_plan=None):
     from .production_harness import workshop_plan
     from .timeline_compositor import render
     destination = Path(destination)
     if destination.exists(): raise ValueError('Output already exists')
-    plan = workshop_plan(segments, seconds)
+    plan = prepared_plan or workshop_plan(segments, seconds)
     # Preserve the cycle configured by the user, even when the provider returned
     # extra frames. Source files themselves remain immutable and hash-verified.
     if preview_range:
@@ -175,7 +177,7 @@ def render_segments(segments, sources, audio, destination, seconds, preview_rang
         segment['cycle_seconds'] = segment['source_seconds']
         native_sizes.append((info['width'],info['height']))
     from .workshop_continuity import POLICY
-    compiled = {'continuity_policy': POLICY, 'duration_seconds': seconds, 'reuse_base_cycles': True, 'lighting': {'keyframes': [
+    compiled = {'continuity_policy': plan.get('continuity_policy',POLICY), 'duration_seconds': seconds, 'reuse_base_cycles': True, 'lighting': {'keyframes': [
         {'minute': 0, 'night': 0, 'sky_light': 0, 'city_lights': 0}]}}
     if preview_range:
         compiled.update(duration_seconds=length, clock_offset_seconds=start,
@@ -202,6 +204,7 @@ def render_segments(segments, sources, audio, destination, seconds, preview_rang
             'output_resolution_requested':output_resolution, 'contains_upscaled_sources':full_hd and not native_full_hd,
             'continuity_policy':report.get('continuity_policy'), 'motion_bridges':report.get('motion_bridges',[]),
             'join_checks':report.get('join_checks',[]),
+            'director':plan.get('director'),
             'audio_alignment': {'source_seconds':source_audio_seconds,'target_seconds':target,
                                 'trimmed_seconds':max(0.0,source_audio_seconds-target),
                                 'source_preserved':True,'looped':False},
@@ -261,9 +264,36 @@ def tick():
             sha = segment['asset_sha256']
             if sha in sources: continue
             path = folder / (sha + '.mp4'); fetch(segment['asset_key'], path, sha, 64 * 1024**2); sources[sha] = path
+        prepared_plan = None
+        if p.get('director_contract'):
+            from .audiovisual_director import prepare, ContinuityRejected
+            from .production_harness import workshop_plan
+            from .render_resources import encoder_threads
+            full_hd=p.get('output_resolution')=='1080p_upscaled' or all(measure(path,'video')[1]['width']>=1920 and measure(path,'video')[1]['height']>=1080 for path in sources.values())
+            prepared_plan,sources=prepare(workshop_plan(p['segments'],p['seconds']),sources,folder,
+                1920 if full_hd else 1280,1080 if full_hd else 720,24,
+                {'crf':15,'preset':'medium','threads':encoder_threads(),'lookahead_frames':8} if full_hd else None)
+            with db() as c:
+                c.execute("UPDATE factory_tasks SET payload=jsonb_set(payload,'{continuity_diagnostics}',%s::jsonb) WHERE id=%s",
+                          (json.dumps(prepared_plan['director']),t['id']));c.commit()
+            if not prepared_plan['director']['technical_passed'] and not p.get('director_proof'):
+                raise ContinuityRejected(prepared_plan['director'])
         audio = folder / 'audio.mp3'
+        if p.get('reedit_source'):
+            source=p['reedit_source']; original=folder/'original-final.mp4'
+            source_size=storage().head_object(Bucket=os.environ['S3_BUCKET'],Key=source['key'])['ContentLength']
+            if shutil.disk_usage(folder).free < source_size + 1024**3:
+                raise ValueError('Insufficient space to safely reuse the existing video')
+            fetch(source['key'],original,source['sha256'],32*1024**3)
+            audio=folder/'original-audio.m4a'
+            subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-i',str(original),'-map','0:a:0',
+                            '-vn','-c:a','copy',str(audio)],check=True,timeout=600,stderr=subprocess.PIPE)
+            audio_info={'source_type':'same_video_reedit','sha256':file_hash(audio),'parent_sha256':source['sha256']}
+            audio_plan={}
         ephemeral = bool(p.get('audio_plan'))
-        if ephemeral:
+        if p.get('reedit_source'):
+            pass
+        elif ephemeral:
             audio_info, audio_plan = generate_ephemeral_soundtrack(t['id'], p, folder)
             if not audio.exists(): fetch(audio_info['key'], audio, audio_info['sha256'], 1024**3)
         else:
@@ -271,10 +301,32 @@ def tick():
             audio_info = p['audio']; audio_plan = {}
             fetch(audio_info['key'], audio, audio_info['sha256'], 1024**3)
         final = folder / 'final.mp4'
-        if p.get('output_resolution', 'auto') == '1080p_upscaled':
-            report = render_segments(p['segments'], sources, audio, final, p['seconds'], p.get('preview_range'), output_resolution='1080p_upscaled')
+        if p.get('director_proof'):
+            from .audiovisual_director import proof_windows
+            parts=[];manifest=[];cursor=0
+            for index,(start,length) in enumerate(proof_windows(prepared_plan['segments'],p['seconds'])):
+                part_folder=folder/f'proof-{index:03}';part_folder.mkdir(exist_ok=True)
+                part=part_folder/'sample.mp4'
+                render_segments(p['segments'],sources,audio,part,p['seconds'],[start,length],
+                                p.get('output_resolution','auto'),prepared_plan=prepared_plan)
+                parts.append(part);manifest.append({'proof_start':cursor,'program_start':start,'seconds':length});cursor+=length
+            listing=folder/'proof.ffconcat';listing.write_text(''.join("file '"+part.relative_to(folder).as_posix()+"'\n" for part in parts))
+            subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-f','concat','-safe','1','-i',str(listing),
+                            '-c','copy','-movflags','+faststart',str(final)],check=True,timeout=600,stderr=subprocess.PIPE)
+            from .video_guardrails import inspect
+            checked=inspect(final)
+            if not checked['full_decode_pass']:raise ValueError('Continuity proof could not be decoded')
+            report={**checked,'seconds':checked['duration_seconds'],'director':prepared_plan['director'],
+                    'proof_windows':manifest,'final_review_required':True,'is_full_video':False}
         else:
-            report = render_segments(p['segments'], sources, audio, final, p['seconds'], p.get('preview_range'))
+            kwargs={'prepared_plan':prepared_plan} if prepared_plan else {}
+            if p.get('output_resolution','auto')=='1080p_upscaled':kwargs['output_resolution']='1080p_upscaled'
+            report=render_segments(p['segments'],sources,audio,final,p['seconds'],p.get('preview_range'),**kwargs)
+        if p.get('reedit_source'):
+            report['audio_reuse']={'parent_task_id':p['reedit_source']['task_id'],
+                                  'parent_sha256':p['reedit_source']['sha256'],'paid_calls':0}
+        if p.get('director_contract'):
+            report['channel_memory_sha256']=p['director_contract']['memory_sha256']
         if ephemeral:
             report['audio_alignment'].update({'program_id':audio_info['program_id'],
                 'source_sha256':audio_info['sha256'],'source_type':'new_ephemeral_original',
@@ -298,7 +350,7 @@ def tick():
         task_update={'report':report,'video_key':key}
         if ephemeral:task_update['audio_plan']=final_audio_plan
         with db() as c:
-            detail='Vídeo completo pronto para revisão; trilha temporária será removida' if ephemeral else 'Vídeo completo pronto para revisão'
+            detail=('Amostra de continuidade pronta; confira os bloqueios e todas as emendas' if p.get('director_proof') else 'Vídeo completo pronto para revisão; trilha temporária será removida' if ephemeral else 'Vídeo completo pronto para revisão')
             c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail=%s,updated_at=now() WHERE id=%s",
                       (json.dumps(task_update), detail, t['id'])); c.commit()
         if ephemeral:
@@ -324,7 +376,7 @@ def tick():
         # remove their temporary soundtrack after the final file is stored.
         with db() as c:
             c.execute("UPDATE factory_tasks SET status='FAILED',detail=%s,updated_at=now() WHERE id=%s",
-                      ('Montagem interrompida (' + type(e).__name__ + '). Confira as fontes e o espaço disponível.', t['id'])); c.commit()
+                      (('Continuidade reprovada: confira o diagnóstico e prepare uma amostra antes de remontar.' if type(e).__name__=='ContinuityRejected' else 'Montagem interrompida (' + type(e).__name__ + '). Confira as fontes e o espaço disponível.'), t['id'])); c.commit()
     finally:
         for path in folder.iterdir():
             if path.is_file(): path.unlink()
