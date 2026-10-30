@@ -244,7 +244,9 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
         c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",
                   ('{"video_key":"test-preview","report":{"sha256":"'+'e'*64+'","full_decode_pass":true}}',preview.json()['id']));c.commit()
     assert cl.post(review_url+'video',json=review_body).status_code==200
-    request={'request_id':str(uuid.uuid4()),'revision':state['revision']}
+    quote=api.soundtrack_quote(60)
+    request={'request_id':str(uuid.uuid4()),'revision':state['revision'],
+             'max_usd':float(quote['usd']),'confirm_cost':True}
     response=cl.post(url+'/render',json=request);assert response.status_code==200,response.text
     assert cl.post(url+'/render',json=request).json()['id']==response.json()['id']
     render_id=response.json()['id'];render_url=url+f'/jobs/{render_id}/retry-render'
