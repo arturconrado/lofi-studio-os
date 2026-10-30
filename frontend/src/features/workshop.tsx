@@ -8,8 +8,9 @@ import { Field, Empty, Skeleton, Pill, Dialog } from '../ds/ui';
 type Clip = { action_goal?: string | null; continues_from?: string | null; id: string; name: string; motion: string; seconds: number; references: string[]; image_id: string | null; video_id: string | null };
 type Character = { name: string; description: string; references: string[] };
 type AttemptReasonRequest =
-  | { mode: 'scope'; message: string }
-  | { mode: 'correction'; clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string };
+  | { mode: 'scope'; message: string; revision: number }
+  | { mode: 'correction'; clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string; revision: number; resolution: '720p' | '1080p' };
+type PaidApproval = { clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string; reason?: string; revision: number; resolution: '720p' | '1080p' };
 type Draft = { automatic_motion?: boolean; identity_profile?: string | null; name: string; minutes: number; theme: string; scene: string; scene_motion: string; scene_references: string[];
   characters: Character[]; base: Clip; clips: Clip[]; insertions: { id: string; clip_id: string; minute: number }[]; music_program_id: string | null };
 type Media = { id: string; url: string; sha256: string; kind: string; approved: boolean; clip_id?: string; resolution?: '720p' | '1080p' };
@@ -62,10 +63,13 @@ export function Workshop({ id }: { id?: string }) {
   const editRevision = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [resolution, setResolution] = useState<'720p' | '1080p'>('720p');
+  const [outputResolution, setOutputResolution] = useState<'auto' | '1080p_upscaled'>('auto');
   const [editVisual, setEditVisual] = useState(false);
   const [actionKey, setActionKey] = useState('');
   const [attemptReasonRequest, setAttemptReasonRequest] = useState<AttemptReasonRequest | null>(null);
   const [attemptReason, setAttemptReason] = useState('');
+  const [paidApproval, setPaidApproval] = useState<PaidApproval | null>(null);
+  const [identityReview, setIdentityReview] = useState<{sha256:string;revision:number} | null>(null);
   const [splitSeconds, setSplitSeconds] = useState<Record<string,number>>({});
   const [splitPlan, setSplitPlan] = useState<{clip_id:string;total_seconds:number;usd_max:number;new_clips_max:number;parts:{seconds:number;motion:string}[]} | null>(null);
   const polling = useRef(false);
@@ -223,15 +227,19 @@ export function Workshop({ id }: { id?: string }) {
     setAttemptReason('');
     if (request.mode === 'scope') {
       return run(() => post(`${prefix}/projects/${id}/attempt-scope/review`, {
-        request_id: uuid(), revision: d!.revision, reason, confirm_current_actions: true
+        request_id: uuid(), revision: request.revision, reason, confirm_current_actions: true
       }), 'Escopo da entrega revisado. Confira novamente o orçamento e confirme a geração separadamente.');
     }
-    const q = request.quote;
-    const attemptLabel = q.attempt?.stage === 'correction' ? 'Único ciclo de correção' : 'Tentativa inicial';
-    if (!confirm(`${request.history}\n\n${attemptLabel}: gerar ${request.kind === 'image' ? 'imagem' : 'vídeo'} de “${request.clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. ${q.waiting_variants || 0} versão(ões) aguardam o vídeo anterior. Não haverá repetição paga automática.`)) return;
+    setPaidApproval({clip:request.clip,kind:request.kind,variantKey:request.variantKey,quote:request.quote,
+      history:request.history,reason,revision:request.revision,resolution:request.resolution});
+  };
+  const submitPaidApproval = () => {
+    const request = paidApproval; if (!request || busy) return;
+    setPaidApproval(null);
     return run(() => post(`${prefix}/projects/${id}/clips/${request.clip.id}/generate/${request.kind}`, {
-      request_id: uuid(), revision: d!.revision, max_usd: q.usd, confirm_cost: true, variant_key: request.variantKey || null,
-      correction_reason: reason, ...(request.kind === 'video' ? { resolution } : {})
+      request_id: uuid(), revision: request.revision, max_usd: request.quote.usd, confirm_cost: true,
+      variant_key: request.variantKey || null, ...(request.reason ? {correction_reason:request.reason} : {}),
+      ...(request.kind === 'video' ? {resolution:request.resolution} : {})
     }), 'Pedido incluído na fila. Acompanhe em Fila e histórico.');
   };
   const createShort = () => {
@@ -272,18 +280,15 @@ export function Workshop({ id }: { id?: string }) {
     if(q.new_clips===0){setMessage('Os vídeos já estão disponíveis para revisão.');return;}
     const historyAndAlternatives=attemptContext(q.attempt);
     if(q.attempt?.scope_review_required){
-      if(!confirm(`${q.attempt.message}\n\nA revisão salva somente o escopo atual; não inicia geração nem amplia o orçamento financeiro.`))return;
-      requestAttemptReason({mode:'scope',message:q.attempt.message});
+      requestAttemptReason({mode:'scope',message:q.attempt.message,revision:d!.revision});
       return;
     }
     if(q.attempt?.allowed===false){setMessage([q.attempt.message || 'O limite desta unidade criativa foi atingido.',historyAndAlternatives].filter(Boolean).join('\n\n'));return;}
     if(q.attempt?.requires_reason){
-      requestAttemptReason({mode:'correction',clip,kind,variantKey,quote:q,history:historyAndAlternatives});
+      requestAttemptReason({mode:'correction',clip,kind,variantKey,quote:q,history:historyAndAlternatives,revision:d!.revision,resolution});
       return;
     }
-    const attemptLabel=q.attempt?.stage==='correction'?'Único ciclo de correção':'Tentativa inicial';
-    if (!confirm(`${historyAndAlternatives}\n\n${attemptLabel}: gerar ${kind === 'image' ? 'imagem' : 'vídeo'} de “${clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. ${q.waiting_variants || 0} versão(ões) aguardam o vídeo anterior. Não haverá repetição paga automática.`)) return;
-    await post(`${prefix}/projects/${id}/clips/${clip.id}/generate/${kind}`, { request_id: uuid(), revision: d!.revision, max_usd: q.usd, confirm_cost: true, variant_key:variantKey || null, ...(kind === 'video' ? { resolution } : {}) });
+    setPaidApproval({clip,kind,variantKey,quote:q,history:historyAndAlternatives,revision:d!.revision,resolution});
   }); };
   const review = (clip: Clip, kind: 'image' | 'video', approve: boolean, variantKey?: string) => run(async () => {
     const asset = d!.media[String(kind === 'image' ? clip.image_id : clip.video_id)];
@@ -331,10 +336,7 @@ export function Workshop({ id }: { id?: string }) {
           {kind === 'video' && !base && !scheduled && <small>Marque ao menos um horário para esta inserção antes de gerar.</small>}
           {kind === 'video' && !capabilities.data?.durations?.includes(clip.seconds) && <small role="alert">{capabilities.error || 'Selecione uma duração disponível no modelo. Sua imagem será mantida.'}</small>}
           {asset && <a class="btn ghost" href={asset.url + '?download=true'} download>Baixar {kind === 'image' ? 'imagem' : 'vídeo'} desta versão</a>}
-          {base && kind === 'video' && asset && automatic && state?.image_approved && !state?.video_ready && d?.identity?.configured && <button class="btn secondary" disabled={busy || dirty} onClick={() => {
-            if (confirm('Registrar que você já conferiu esta animação e aprovou a identidade e o movimento dos personagens? A confirmação vale para esta versão exata e para as referências atuais do canal.'))
-              run(() => post(`${prefix}/projects/${id}/base/identity-review`, { revision: d!.revision, sha256: asset.sha256, confirm_identity_and_motion: true }), 'Identidade da animação registrada para esta versão.');
-          }}>Registrar identidade da animação já aprovada</button>}
+          {base && kind === 'video' && asset && automatic && state?.image_approved && !state?.video_ready && d?.identity?.configured && <button class="btn secondary" disabled={busy || dirty} onClick={() => setIdentityReview({revision:d!.revision,sha256:asset.sha256})}>Registrar identidade da animação já aprovada</button>}
           {asset && (kind === 'image' || !automatic) && <><Pill tone={ok ? 'ok' : 'warn'}>{ok ? 'Aprovado nesta versão' : 'Revisão necessária'}</Pill>
             <label><input type="checkbox" checked={!!reviewed[key]} onChange={e => setReviewed({ ...reviewed, [key]: e.currentTarget.checked })} /> {kind === 'image' ? 'Conferi cenário e identidade dos personagens' : 'Assisti às prévias com música e conferi identidade, movimento, entrada e retorno'}</label>
             <div class="row"><button class="btn primary" disabled={busy || dirty || !reviewed[key] || (kind==='video' && !d?.jobs.some(j=>j.operation==='preview' && j.clip_id===clip.id && (!variant || j.variant_key===variant.key) && j.status==='COMPLETED' && j.current !== false))} onClick={() => review(displayed,kind,true,variant?.key)}>Aprovar {kind === 'image' ? 'imagem' : 'vídeo'}</button>
@@ -364,7 +366,7 @@ export function Workshop({ id }: { id?: string }) {
   const renderFull = () => {
     if (!id || !d) return;
     return run(() => post(`${prefix}/projects/${id}/render`, {
-      request_id: uuid(), revision: d.revision, max_usd: soundtrackCostCap, confirm_cost: true
+      request_id: uuid(), revision: d.revision, max_usd: soundtrackCostCap, confirm_cost: true, output_resolution: outputResolution
     }), 'Montagem enviada com geração de trilha inédita.');
   };
   const nextAction = () => {
@@ -377,6 +379,17 @@ export function Workshop({ id }: { id?: string }) {
   if (id && resource.loading) return <Skeleton />;
   if (id && resource.error) return <Empty title="Não foi possível abrir o projeto"><p>{resource.error}</p><button class="btn" onClick={resource.reload}>Tentar novamente</button></Empty>;
   return <div class="stack">
+    <Dialog open={!!identityReview} onClose={() => setIdentityReview(null)} title="Registrar identidade da animação">
+      <p>Registre que você já conferiu esta animação e aprovou a identidade e o movimento dos personagens. A confirmação vale para esta versão exata e para as referências atuais do canal.</p>
+      <div class="row"><button class="btn ghost" onClick={() => setIdentityReview(null)}>Cancelar</button><button class="btn primary" disabled={busy} onClick={() => {
+        const review = identityReview; if (!review) return; setIdentityReview(null);
+        run(() => post(`${prefix}/projects/${id}/base/identity-review`, { ...review, confirm_identity_and_motion: true }), 'Identidade da animação registrada para esta versão.');
+      }}>Confirmar identidade já aprovada</button></div>
+    </Dialog>
+    <Dialog open={!!paidApproval} onClose={() => setPaidApproval(null)} title="Confirmar custo da geração">
+      {paidApproval && <><p style={{whiteSpace:'pre-line'}}>{paidApproval.history}</p><p>{paidApproval.quote.attempt?.stage === 'correction' ? 'Único ciclo de correção' : 'Tentativa inicial'}: gerar {paidApproval.kind === 'image' ? 'imagem' : 'vídeo'} de “{paidApproval.clip.name}”. {paidApproval.quote.new_clips || 1} novo(s), reserva máxima de US$ {Number(paidApproval.quote.usd).toFixed(2)}. {paidApproval.quote.reused_occurrences || 0} ocorrência(s) reaproveitada(s); {paidApproval.quote.waiting_variants || 0} aguardando o vídeo anterior. Não haverá repetição paga automática.</p></>}
+      <div class="row"><button class="btn ghost" onClick={() => setPaidApproval(null)}>Cancelar</button><button class="btn primary" disabled={busy || !paidApproval} onClick={submitPaidApproval}>Confirmar geração</button></div>
+    </Dialog>
     <Dialog open={!!attemptReasonRequest} onClose={() => { setAttemptReasonRequest(null); setAttemptReason(''); }} title={attemptReasonRequest?.mode === 'scope' ? 'Justificar o escopo atual' : 'Justificar correção paga'}>
       {attemptReasonRequest?.mode === 'scope'
         ? <p>{attemptReasonRequest.message} A justificativa apenas registra o escopo atual; não amplia o orçamento nem inicia uma geração.</p>
@@ -467,7 +480,8 @@ export function Workshop({ id }: { id?: string }) {
       <p class="faint">Os minutos são contados desde o início. Inserções não prolongam a duração total e não podem se sobrepor.</p>
     </section>
     <section class="card stack"><h3>4. Música, prévia e vídeo completo</h3><Field label="Resolução dos novos trechos de vídeo"><select class="select" value={resolution} onChange={e => setResolution(e.currentTarget.value as '720p' | '1080p')}><option value="720p">720p</option><option value="1080p">1080p</option></select><small>A resolução se aplica às próximas gerações; os materiais existentes são preservados.</small></Field><p>Total: {formatTime(draft.minutes)} · {ordered.length} inserções</p>{!allApproved && <p>Trechos ainda não prontos para montagem: {unreadyClips.map(c=>c.name).join(', ')}. {automatic ? 'Use o próximo passo para preparar cada trecho; materiais compatíveis podem seguir automaticamente.' : 'Revise cada trecho e suas emendas antes de montar.'}</p>}{activeRender && <p role="status">Montagem do vídeo longo em andamento.</p>}
-      {draft.base.video_id && d?.media[draft.base.video_id]?.resolution === '720p' && <p class="notice warn">A base selecionada foi gerada em 720p. A montagem usa 720p se algum trecho tiver resolução inferior a Full HD; selecionar 1080p para novas gerações não altera a base existente.</p>}
+      <Field label="Resolução do vídeo final"><select class="select" value={outputResolution} onChange={e => setOutputResolution(e.currentTarget.value as 'auto' | '1080p_upscaled')}><option value="auto">Automática conforme os trechos</option><option value="1080p_upscaled">Full HD 1080p, ampliando trechos de menor resolução</option></select><small>A ampliação usa o FFmpeg local; trechos gerados em 720p não ganham detalhes nativos de 1080p.</small></Field>
+      {draft.base.video_id && d?.media[draft.base.video_id]?.resolution === '720p' && <p class="notice warn">A base selecionada foi gerada em 720p. {outputResolution === 'auto' ? 'A montagem automática usará 720p se algum trecho tiver resolução inferior a Full HD.' : 'O vídeo final terá 1080p, com esta base ampliada.'} Selecionar 1080p para novas gerações não altera a base existente.</p>}
       <Field label="Referência de estilo musical"><select class="select" value={draft.music_program_id || ''} onChange={e => field('music_program_id', e.currentTarget.value || null)}><option value="">Padrão: estilo da produção mais recente do canal</option>{d?.music.map(m => <option value={m.id}>{m.id} · {Math.floor(m.seconds / 60)} min de referência</option>)}</select><small>O áudio dessa produção não será reutilizado. O Harness cria uma trilha inédita para o tema atual e remove os arquivos temporários ao concluir o vídeo.</small></Field>
       <p class="faint">Ao clicar em montar, você autoriza um teto de até {soundtrackTrackCap} composições, US$ {soundtrackCostCap.toFixed(2)}. Esse valor aparece antes do início e o servidor bloqueia a tarefa se o limite global ou o deste projeto não comportar a reserva. Se a duração medida das composições não cobrir o vídeo, a montagem para sem completar o arquivo ou fazer chamadas pagas extras automaticamente.</p>
       <button class="btn primary" disabled={!id || dirty || busy || !allApproved || scheduleIssue || activeRender} onClick={renderFull}>Montar vídeo completo</button>

@@ -5,6 +5,8 @@ import { channels, channelId } from '../lib/store';
 
 beforeEach(() => {
   window.scrollTo = () => {};
+  if (!HTMLDialogElement.prototype.showModal) HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  if (!HTMLDialogElement.prototype.close) HTMLDialogElement.prototype.close = function () { this.open = false; };
   channels.value = [{ id: 'channel', name: 'Canal' } as any]; channelId.value = 'channel';
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -80,6 +82,8 @@ it('records the already approved base identity without requesting a new generati
   await waitFor(() => expect(view.queryByText('Registrar identidade da animação já aprovada')).not.toBeNull());
   expect(view.getByText(/A base selecionada foi gerada em 720p/)).not.toBeNull();
   fireEvent.click(view.getByText('Registrar identidade da animação já aprovada'));
+  expect(fetcher.mock.calls.some(([url]) => url.endsWith('/base/identity-review'))).toBe(false);
+  fireEvent.click(view.getByText('Confirmar identidade já aprovada'));
   await waitFor(() => expect(fetcher.mock.calls.some(([url, init]) => url.endsWith('/base/identity-review') && init?.method === 'POST')).toBe(true));
   const request = fetcher.mock.calls.find(([url]) => url.endsWith('/base/identity-review'))!;
   expect(JSON.parse(String(request[1]!.body))).toEqual({ revision: 3, sha256: 'b'.repeat(64), confirm_identity_and_motion: true });
@@ -192,10 +196,54 @@ it('quotes all necessary variants once and sends their total budget', async () =
   vi.stubGlobal('fetch',fetcher);const view=render(<Workshop id="p" />);
   await waitFor(()=>expect(view.queryByText('Gerar versões necessárias para os horários')).not.toBeNull());
   fireEvent.click(view.getByText('Gerar versões necessárias para os horários'));
+  await waitFor(()=>expect(view.queryByText('Confirmar geração')).not.toBeNull());
+  expect(fetcher.mock.calls.some(c=>c[0].endsWith('/generate/video'))).toBe(false);
+  await waitFor(()=>expect((view.getByText('Confirmar geração') as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(view.getByText('Confirmar geração'));
   await waitFor(()=>expect(fetcher.mock.calls.some(c=>c[0].endsWith('/generate/video'))).toBe(true));
   const request=fetcher.mock.calls.find(c=>c[0].endsWith('/generate/video'));
   expect(JSON.parse(String(request![1]!.body)).max_usd).toBe(.4);
   expect(fetcher.mock.calls.filter(c=>c[0].endsWith('/generate/video'))).toHaveLength(1);
+});
+
+it('requires a reason and an explicit cost confirmation for a paid correction', async () => {
+  const draft = initialDraft();
+  const detail = {id:'p',revision:7,data:draft,media:{},states:{[draft.base.id]:{image_approved:true,video_ready:false,video_approved:false}},jobs:[],library:[],music:[]};
+  const fetcher = vi.fn(async(url:string, init?:RequestInit) => new Response(JSON.stringify(
+    url.endsWith('/capabilities') ? {durations:[8]} : url.includes('/quote/') ? {usd:.4,new_clips:1,attempt:{allowed:true,stage:'correction',requires_reason:true}}
+      : init?.method === 'POST' ? {id:'job'} : detail), {status:200}));
+  vi.stubGlobal('fetch',fetcher); const view=render(<Workshop id="p" />);
+  await waitFor(()=>expect(view.queryByText('Gerar vídeo de Base tranquila')).not.toBeNull());
+  fireEvent.change(view.getByLabelText(/Resolução dos novos trechos/),{target:{value:'1080p'}});
+  fireEvent.click(view.getByText('Gerar vídeo de Base tranquila'));
+  await waitFor(()=>expect(view.queryByText('Continuar para confirmação de custo')).not.toBeNull());
+  fireEvent.input(view.getByLabelText('Motivo'),{target:{value:'Usar a imagem aprovada e gerar a versão em 1080p.'}});
+  await waitFor(()=>expect((view.getByText('Continuar para confirmação de custo') as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(view.getByText('Continuar para confirmação de custo'));
+  await waitFor(()=>expect((view.getByText('Confirmar geração') as HTMLButtonElement).disabled).toBe(false));
+  expect(fetcher.mock.calls.some(([url])=>url.includes('/generate/'))).toBe(false);
+  fireEvent.click(view.getByText('Confirmar geração'));
+  await waitFor(()=>expect(fetcher.mock.calls.some(([url])=>url.endsWith('/generate/video'))).toBe(true));
+  const body=JSON.parse(String(fetcher.mock.calls.find(([url])=>url.endsWith('/generate/video'))![1]!.body));
+  expect(body).toMatchObject({revision:7,resolution:'1080p',max_usd:.4,confirm_cost:true,correction_reason:'Usar a imagem aprovada e gerar a versão em 1080p.'});
+});
+
+it('reviews a changed delivery scope without starting paid generation', async () => {
+  const draft=initialDraft(); const detail={id:'p',revision:4,data:draft,media:{},states:{[draft.base.id]:{image_approved:true,video_ready:false,video_approved:false}},jobs:[],library:[],music:[]};
+  const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(
+    url.endsWith('/capabilities')?{durations:[8]}:url.includes('/quote/')?{usd:.4,new_clips:1,attempt:{allowed:false,scope_review_required:true,message:'Revise o escopo'}}:init?.method==='POST'?{saved:true}:detail),{status:200}));
+  vi.stubGlobal('fetch',fetcher);const view=render(<Workshop id="p" />);
+  await waitFor(()=>expect(view.queryByText('Gerar vídeo de Base tranquila')).not.toBeNull());
+  fireEvent.click(view.getByText('Gerar vídeo de Base tranquila'));
+  await waitFor(()=>expect(view.queryByText('Registrar escopo')).not.toBeNull());
+  fireEvent.input(view.getByLabelText('Motivo'),{target:{value:'Adicionar as inserções já agendadas para o vídeo.'}});
+  await waitFor(()=>expect((view.getByText('Registrar escopo') as HTMLButtonElement).disabled).toBe(false));
+  expect(fetcher.mock.calls.some(([url])=>url.includes('/attempt-scope/review'))).toBe(false);
+  fireEvent.click(view.getByText('Registrar escopo'));
+  await waitFor(()=>expect(fetcher.mock.calls.some(([url])=>url.endsWith('/attempt-scope/review'))).toBe(true));
+  const body=JSON.parse(String(fetcher.mock.calls.find(([url])=>url.endsWith('/attempt-scope/review'))![1]!.body));
+  expect(body).toMatchObject({revision:4,confirm_current_actions:true,reason:'Adicionar as inserções já agendadas para o vídeo.'});
+  expect(fetcher.mock.calls.some(([url])=>url.includes('/generate/'))).toBe(false);
 });
 
 it('binds preview and approval controls to the version shown for its hours', async () => {
@@ -250,8 +298,11 @@ it('assembles ready compatible clips without individual motion or seam approvals
   vi.stubGlobal('fetch',fetcher);const view=render(<Workshop id="p" />);
   await waitFor(()=>expect((view.getByText('Montar vídeo completo') as HTMLButtonElement).disabled).toBe(false));
   expect(view.queryByText('Aprovar vídeo')).toBeNull();
+  fireEvent.change(view.getByLabelText(/Resolução do vídeo final/), {target: {value: '1080p_upscaled'}});
   fireEvent.click(view.getByText('Montar vídeo completo'));
   await waitFor(()=>expect(fetcher.mock.calls.some(c=>c[0].endsWith('/render'))).toBe(true));
+  const request = fetcher.mock.calls.find(c=>c[0].endsWith('/render'))!;
+  expect(JSON.parse(String(request[1]!.body)).output_resolution).toBe('1080p_upscaled');
   expect(fetcher.mock.calls.some(c=>c[0].includes('/review'))).toBe(false);
 });
 
