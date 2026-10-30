@@ -4,6 +4,45 @@ from studio import timeline_compositor as c
 from studio.workshop_continuity import prepare, POLICY
 
 @pytest.mark.skipif(not shutil.which('ffmpeg'), reason='FFmpeg required')
+def test_cycle_retry_increases_encoding_quality_without_weakening_check(tmp_path, monkeypatch):
+    from studio import workshop_continuity as continuity
+    base=tmp_path/'base.mp4'
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
+                    'testsrc2=size=160x90:rate=24:duration=4',
+                    '-c:v','libx264','-threads','1',str(base)],check=True)
+    sha=c.file_hash(base)
+    plan={'segments':[{'start':0,'end':4,'cycle_seconds':4,
+                       'repeat_short_clip':True,'asset_sha256':sha}]}
+    calls=[]
+    def inspect(path, frames):
+        calls.append((path.name,frames))
+        if len(calls)==1:
+            raise continuity.CycleBoundaryError('boundary')
+        return {'technical_check_passed':True}
+    monkeypatch.setattr(continuity,'inspect_cycle',inspect)
+    result,sources=prepare(plan,{sha:base},tmp_path,160,90,24)
+    output=sources[result['segments'][0]['asset_sha256']]
+    assert len(calls)==2 and all(frames==96 for _,frames in calls)
+    assert output.name.endswith('-crf10.mp4')
+    assert c.file_hash(base)==sha
+
+@pytest.mark.skipif(not shutil.which('ffmpeg'), reason='FFmpeg required')
+def test_cycle_retry_never_accepts_an_unchecked_boundary(tmp_path, monkeypatch):
+    from studio import workshop_continuity as continuity
+    base=tmp_path/'base.mp4'
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
+                    'testsrc2=size=160x90:rate=24:duration=4',
+                    '-c:v','libx264','-threads','1',str(base)],check=True)
+    sha=c.file_hash(base)
+    plan={'segments':[{'start':0,'end':4,'cycle_seconds':4,
+                       'repeat_short_clip':True,'asset_sha256':sha}]}
+    def reject(path, frames):
+        raise continuity.CycleBoundaryError('boundary')
+    monkeypatch.setattr(continuity,'inspect_cycle',reject)
+    with pytest.raises(continuity.CycleBoundaryError):
+        prepare(plan,{sha:base},tmp_path,160,90,24)
+
+@pytest.mark.skipif(not shutil.which('ffmpeg'), reason='FFmpeg required')
 def test_cyclic_join_and_moving_insertions_keep_exact_timeline(tmp_path):
     def ff(*args):
         return subprocess.check_output(['ffmpeg','-v','error','-y',*map(str,args)],stderr=subprocess.PIPE)
