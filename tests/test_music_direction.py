@@ -41,3 +41,13 @@ def test_composition_request_preserves_explicit_tempo_in_user_brief():
     assert result['bpm']==72
     assert 'Tempo: 72 BPM.' in result['prompt']
     assert 'Complete original instrumental composition around 120 seconds' in result['prompt']
+
+
+def test_explicit_thematic_audio_details_remain_in_the_composition_direction():
+    direction = composition_request({
+        'title': 'Halloween Coding', 'theme': 'Halloween in a cozy American town',
+        'music_brief': 'Lo-fi jazz, soft gothic organ and sparse nonverbal ghost-like squeaks.',
+    }, 1)['prompt']
+    assert 'Lo-fi jazz, soft gothic organ and sparse nonverbal ghost-like squeaks.' in direction
+    assert 'If the user explicitly requests a sound effect' in direction
+    assert 'otherwise use no literal sound effects' in direction

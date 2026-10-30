@@ -1883,7 +1883,7 @@ def music_template(c, row, draft):
         music = {**music, 'bible': description}
         recipe = {**recipe, 'music': music}
     plan.update(recipe=recipe, title=str(plan.get('title') or source.get('title') or 'Lo-Fi Vibe Coding'),
-                music_description=description, music_brief='',
+                music_description=description, music_brief=draft.music_brief,
                 theme=draft.theme, creative_theme=draft.theme)
     plan['template_program_id'] = source['id']
     template_hash = digest({'recipe': recipe, 'music_description': description,

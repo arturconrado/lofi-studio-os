@@ -26,6 +26,23 @@ def fixture():
     return draft, assets
 
 
+def test_music_direction_flows_into_new_soundtrack_without_invalidating_visuals():
+    from studio.workshop_api import music_template
+    d, _ = fixture(); before_image = signature(d, d.base, 'image'); before_video = signature(d, d.base, 'video', 'a'*64)
+    d.music_program_id = 'template'; d.music_brief = 'Lo-fi jazz with a soft gothic organ and faint ghost-like sounds.'
+    class Result:
+        def fetchone(self): return {'id': 'template', 'data': {}, 'music_description': 'Warm lo-fi jazzhop', 'title': 'Channel style'}
+    class Store:
+        def execute(self, query, params):
+            assert params == ['channel', 'template']
+            return Result()
+    template = music_template(Store(), {'channel_id': 'channel'}, d)
+    assert template['plan']['music_brief'] == d.music_brief
+    assert template['plan']['creative_theme'] == d.theme
+    assert signature(d, d.base, 'image') == before_image
+    assert signature(d, d.base, 'video', 'a'*64) == before_video
+
+
 def test_existing_base_identity_review_binds_exact_video_source_and_reference_pack():
     from fastapi import HTTPException
     from studio.workshop_api import attest_existing_base_identity, identity_asset_matches
