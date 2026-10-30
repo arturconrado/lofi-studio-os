@@ -17,7 +17,7 @@ from pydantic import Field
 from PIL import Image
 from .core import db, storage, audit, ensure_once
 from .channels import profile
-from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame, seam_binding, variant_plan, occurrence_clip, _status, validate_continuations
+from .visual_workshop import Draft, Strict, digest, clips, get_clip, signature, status, assemble, compatible_image, visual_context, base_cut_frame, seam_binding, variant_plan, occurrence_clip, _status, validate_continuations, plan_editorial_insertions
 from .workshop_shorts import ShortSpec
 from .permissions import require_spend_permission
 
@@ -325,6 +325,8 @@ def public_task(t):
             'preview_range': p.get('preview_range'),
             'report': p.get('report'), 'approved': p.get('approved', False),
             'url': f'/api/creator/workshop/projects/{p["project_id"]}/renders/{t["id"]}' if p.get('video_key') else None}
+    if p.get('editorial_memory'):
+        out['editorial_memory'] = p['editorial_memory']
     if p.get('cancel_requested_at'):
         terminal = p.get('provider_terminal_status')
         out['cancel_state'] = ('confirmed' if terminal == 'cancelled' else
@@ -343,6 +345,59 @@ def public_task(t):
                    parent_video_id=p.get('spec', {}).get('parent_video_id'),
                    url=f'/api/creator/workshop/projects/{p["project_id"]}/shorts/{t["id"]}/video' if p.get('video_key') else None)
     return out
+
+
+def visual_editorial_memory(c, channel, draft, clip):
+    """Retrieve this channel's matching saved evidence for a visual video prompt."""
+    context = ' '.join((channel.get('name', ''), channel.get('niche', ''), draft.theme,
+                        draft.scene, clip.name, clip.motion, clip.action_goal or ''))
+    lowered = context.casefold()
+    if re.search(r'\b(sleep|sleeping|bedtime|insomnia|relaxation|relaxing)\b', lowered):
+        intent = 'sleep_relaxation'
+    elif re.search(r'\b(read|reading|book|novel)\b', lowered):
+        intent = 'reading_focus'
+    elif re.search(r'\b(study|studying|exam|learn|learning)\b', lowered):
+        intent = 'study_focus'
+    elif re.search(r'\b(cod(e|ing)|program(ming|mer)|developer|software|terminal)\b', lowered):
+        intent = 'coding_focus'
+    else:
+        return None, None
+
+    from .channel_memory import retrieve_channel_memory
+    memory = retrieve_channel_memory(c, channel['id'], context, intent=intent,
+                                    content_format='long_form', limit=8)
+    cues = []
+    for item in memory['items']:
+        kind = item.get('kind')
+        cue = {'kind': kind, 'source_ids': item.get('source_ids', [])}
+        if kind == 'channel_studio_video':
+            cue['content_theme'] = item.get('theme', '')
+            cue['observed_metrics'] = {key: item['evidence'][key] for key in (
+                'average_view_duration_seconds', 'retention_15_percent',
+                'retention_30_percent', 'retention_45_percent')
+                if item.get('evidence', {}).get(key) is not None}
+        elif kind == 'public_reference':
+            cue['editorial_note'] = item.get('note', '')
+            cue['relative_pace_in_reference_channel'] = item.get('evidence', {}).get('relative_pace_in_reference_channel')
+            cue['comparable_reference_videos'] = item.get('evidence', {}).get('comparable_reference_videos')
+        elif kind == 'completed_human_experiment':
+            cue.update(hypothesis=item.get('hypothesis', ''), variable=item.get('variable', ''),
+                       observed_result=item.get('human_result', ''))
+        else:
+            continue
+        cues.append(cue)
+        if len(cues) >= 5:
+            break
+    if not cues:
+        return None, None
+    evidence = {'channel_memory_version': memory['version'], 'intent': intent, 'items': cues,
+                'interpretation_note': memory['interpretation_note']}
+    encoded = json.dumps(evidence, ensure_ascii=False, sort_keys=True)
+    metadata = {'version': memory['version'], 'intent': intent, 'count': len(cues),
+                'kinds': list(dict.fromkeys(item['kind'] for item in cues)),
+                'source_ids': list(dict.fromkeys(source for item in cues for source in item['source_ids'])),
+                'sha256': hashlib.sha256(encoded.encode()).hexdigest()}
+    return evidence, metadata
 
 
 def creative_unit(draft, clip):
@@ -621,12 +676,29 @@ def create(body: Create):
         identity = identity_profile_for_channel(c, body.channel_id)
         if identity:
             draft.identity_profile = identity['id']
+            apply_canonical_channel_cast(draft, body.channel_id)
+        draft, _ = plan_editorial_insertions(draft)
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',
                   (pid, body.channel_id, json.dumps(draft.model_dump(mode='json'))))
         if identity:
             bind_identity_reference(c, pid, identity)
         audit(c, 'VISUAL_PROJECT_CREATED', str(pid)); c.commit()
     return {'id': str(pid)}
+
+
+def apply_canonical_channel_cast(draft, channel_id):
+    """Seed a known channel's canonical cast from its approved identity registry."""
+    from .visual_identity import REGISTRY
+    binding = REGISTRY.get('channel_profiles', {}).get(str(channel_id))
+    identity = REGISTRY.get('canonical_identity') if binding else None
+    if not identity or binding.get('identity_profile') != draft.identity_profile:
+        return False
+    from .visual_workshop import Character
+    draft.characters = [
+        Character(name='Coder', description=identity['girl']),
+        Character(name='Cat', description=identity['cat']),
+    ]
+    return True
 
 
 @router.get('/projects/{pid}/identity-reference')
@@ -1182,6 +1254,8 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if clip.id!=draft.base.id and not base['video_ready' if draft.automatic_motion else 'video_approved']:
             raise HTTPException(409,'Aguarde a preparação do vídeo-base')
         refs=[*draft.scene_references,*(r for ch in draft.characters for r in ch.references),*clip.references]
+        editorial_evidence, editorial_memory = (visual_editorial_memory(c, profile(c,row['channel_id']), draft, clip)
+                                                if kind == 'video' else (None, None))
         prepared={}
         if kind=='video' and clip.id!=draft.base.id:
             by_source={}
@@ -1241,7 +1315,8 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 'variant_key':group['key'] if group else None,'requested_variant_key':body.variant_key,
                 'occurrence_ids':group['event_ids'] if group else [],'batch_ids':[str(t) for t in tids],
                 'signature':signature(draft,effective,kind,image['sha256'] if kind=='video' else None),
-                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None,identity_prompt),'seconds':clip.seconds,
+                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None,identity_prompt,editorial_evidence),'seconds':clip.seconds,
+                'editorial_memory':editorial_memory,
                 'resolution':body.resolution,
                 'visual_signature':signature(draft,clip,'image'),'source_image_id':str(effective.image_id) if effective.image_id else None,
                 'identity_profile':identity['id'] if identity else None,
@@ -1463,6 +1538,10 @@ class ApplySplit(SplitRequest):
     parts: list[SplitPart] = Field(min_length=1,max_length=200)
 
 
+class EditorialPlanRequest(Strict):
+    revision: int = Field(ge=1)
+
+
 @router.post('/projects/{pid}/clips/{cid}/split-plan')
 def plan_split(pid: uuid.UUID, cid: uuid.UUID, body: SplitRequest):
     from .visual_workshop import split_proposal
@@ -1483,6 +1562,24 @@ def plan_split(pid: uuid.UUID, cid: uuid.UUID, body: SplitRequest):
     return {'parts':parts,'total_seconds':body.total_seconds,'new_clips_max':len(parts)*phases,
             'usd_max':round(sum(prices[p['seconds']] for p in parts)*phases,6),
             'note':'Revise as ações de cada parte. Aplicar o plano não inicia geração nem reserva dinheiro.'}
+
+
+@router.post('/projects/{pid}/editorial-plan')
+def plan_editorial(pid: uuid.UUID, body: EditorialPlanRequest):
+    """Suggest a story arc from this project's brief and canonical channel cast, without paid calls."""
+    with db() as c:
+        row = project(c, pid)
+        if row['revision'] != body.revision:
+            raise HTTPException(409, 'O projeto mudou; atualize antes de planejar')
+        draft = Draft.model_validate(row['data'])
+        identity = identity_profile_for_channel(c, row['channel_id'])
+        if identity and draft.identity_profile == identity['id']:
+            apply_canonical_channel_cast(draft, row['channel_id'])
+        _, added = plan_editorial_insertions(draft)
+    return {'clips': [item['clip'] for item in added],
+            'insertions': [item['insertion'] for item in added],
+            'paid_calls': 0,
+            'note': 'Plano editorial baseado no tema, cenário e elenco fixo do canal. As evidências do canal serão consultadas novamente ao gerar cada animação; aplicar o plano não gera mídia nem reserva orçamento.'}
 
 
 @router.post('/projects/{pid}/clips/{cid}/split')
