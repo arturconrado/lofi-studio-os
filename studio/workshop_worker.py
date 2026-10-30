@@ -59,12 +59,19 @@ def generate_ephemeral_soundtrack(task_id, payload, folder):
         if not runtime.settings()['enabled']:
             raise RuntimeError('Geração musical desativada antes do próximo trecho')
         direction = composition_request(plan['template_plan'], seq)
+        # Persist intent before the external call; after a worker restart the
+        # provider may have charged even if no response reached us.
+        plan['pending_generation'] = {'sequence':seq,'error_type':'UncertainAfterInterrupt'}
+        _save_task_audio_plan(task_id, plan)
         try:
             raw, generation_id, reported_cost = generate(direction['prompt'], model)
         except Exception as exc:
             from .provider import PartialGenerationError
             failed = dict(plan)
+            failed.pop('pending_generation', None)
             failed['failed_generation'] = {'sequence':seq,'error_type':type(exc).__name__}
+            if isinstance(exc, PartialGenerationError) and exc.generation_id:
+                failed['failed_generation']['generation_id'] = exc.generation_id
             if isinstance(exc, PartialGenerationError) and exc.cost is not None:
                 failed['failed_generation']['reported_cost_usd'] = str(exc.cost)
             _save_task_audio_plan(task_id, failed)
@@ -83,6 +90,7 @@ def generate_ephemeral_soundtrack(task_id, payload, folder):
                  'prompt_sha256':hashlib.sha256(direction['prompt'].encode()).hexdigest(),
                  'title':direction['title'],'intended_bpm':direction['bpm']}
         tracks.append(track)
+        plan.pop('pending_generation',None)
         plan['tracks'] = tracks
         plan['known_cost_usd'] = str(sum((Decimal(item['estimated_cost_usd']) for item in tracks), Decimal('0')))
         _save_task_audio_plan(task_id, plan)
@@ -95,7 +103,9 @@ def generate_ephemeral_soundtrack(task_id, payload, folder):
     storage().upload_file(str(mixed), bucket, key, ExtraArgs={'ContentType':'audio/mpeg'})
     plan.update(mix_key=key,mix_sha256=report['sha256'],mix_seconds=report['duration_seconds'],
                 mix_report=report, track_provenance=[{k:v for k,v in item.items() if k!='key'} for item in tracks])
-    exact = all(item.get('cost_exact') for item in tracks)
+    # A failed provider request may still have been charged. Keep the full
+    # reservation until every such attempt has been reconciled separately.
+    exact = not plan.get('failed_attempts') and all(item.get('cost_exact') for item in tracks)
     actual_cost = Decimal(plan['known_cost_usd']) if exact and plan.get('known_cost_usd') else None
     _save_task_audio_plan(task_id, plan, actual_cost)
     return {'key':key,'sha256':report['sha256'],'program_id':plan['template_program_id'],
@@ -105,7 +115,7 @@ def generate_ephemeral_soundtrack(task_id, payload, folder):
 def cleanup_pending_soundtracks():
     with db() as c:
         rows = c.execute("SELECT id,payload->'audio_plan' plan FROM factory_tasks WHERE kind=%s "
-                         "AND (status='COMPLETED' OR (status='FAILED' AND payload->'audio_plan'->>'mix_key' IS NULL)) "
+                         "AND status='COMPLETED' "
                          "AND payload->'audio_plan'->>'ephemeral_cleanup'='pending' LIMIT 20",
                          (KIND,)).fetchall()
     for row in rows:
@@ -304,8 +314,9 @@ def tick():
         # but do not log the exception text or traceback.
         logger.error('Visual Workshop task failed id=%s operation=%s error_type=%s',
                      t['id'], t['payload'].get('operation'), type(e).__name__)
-        if t['payload'].get('operation') == 'render':
-            discard_incomplete_soundtrack(t['id'])
+        # Keep paid, verified temporary tracks on failure so an explicitly
+        # authorized continuation can reuse them. Successful renders still
+        # remove their temporary soundtrack after the final file is stored.
         with db() as c:
             c.execute("UPDATE factory_tasks SET status='FAILED',detail=%s,updated_at=now() WHERE id=%s",
                       ('Montagem interrompida (' + type(e).__name__ + '). Confira as fontes e o espaço disponível.', t['id'])); c.commit()
