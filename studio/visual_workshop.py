@@ -54,6 +54,7 @@ class Draft(Strict):
     clips: list[Clip] = Field(default_factory=list, max_length=200)
     insertions: list[Insertion] = Field(default_factory=list, max_length=500)
     music_program_id: str | None = Field(default=None, max_length=40)
+    music_brief: str = Field(default='', max_length=2000)
 
     @model_validator(mode='after')
     def schedule(self):

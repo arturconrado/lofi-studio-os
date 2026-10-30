@@ -12,7 +12,7 @@ type AttemptReasonRequest =
   | { mode: 'correction'; clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string; revision: number; resolution: '720p' | '1080p' };
 type PaidApproval = { clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string; reason?: string; revision: number; resolution: '720p' | '1080p' };
 type Draft = { automatic_motion?: boolean; identity_profile?: string | null; name: string; minutes: number; theme: string; scene: string; scene_motion: string; scene_references: string[];
-  characters: Character[]; base: Clip; clips: Clip[]; insertions: { id: string; clip_id: string; minute: number }[]; music_program_id: string | null };
+  characters: Character[]; base: Clip; clips: Clip[]; insertions: { id: string; clip_id: string; minute: number }[]; music_program_id: string | null; music_brief?: string };
 type Media = { id: string; url: string; sha256: string; kind: string; approved: boolean; clip_id?: string; resolution?: '720p' | '1080p' };
 type Variant = { key: string; minutes: number[]; event_ids: string[]; image_id: string | null; video_id: string | null; image_approved: boolean; video_ready: boolean; video_approved: boolean; seams_approved: boolean; source_ready: boolean };
 type Detail = { id: string; revision: number; data: Draft; media: Record<string, Media>;
@@ -42,7 +42,7 @@ function attemptContext(attempt: any) {
 const newClip = (name: string): Clip => ({ id: uuid(), name, motion: 'Descreva o movimento e a pose de retorno à base.', seconds: 8, references: [], continues_from: null, image_id: null, video_id: null });
 export const initialDraft = (): Draft => ({ automatic_motion: true, name: 'Meu vídeo', minutes: 60, theme: '', scene: 'Descreva o cenário, o estilo e a posição da câmera.',
   scene_motion: '', scene_references: [], characters: [{ name: 'Personagem principal', description: 'Características que devem permanecer iguais.', references: [] }],
-  base: { ...newClip('Base tranquila'), motion: 'Movimento suave e contínuo, terminando na mesma pose para repetir sem cortes.' }, clips: [], insertions: [], music_program_id: null });
+  base: { ...newClip('Base tranquila'), motion: 'Movimento suave e contínuo, terminando na mesma pose para repetir sem cortes.' }, clips: [], insertions: [], music_program_id: null, music_brief: '' });
 
 export const formatTime = (minute: number) => { const s=Math.round(minute*60); return `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`; };
 
@@ -483,6 +483,7 @@ export function Workshop({ id }: { id?: string }) {
       <Field label="Resolução do vídeo final"><select class="select" value={outputResolution} onChange={e => setOutputResolution(e.currentTarget.value as 'auto' | '1080p_upscaled')}><option value="auto">Automática conforme os trechos</option><option value="1080p_upscaled">Full HD 1080p, ampliando trechos de menor resolução</option></select><small>A ampliação usa o FFmpeg local; trechos gerados em 720p não ganham detalhes nativos de 1080p.</small></Field>
       {draft.base.video_id && d?.media[draft.base.video_id]?.resolution === '720p' && <p class="notice warn">A base selecionada foi gerada em 720p. {outputResolution === 'auto' ? 'A montagem automática usará 720p se algum trecho tiver resolução inferior a Full HD.' : 'O vídeo final terá 1080p, com esta base ampliada.'} Selecionar 1080p para novas gerações não altera a base existente.</p>}
       <Field label="Referência de estilo musical"><select class="select" value={draft.music_program_id || ''} onChange={e => field('music_program_id', e.currentTarget.value || null)}><option value="">Padrão: estilo da produção mais recente do canal</option>{d?.music.map(m => <option value={m.id}>{m.id} · {Math.floor(m.seconds / 60)} min de referência</option>)}</select><small>O áudio dessa produção não será reutilizado. O Harness cria uma trilha inédita para o tema atual e remove os arquivos temporários ao concluir o vídeo.</small></Field>
+      <Field label="Direção musical desta produção"><textarea class="textarea" maxLength={2000} value={draft.music_brief || ''} onInput={e => field('music_brief', e.currentTarget.value)} placeholder="Gênero, instrumentos e detalhes sonoros desejados para este vídeo" /><small>Descreva variações para este vídeo; o estilo do canal continua como referência. Salvar não inicia geração.</small></Field>
       <p class="faint">Ao clicar em montar, você autoriza um teto de até {soundtrackTrackCap} composições, US$ {soundtrackCostCap.toFixed(2)}. Esse valor aparece antes do início e o servidor bloqueia a tarefa se o limite global ou o deste projeto não comportar a reserva. Se a duração medida das composições não cobrir o vídeo, a montagem para sem completar o arquivo ou fazer chamadas pagas extras automaticamente.</p>
       <button class="btn primary" disabled={!id || dirty || busy || !allApproved || scheduleIssue || activeRender} onClick={renderFull}>Montar vídeo completo</button>
     </section>

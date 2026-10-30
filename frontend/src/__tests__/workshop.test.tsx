@@ -134,11 +134,14 @@ it('keeps edits during status refresh and saves the explicit visual edit flag', 
   const view=render(<Workshop id="p" />);
   await waitFor(()=>expect(view.queryByText('Salvar projeto')).not.toBeNull());
   fireEvent.input(view.getByLabelText('Nome do projeto'),{target:{value:'Saved editing'}});
+  fireEvent.input(view.getByLabelText(/Direção musical desta produção/),{target:{value:'Lo-fi jazz, gothic organ and subtle ghost-like sounds'}});
   await waitFor(()=>expect((view.getByLabelText('Nome do projeto') as HTMLInputElement).value).toBe('Saved editing'));
   fireEvent.click(view.getByText('Salvar projeto'));
   await waitFor(()=>expect(fetcher.mock.calls.some(c=>c[1]?.method==='PUT')).toBe(true));
   const request=fetcher.mock.calls.find(c=>c[1]?.method==='PUT');
   expect(JSON.parse(String(request![1]!.body)).data.name).toBe('Saved editing');
+  expect(JSON.parse(String(request![1]!.body)).data.music_brief).toBe('Lo-fi jazz, gothic organ and subtle ghost-like sounds');
+  expect(fetcher.mock.calls.some(c=>c[0].includes('/generate/'))).toBe(false);
 });
 
 it('offers insertion video directly from the approved base without a separate image request', async () => {

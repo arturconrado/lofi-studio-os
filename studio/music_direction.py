@@ -46,8 +46,10 @@ def composition_request(plan_data, sequence):
         direction.append(
             'Interpret the theme musically with a few recognizable, original instrumental colors and motifs '
             'that fit its mood. Keep those elements as tasteful arrangement variations inside the channel’s '
-            'established lo-fi identity; do not turn the track into a different genre or use literal sound '
-            'effects, vocals, samples, or copied melodies. Adapt the instrumentation to each theme rather '
+            'established lo-fi identity; do not turn the track into a different genre or use vocals, '
+            'samples, or copied melodies. If the user explicitly requests a sound effect, interpret it as '
+            'an original, quiet, sparse nonverbal texture; otherwise use no literal sound effects. '
+            'Adapt the instrumentation to each theme rather '
             'than applying one fixed seasonal arrangement. When the theme is Halloween and the channel '
             'style is jazz lo-fi, use a restrained gothic-organ motif. Christmas can use delicate bells, '
             'Carnival can use restrained Brazilian percussion, and sports celebrations can use a subtle '
