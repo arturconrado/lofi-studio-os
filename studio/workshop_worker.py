@@ -42,11 +42,12 @@ def generate_ephemeral_soundtrack(task_id, payload, folder):
 
     tracks = list(plan.get('tracks') or [])
     source_paths = []
+    source_seconds = []
     model = 'google/lyria-3-pro-preview'
     from .audio_mix import coverage
     def enough_audio():
         return bool(source_paths) and coverage(
-            sum(measure(audio_path,'audio')[0] for audio_path in source_paths),
+            sum(source_seconds),
             len(source_paths),float(plan['fade_seconds'])) >= float(plan['target_duration_seconds'])
     for seq in range(1, int(plan['track_count']) + 1):
         existing = next((item for item in tracks if item.get('sequence') == seq), None)
@@ -54,6 +55,7 @@ def generate_ephemeral_soundtrack(task_id, payload, folder):
             path = folder / f"music-{seq:03}.mp3"
             fetch(existing['key'], path, existing['sha256'], 32 * 1024**2)
             source_paths.append(path)
+            source_seconds.append(measure(path, 'audio')[0])
             if enough_audio(): break
             continue
         if not runtime.settings()['enabled']:
@@ -95,6 +97,7 @@ def generate_ephemeral_soundtrack(task_id, payload, folder):
         plan['known_cost_usd'] = str(sum((Decimal(item['estimated_cost_usd']) for item in tracks), Decimal('0')))
         _save_task_audio_plan(task_id, plan)
         source_paths.append(path)
+        source_seconds.append(duration)
         if enough_audio(): break
 
     mixed = folder / 'audio.mp3'
