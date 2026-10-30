@@ -145,11 +145,15 @@ def identity_profile_for_channel(c, channel_id):
         return None
     from .visual_identity import REGISTRY, baseline
     episode = baseline(row['source_id']) if row['source_type'] == 'approved_baseline' else None
+    # Keep the registered channel character profile even after its owner chooses
+    # a newer still as the primary visual anchor.
+    channel_binding = REGISTRY.get('channel_profiles', {}).get(str(channel_id), {})
+    canonical_profile = channel_binding.get('identity_profile')
     references=row.get('identity_references') or [{'key':row['source_key'],'sha256':row['source_sha256'],'mime':row['source_mime'],'title':row['source_title'],'pilot_id':str(row['source_id']) if episode else None}]
     if not references:references=[{'key':row['source_key'],'sha256':row['source_sha256'],'mime':row['source_mime'],'title':row['source_title'],'pilot_id':str(row['source_id']) if episode else None}]
     return {'id':row['identity_profile'],'pilot_id':str(row['source_id']) if episode else None,
             'title':row['source_title'],'key':row['source_key'],'sha256':row['source_sha256'],
-            'mime':row['source_mime'],'identity':REGISTRY.get('canonical_identity') if episode else None,
+            'mime':row['source_mime'],'identity':REGISTRY.get('canonical_identity') if episode or row['identity_profile']==canonical_profile else None,
             'references':references}
 
 
@@ -594,6 +598,11 @@ class IdentitySelection(Strict):
     confirm_identity: bool = False
 
 
+class IdentityPromotion(Strict):
+    source_id: uuid.UUID
+    confirm_identity: bool = False
+
+
 @router.get('/projects')
 def listing(channel_id: uuid.UUID):
     ready()
@@ -688,6 +697,56 @@ def select_project_identity_reference(pid: uuid.UUID, body: IdentitySelection):
             c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',(json.dumps(asset),body.source_id,pid))
         save(c,row,draft);audit(c,'VISUAL_CHANNEL_IDENTITY_SET',str(row['channel_id']),identity['sha256']);c.commit()
     return {'saved':True,'identity_profile':identity['id']}
+
+
+@router.post('/projects/{pid}/identity-reference/promote')
+def promote_project_identity_reference(pid: uuid.UUID, body: IdentityPromotion):
+    """Make an approved base still the channel's first identity reference, retaining its profile and prior refs."""
+    ready()
+    if not body.confirm_identity:
+        raise HTTPException(422, 'Confirme que esta imagem representa a identidade fixa do canal')
+    with db() as c:
+        row=project(c,pid,True);draft=Draft.model_validate(row['data'])
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        if not identity:
+            raise HTTPException(409, 'Configure primeiro a identidade visual aprovada deste canal')
+        if str(draft.base.image_id)!=str(body.source_id):
+            raise HTTPException(409, 'Somente a imagem-base aprovada deste projeto pode virar a referência principal')
+        candidate=next((item for item in identity_candidates(c,row['channel_id'],pid)
+                        if item['source_type']=='project_media' and item['source_id']==str(body.source_id)),None)
+        if not candidate:
+            raise HTTPException(404, 'A imagem-base não está aprovada neste canal')
+        source_row=c.execute('''SELECT m.data,p.data project_data FROM visual_media m JOIN visual_projects p ON p.id=m.project_id
+            WHERE m.id=%s AND m.project_id=%s AND p.channel_id=%s''',(body.source_id,pid,row['channel_id'])).fetchone()
+        asset=source_row['data'] if source_row else None
+        if not asset or asset.get('kind')!='image' or asset.get('approved') is not True or asset.get('review_sha256')!=asset.get('sha256'):
+            raise HTTPException(409, 'A imagem-base deixou de estar aprovada; atualize a tela')
+        from .visual_identity import REGISTRY
+        binding=REGISTRY.get('channel_profiles',{}).get(str(row['channel_id']),{})
+        identity_id=binding.get('identity_profile') or identity['id']
+        title=f"{(source_row['project_data'] or {}).get('name','Lo-Fi Vibe Coding')} · {draft.base.name} · approved image"
+        refs=[{'key':asset['key'],'sha256':asset['sha256'],'mime':asset.get('mime','image/png'),
+               'title':title,'pilot_id':None}]
+        refs.extend(ref for ref in (identity.get('references') or []) if ref.get('sha256')!=asset['sha256'])
+        for item in identity_candidates(c,row['channel_id'],pid):
+            if item['sha256'] not in {ref['sha256'] for ref in refs}:
+                refs.append({'key':item['key'],'sha256':item['sha256'],'mime':item['mime'],'title':item['title'],'pilot_id':None})
+            if len(refs)>=10:break
+        refs=dedupe_identity_references(refs,10)
+        promoted={**identity,'id':identity_id,'title':title,'key':asset['key'],'sha256':asset['sha256'],
+                  'mime':asset.get('mime','image/png'),'references':refs}
+        verify_identity_source(promoted)
+        c.execute('''UPDATE visual_channel_identities SET identity_profile=%s,source_key=%s,source_sha256=%s,
+          source_mime=%s,source_title=%s,source_type='project_media',source_id=%s,identity_references=%s::jsonb,updated_at=now()
+          WHERE channel_id=%s''',(identity_id,asset['key'],asset['sha256'],asset.get('mime','image/png'),title,body.source_id,json.dumps(refs),row['channel_id']))
+        if c.execute('SELECT 1 FROM visual_channel_identities WHERE channel_id=%s',(row['channel_id'],)).fetchone() is None:
+            raise HTTPException(409, 'A identidade do canal mudou; atualize a tela e tente novamente')
+        draft.identity_profile=identity_id
+        asset['identity_profile']=identity_id;asset['identity_reference_sha256']=asset['sha256']
+        c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',(json.dumps(asset),body.source_id,pid))
+        bind_identity_reference(c,pid,promoted)
+        save(c,row,draft);audit(c,'VISUAL_CHANNEL_IDENTITY_ANCHOR_PROMOTED',str(row['channel_id']),asset['sha256']);c.commit()
+    return {'saved':True,'identity_profile':identity_id,'reference_count':len(refs),'reference_sha256':asset['sha256']}
 
 
 @router.get('/projects/{pid}/identity-candidates/{source_type}/{source_id}')
