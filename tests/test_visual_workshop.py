@@ -220,6 +220,23 @@ def test_real_render_preserves_absolute_times_returns_to_base_and_includes_music
 DB=pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
 
 
+@pytest.mark.skipif(not shutil.which('ffmpeg') or not shutil.which('ffprobe'), reason='FFmpeg required')
+def test_fullhd_export_explicitly_upscales_approved_lower_resolution_source(tmp_path):
+    from studio.workshop_worker import render_segments
+    from studio.timeline_compositor import file_hash
+    source = tmp_path/'source.mp4'; audio = tmp_path/'audio.wav'
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=c=blue:s=320x180:r=24:d=1',
+                    '-c:v','libx264','-pix_fmt','yuv420p',str(source)], check=True)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','sine=frequency=440:duration=1',str(audio)], check=True)
+    sha = file_hash(source)
+    segments = [{'start': 0, 'end': 1, 'loop': True, 'asset_sha256': sha, 'source_seconds': 1}]
+    report = render_segments(segments, {sha: source}, audio, tmp_path/'result.mp4', 1, output_resolution='1080p_upscaled')
+    assert (report['width'], report['height']) == (1920, 1080)
+    assert report['contains_upscaled_sources'] is True and report['full_decode_pass']
+    assert abs(report['seconds']-1) < .15 and abs(report['audio_seconds']-1) < .15
+    assert file_hash(source) == sha
+
+
 @DB
 def test_http_draft_conflict_and_review_gate(client):
     cl=client; _,identity=signup(cl)

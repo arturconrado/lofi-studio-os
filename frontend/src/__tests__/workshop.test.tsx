@@ -250,8 +250,11 @@ it('assembles ready compatible clips without individual motion or seam approvals
   vi.stubGlobal('fetch',fetcher);const view=render(<Workshop id="p" />);
   await waitFor(()=>expect((view.getByText('Montar vídeo completo') as HTMLButtonElement).disabled).toBe(false));
   expect(view.queryByText('Aprovar vídeo')).toBeNull();
+  fireEvent.change(view.getByLabelText(/Resolução do vídeo final/), {target: {value: '1080p_upscaled'}});
   fireEvent.click(view.getByText('Montar vídeo completo'));
   await waitFor(()=>expect(fetcher.mock.calls.some(c=>c[0].endsWith('/render'))).toBe(true));
+  const request = fetcher.mock.calls.find(c=>c[0].endsWith('/render'))!;
+  expect(JSON.parse(String(request[1]!.body)).output_resolution).toBe('1080p_upscaled');
   expect(fetcher.mock.calls.some(c=>c[0].includes('/review'))).toBe(false);
 });
 

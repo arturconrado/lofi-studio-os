@@ -139,7 +139,7 @@ def discard_incomplete_soundtrack(task_id):
     _save_task_audio_plan(task_id,plan)
 
 
-def render_segments(segments, sources, audio, destination, seconds, preview_range=None):
+def render_segments(segments, sources, audio, destination, seconds, preview_range=None, output_resolution='auto'):
     from .production_harness import workshop_plan
     from .timeline_compositor import render
     destination = Path(destination)
@@ -167,7 +167,10 @@ def render_segments(segments, sources, audio, destination, seconds, preview_rang
     if preview_range:
         compiled.update(duration_seconds=length, clock_offset_seconds=start,
                         audio_offset_seconds=start, preview_only=True)
-    full_hd=bool(native_sizes) and all(w>=1920 and h>=1080 for w,h in native_sizes)
+    if output_resolution not in ('auto', '1080p_upscaled'):
+        raise ValueError('Unsupported output resolution')
+    native_full_hd=bool(native_sizes) and all(w>=1920 and h>=1080 for w,h in native_sizes)
+    full_hd=native_full_hd or output_resolution=='1080p_upscaled'
     if full_hd:compiled['encoding_profile']={'crf':15,'preset':'medium','threads':2,'lookahead_frames':8}
     report = render(compiled, plan, sources, audio, {}, destination,width=1920 if full_hd else 1280,height=1080 if full_hd else 720)
     source_audio_seconds, _ = measure(audio, 'audio')
@@ -181,6 +184,7 @@ def render_segments(segments, sources, audio, destination, seconds, preview_rang
     return {'sha256': file_hash(destination), 'seconds': measured, 'audio_seconds': soundtrack,
             'width':report['video']['width'],'height':report['video']['height'],
             'encoding_profile':compiled.get('encoding_profile'), 'local_resources':report['local_resources'],
+            'output_resolution_requested':output_resolution, 'contains_upscaled_sources':full_hd and not native_full_hd,
             'continuity_policy':report.get('continuity_policy'), 'motion_bridges':report.get('motion_bridges',[]),
             'join_checks':report.get('join_checks',[]),
             'audio_alignment': {'source_seconds':source_audio_seconds,'target_seconds':target,
@@ -251,7 +255,11 @@ def tick():
             # Preserve compatibility with render tasks queued before this hotfix.
             audio_info = p['audio']; audio_plan = {}
             fetch(audio_info['key'], audio, audio_info['sha256'], 1024**3)
-        final = folder / 'final.mp4'; report = render_segments(p['segments'], sources, audio, final, p['seconds'], p.get('preview_range'))
+        final = folder / 'final.mp4'
+        if p.get('output_resolution', 'auto') == '1080p_upscaled':
+            report = render_segments(p['segments'], sources, audio, final, p['seconds'], p.get('preview_range'), output_resolution='1080p_upscaled')
+        else:
+            report = render_segments(p['segments'], sources, audio, final, p['seconds'], p.get('preview_range'))
         if ephemeral:
             report['audio_alignment'].update({'program_id':audio_info['program_id'],
                 'source_sha256':audio_info['sha256'],'source_type':'new_ephemeral_original',

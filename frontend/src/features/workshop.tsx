@@ -62,6 +62,7 @@ export function Workshop({ id }: { id?: string }) {
   const editRevision = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [resolution, setResolution] = useState<'720p' | '1080p'>('720p');
+  const [outputResolution, setOutputResolution] = useState<'auto' | '1080p_upscaled'>('auto');
   const [editVisual, setEditVisual] = useState(false);
   const [actionKey, setActionKey] = useState('');
   const [attemptReasonRequest, setAttemptReasonRequest] = useState<AttemptReasonRequest | null>(null);
@@ -364,7 +365,7 @@ export function Workshop({ id }: { id?: string }) {
   const renderFull = () => {
     if (!id || !d) return;
     return run(() => post(`${prefix}/projects/${id}/render`, {
-      request_id: uuid(), revision: d.revision, max_usd: soundtrackCostCap, confirm_cost: true
+      request_id: uuid(), revision: d.revision, max_usd: soundtrackCostCap, confirm_cost: true, output_resolution: outputResolution
     }), 'Montagem enviada com geração de trilha inédita.');
   };
   const nextAction = () => {
@@ -467,7 +468,8 @@ export function Workshop({ id }: { id?: string }) {
       <p class="faint">Os minutos são contados desde o início. Inserções não prolongam a duração total e não podem se sobrepor.</p>
     </section>
     <section class="card stack"><h3>4. Música, prévia e vídeo completo</h3><Field label="Resolução dos novos trechos de vídeo"><select class="select" value={resolution} onChange={e => setResolution(e.currentTarget.value as '720p' | '1080p')}><option value="720p">720p</option><option value="1080p">1080p</option></select><small>A resolução se aplica às próximas gerações; os materiais existentes são preservados.</small></Field><p>Total: {formatTime(draft.minutes)} · {ordered.length} inserções</p>{!allApproved && <p>Trechos ainda não prontos para montagem: {unreadyClips.map(c=>c.name).join(', ')}. {automatic ? 'Use o próximo passo para preparar cada trecho; materiais compatíveis podem seguir automaticamente.' : 'Revise cada trecho e suas emendas antes de montar.'}</p>}{activeRender && <p role="status">Montagem do vídeo longo em andamento.</p>}
-      {draft.base.video_id && d?.media[draft.base.video_id]?.resolution === '720p' && <p class="notice warn">A base selecionada foi gerada em 720p. A montagem usa 720p se algum trecho tiver resolução inferior a Full HD; selecionar 1080p para novas gerações não altera a base existente.</p>}
+      <Field label="Resolução do vídeo final"><select class="select" value={outputResolution} onChange={e => setOutputResolution(e.currentTarget.value as 'auto' | '1080p_upscaled')}><option value="auto">Automática conforme os trechos</option><option value="1080p_upscaled">Full HD 1080p, ampliando trechos de menor resolução</option></select><small>A ampliação usa o FFmpeg local; trechos gerados em 720p não ganham detalhes nativos de 1080p.</small></Field>
+      {draft.base.video_id && d?.media[draft.base.video_id]?.resolution === '720p' && <p class="notice warn">A base selecionada foi gerada em 720p. {outputResolution === 'auto' ? 'A montagem automática usará 720p se algum trecho tiver resolução inferior a Full HD.' : 'O vídeo final terá 1080p, com esta base ampliada.'} Selecionar 1080p para novas gerações não altera a base existente.</p>}
       <Field label="Referência de estilo musical"><select class="select" value={draft.music_program_id || ''} onChange={e => field('music_program_id', e.currentTarget.value || null)}><option value="">Padrão: estilo da produção mais recente do canal</option>{d?.music.map(m => <option value={m.id}>{m.id} · {Math.floor(m.seconds / 60)} min de referência</option>)}</select><small>O áudio dessa produção não será reutilizado. O Harness cria uma trilha inédita para o tema atual e remove os arquivos temporários ao concluir o vídeo.</small></Field>
       <p class="faint">Ao clicar em montar, você autoriza um teto de até {soundtrackTrackCap} composições, US$ {soundtrackCostCap.toFixed(2)}. Esse valor aparece antes do início e o servidor bloqueia a tarefa se o limite global ou o deste projeto não comportar a reserva. Se a duração medida das composições não cobrir o vídeo, a montagem para sem completar o arquivo ou fazer chamadas pagas extras automaticamente.</p>
       <button class="btn primary" disabled={!id || dirty || busy || !allApproved || scheduleIssue || activeRender} onClick={renderFull}>Montar vídeo completo</button>

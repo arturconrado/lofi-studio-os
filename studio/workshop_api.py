@@ -1686,6 +1686,7 @@ class Render(Strict):
     variant_key: str | None = Field(default=None, pattern='^[a-f0-9]{64}$')
     max_usd: Decimal | None = Field(default=None, ge=Decimal('0'), le=Decimal('1000'))
     confirm_cost: bool = False
+    output_resolution: Literal['auto', '1080p_upscaled'] = 'auto'
 
 
 class SplitRequest(Strict):
@@ -2162,7 +2163,8 @@ def render(pid: uuid.UUID, body: Render):
         old = c.execute('SELECT * FROM factory_tasks WHERE id=%s', (body.request_id,)).fetchone()
         if old:
             old = task(c, body.request_id, pid)
-            if old['payload']['operation'] != 'render': raise HTTPException(409, 'Pedido já utilizado')
+            if old['payload']['operation'] != 'render' or old['payload'].get('output_resolution', 'auto') != body.output_resolution:
+                raise HTTPException(409, 'Pedido já utilizado com outra configuração')
             return public_task(old)
         if row['revision'] != body.revision: raise HTTPException(409, 'Salve a versão atual antes de montar')
         if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'operation'='render' AND status IN ('QUEUED','RUNNING')", (KIND, str(pid))).fetchone():
@@ -2189,6 +2191,7 @@ def render(pid: uuid.UUID, body: Render):
         draft_sha=digest(row['data'])
         identity_hashes=identity_reference_hashes(identity)
         payload = {'project_id': str(pid), 'operation': 'render', 'draft_sha256': digest(row['data']),
+                   'output_resolution': body.output_resolution,
                    'seconds': segments[-1]['end'], 'segments': segments,
                    'creative_contract': {'version':1,'theme':draft.theme,'scene':draft.scene,
                                          'scene_motion':draft.scene_motion,
