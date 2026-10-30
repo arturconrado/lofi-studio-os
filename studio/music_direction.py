@@ -33,10 +33,27 @@ def composition_request(plan_data, sequence):
     moods = music.get('moods') or DEFAULT_MOODS
     keys = music.get('keys') or DEFAULT_KEYS
     title = f"{str(plan_data.get('title') or 'Original Lo-Fi')[:55]} · {sequence:03}"
-    theme = str(plan_data.get('theme') or '').strip()
+    theme = str(plan_data.get('creative_theme') or plan_data.get('theme') or '').strip()
     direction = [base]
+    direction.append(
+        'Use the selected channel production only as a reference for its stable musical identity: '
+        'core genre, warmth, rhythmic restraint, mix character, and long-listening dynamics. '
+        'Do not carry an older episode’s one-off theme arrangement into this composition unless '
+        'it also fits the current theme.'
+    )
     if theme:
         direction.append('Production theme: ' + theme)
+        direction.append(
+            'Interpret the theme musically with a few recognizable, original instrumental colors and motifs '
+            'that fit its mood. Keep those elements as tasteful arrangement variations inside the channel’s '
+            'established lo-fi identity; do not turn the track into a different genre or use literal sound '
+            'effects, vocals, samples, or copied melodies. Adapt the instrumentation to each theme rather '
+            'than applying one fixed seasonal arrangement. When the theme is Halloween and the channel '
+            'style is jazz lo-fi, use a restrained gothic-organ motif. Christmas can use delicate bells, '
+            'Carnival can use restrained Brazilian percussion, and sports celebrations can use a subtle '
+            'brass or drumline motif. These are examples, not presets: infer fitting instrumentation from '
+            'the current theme, including when the theme is described in another language.'
+        )
     direction.extend([
         f'Composition title: {title}. Tempo: {bpm} BPM.',
         f'New original composition {sequence}, distinct from the previous radio batch: '

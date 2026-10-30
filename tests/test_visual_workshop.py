@@ -174,7 +174,7 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
     from studio import workshop_api as api, workshop_provider as provider, financial
     from studio.core import db
     from PIL import Image
-    import io
+    import io, json
     cl=client;_,identity=signup(cl);cl.headers.update({'X-CSRF-Token':identity['csrf_token']})
     cid=cl.get('/api/channels').json()[0]['id']
     draft=Draft(name='Real API test',minutes=1,scene='Room',characters=[Character(name='Cat',description='Orange')],base=Clip(name='Base',motion='Breathing'))
@@ -190,6 +190,13 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
     monkeypatch.setattr(api,'verify_identity_source',lambda identity:None)
     monkeypatch.setattr(provider,'quote',lambda kind,seconds:{'model':'test','usd':.1,'seconds':seconds})
     monkeypatch.setattr(financial,'check_available',lambda c,cap:None)
+    monkeypatch.setattr(api,'music_template',lambda c,row,draft:{
+        'program_id':'style-template','snapshot_sha256':'a'*64,
+        'plan':{'title':'Channel sound','recipe':{'music':{
+            'style_id':'jazz_lofi','bible':'Warm, restrained channel lo-fi.',
+            'bpm_range':[66,82],'instruments':['soft piano','upright bass'],
+            'moods':['cozy focus'],'keys':['D minor'],'avoid':['vocals']}}}
+    })
     png=io.BytesIO();Image.new('RGB',(16,9),'blue').save(png,'PNG')
     paid_submit_calls=[];submitted_payloads=[]
     def submit(tid):
@@ -237,7 +244,9 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
         c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",
                   ('{"video_key":"test-preview","report":{"sha256":"'+'e'*64+'","full_decode_pass":true}}',preview.json()['id']));c.commit()
     assert cl.post(review_url+'video',json=review_body).status_code==200
-    request={'request_id':str(uuid.uuid4()),'revision':state['revision']}
+    quote=api.soundtrack_quote(60)
+    request={'request_id':str(uuid.uuid4()),'revision':state['revision'],
+             'max_usd':float(quote['usd']),'confirm_cost':True}
     response=cl.post(url+'/render',json=request);assert response.status_code==200,response.text
     assert cl.post(url+'/render',json=request).json()['id']==response.json()['id']
     render_id=response.json()['id'];render_url=url+f'/jobs/{render_id}/retry-render'
@@ -249,13 +258,22 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
         c.execute("UPDATE factory_tasks SET status='INTERRUPTED' WHERE id=%s",(render_id,));c.commit()
     paid_calls_before_retry=len(paid_submit_calls)
     assert paid_calls_before_retry==2
+    resumable_payload=original['payload']
+    resumable_audio=resumable_payload['audio_plan'] | {
+        'mix_key':'workshop-ephemeral/test/mix.mp3','mix_sha256':'d'*64,
+        'mix_seconds':resumable_payload['audio_plan']['target_duration_seconds']}
+    resumable_payload=resumable_payload | {'audio_plan':resumable_audio}
+    with db() as c:
+        c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
+        c.execute('UPDATE factory_tasks SET payload=%s WHERE id=%s',(json.dumps(resumable_payload),render_id));c.commit()
+        original=c.execute('SELECT payload,reserved_cost FROM factory_tasks WHERE id=%s',(render_id,)).fetchone()
     retry=cl.post(render_url);assert retry.status_code==200,retry.text
     assert retry.json()=={'id':render_id,'status':'QUEUED'}
     assert len(paid_submit_calls)==paid_calls_before_retry
     with db() as c:
         c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         resumed=c.execute('SELECT status,payload,reserved_cost FROM factory_tasks WHERE id=%s',(render_id,)).fetchone()
-        assert resumed['status']=='QUEUED' and resumed['reserved_cost']==original['reserved_cost']==0
+        assert resumed['status']=='QUEUED' and resumed['reserved_cost']==original['reserved_cost']>0
         assert resumed['payload']==original['payload']
         c.commit()
     from studio import workshop_worker
@@ -270,7 +288,8 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
         assert segments==original['payload']['segments'] and seconds==original['payload']['seconds']
         assert len(sources)>=1 and Path(audio).exists()
         Path(final).write_bytes(b'recovered-render')
-        return {'sha256':'f'*64,'seconds':seconds,'audio_seconds':seconds,'full_decode_pass':True}
+        return {'sha256':'f'*64,'seconds':seconds,'audio_seconds':seconds,'full_decode_pass':True,
+                'audio_alignment':{}}
     monkeypatch.setattr(workshop_worker,'render_segments',resumed_render)
     marker=WORKSPACE.set(identity['workspace_id'])
     try:assert workshop_worker.tick() is True
@@ -378,6 +397,15 @@ def test_approved_visual_lock_and_duration_edit(client):
         from studio.tenancy import schema_name
         c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         api.ensure(c)
+        channel_identity=api.identity_profile_for_channel(c,channel)
+        d.identity_profile=channel_identity['id']
+        image=a[str(d.base.image_id)];video=a[str(d.base.video_id)]
+        for asset in (image,video):
+            asset.update(identity_profile=channel_identity['id'],
+                         identity_reference_sha256=channel_identity['sha256'],
+                         identity_reference_sha256s=api.identity_reference_hashes(channel_identity))
+        image['signature']=image['visual_signature']=signature(d,d.base,'image')
+        video['signature']=video['visual_signature']=signature(d,d.base,'video',image['sha256'])
         c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',(pid,channel,json.dumps(d.model_dump(mode='json'))))
         for aid in (d.base.image_id,d.base.video_id):
             c.execute('INSERT INTO visual_media(id,project_id,data) VALUES(%s,%s,%s)',(aid,pid,json.dumps(a[str(aid)])))

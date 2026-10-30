@@ -75,8 +75,8 @@ def reference_data(a):
 def complete(c, task, raw, mime, seconds=None):
     p = task['payload']; pid = p['project_id']
     row = project(c, pid, True); draft = Draft.model_validate(row['data']); clip = get_clip(draft, p['clip_id'])
-    identity_reference_sha256s=[item['sha256'] for item in p.get('reference_roles',[]) if item.get('sha256')]
-    if p.get('operation')=='video' and p.get('source_image_id'):
+    identity_reference_sha256s=p.get('identity_reference_sha256s') or [item['sha256'] for item in p.get('reference_roles',[]) if item.get('sha256')]
+    if not identity_reference_sha256s and p.get('operation')=='video' and p.get('source_image_id'):
         source_image=assets(c,pid).get(str(p['source_image_id']))
         identity_reference_sha256s=(source_image or {}).get('identity_reference_sha256s') or ([source_image['identity_reference_sha256']] if source_image and source_image.get('identity_reference_sha256') else [])
     aid, _ = store_media(c, pid, raw, p['operation'], mime,
@@ -91,7 +91,14 @@ def complete(c, task, raw, mime, seconds=None):
                           'continuity_review_version': 1 if p['operation'] == 'video' else None})
     # A slow generation must not replace a newer edit or carry an approval forward.
     attached = False
-    if clip:
+    identity_current=True
+    if p.get('identity_profile'):
+        from .workshop_api import identity_profile_for_channel, identity_reference_hashes
+        current_identity=identity_profile_for_channel(c,row['channel_id'])
+        identity_current=bool(current_identity
+            and current_identity.get('id')==p.get('identity_profile')
+            and identity_reference_hashes(current_identity)==identity_reference_sha256s)
+    if clip and identity_current:
         group=next((g for g in variant_plan(draft,clip,assets(c,pid)) if g['key']==p.get('variant_key')),None) if p.get('variant_key') else None
         effective=occurrence_clip(draft,clip,group,assets(c,pid)) if group else clip
         image=assets(c,pid).get(str(effective.image_id))
@@ -107,9 +114,12 @@ def complete(c, task, raw, mime, seconds=None):
                 if p['operation']=='image':clip.video_id=None
                 attached=True
             if attached:save(c,row,draft)
-    p.update(asset_id=str(aid))
+    p.update(asset_id=str(aid), identity_binding_current=identity_current)
+    detail=('Pronto para aprovação' if attached else
+            'Arquivo preservado; as referências visuais do canal mudaram durante a geração' if not identity_current else
+            'Arquivo preservado; o roteiro mudou durante a geração')
     c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=%s,detail=%s,updated_at=now() WHERE id=%s",
-              (json.dumps(p), 'Pronto para aprovação' if attached else 'Arquivo preservado; o roteiro mudou durante a geração', task['id']))
+              (json.dumps(p), detail, task['id']))
 
 
 def video_body(payload, references, callback_url=None):

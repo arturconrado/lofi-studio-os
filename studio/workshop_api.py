@@ -8,6 +8,7 @@ import tempfile
 import uuid
 import hmac
 import hashlib
+from decimal import Decimal
 from functools import lru_cache
 import time
 from pathlib import Path
@@ -275,6 +276,46 @@ def identity_reference_status(pid, identity, draft, media):
             'reference_url': f'/api/creator/workshop/projects/{pid}/identity-reference' if identity else None,
             'reference_sha256': identity['sha256'] if identity else None,
             'reference_count':len(references)}
+
+
+def identity_reference_hashes(identity):
+    """Return the ordered, immutable visual reference set for one channel."""
+    if not identity:
+        return []
+    references = identity.get('references') or [identity]
+    return [item['sha256'] for item in references if item.get('sha256')]
+
+
+def identity_asset_matches(asset, identity):
+    """Check that media was generated from this channel's current reference pack.
+
+    Older single-reference assets only recorded the primary hash. Preserve those
+    when that hash still matches; a multi-reference pack requires its full list.
+    """
+    if not identity:
+        return True
+    if not asset or asset.get('identity_profile') != identity.get('id'):
+        return False
+    expected = identity_reference_hashes(identity)
+    recorded = asset.get('identity_reference_sha256s')
+    if recorded:
+        return recorded == expected
+    return len(expected) == 1 and asset.get('identity_reference_sha256') == expected[0]
+
+
+def require_current_identity_assets(identity, draft, media):
+    """Fail closed before previews/renders if any used clip has stale identity refs."""
+    if not identity:
+        return
+    for clip in [draft.base, *(item for item in draft.clips if any(event.clip_id == item.id for event in draft.insertions))]:
+        state = status(draft, clip, media)
+        variants = state.get('variants') or [state]
+        for variant in variants:
+            image = variant.get('image') or media.get(str(variant.get('image_id') or clip.image_id))
+            video = variant.get('video') or media.get(str(variant.get('video_id') or clip.video_id))
+            if ((image and not identity_asset_matches(image, identity))
+                    or (video and not identity_asset_matches(video, identity))):
+                raise HTTPException(409, 'Um trecho usa uma versão antiga das referências visuais deste canal. Preserve os arquivos e atualize somente o material incompatível antes da montagem.')
 
 
 def identity_selection_required(candidates, kind, draft, media):
@@ -765,6 +806,7 @@ def select_project_identity_reference(pid: uuid.UUID, body: IdentitySelection):
         # canonical still itself and can safely seed animation without another image call.
         if body.source_type=='project_media' and source_row and str(source_row['project_id'])==str(pid) and str(draft.base.image_id)==str(body.source_id):
             asset['identity_profile']=identity['id'];asset['identity_reference_sha256']=identity['sha256']
+            asset['identity_reference_sha256s']=identity_reference_hashes(identity)
             asset['visual_signature']=signature(draft,draft.base,'image')
             c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',(json.dumps(asset),body.source_id,pid))
         save(c,row,draft);audit(c,'VISUAL_CHANNEL_IDENTITY_SET',str(row['channel_id']),identity['sha256']);c.commit()
@@ -815,6 +857,7 @@ def promote_project_identity_reference(pid: uuid.UUID, body: IdentityPromotion):
             raise HTTPException(409, 'A identidade do canal mudou; atualize a tela e tente novamente')
         draft.identity_profile=identity_id
         asset['identity_profile']=identity_id;asset['identity_reference_sha256']=asset['sha256']
+        asset['identity_reference_sha256s']=identity_reference_hashes(promoted)
         c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',(json.dumps(asset),body.source_id,pid))
         bind_identity_reference(c,pid,promoted)
         save(c,row,draft);audit(c,'VISUAL_CHANNEL_IDENTITY_ANCHOR_PROMOTED',str(row['channel_id']),asset['sha256']);c.commit()
@@ -895,9 +938,25 @@ def detail(pid: uuid.UUID):
     state_cache={};planning_errors=[]
     try:validate_continuations(draft)
     except ValueError as exc:planning_errors.append(str(exc))
+    states = {str(cl.id): status(draft,cl,media,_cache=state_cache) for cl in clips(draft)}
+    if identity:
+        for cl in clips(draft):
+            current=states[str(cl.id)]
+            variants=current.get('variants') or [current]
+            for variant in variants:
+                image=variant.get('image') or media.get(str(variant.get('image_id') or cl.image_id))
+                video=variant.get('video') or media.get(str(variant.get('video_id') or cl.video_id))
+                if image and not identity_asset_matches(image,identity):
+                    variant['image_approved']=False;variant['video_ready']=False
+                    variant['video_approved']=False;variant['seams_approved']=False
+                if video and not identity_asset_matches(video,identity):
+                    variant['video_ready']=False;variant['video_approved']=False;variant['seams_approved']=False
+            if current.get('variants'):
+                for key in ('image_approved','video_ready','video_approved','seams_approved'):
+                    current[key]=all(v.get(key,False) for v in variants)
     return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,
             'identity': identity_reference_status(pid, identity, draft, media) | {'candidates':candidates}, 'planning_errors':planning_errors,
-            'states': {str(cl.id): status(draft,cl,media,_cache=state_cache) for cl in clips(draft)},
+            'states': states,
             'jobs': [public_task(j) for j in jobs], 'music': music, 'parent_videos': parents,
             'library': [{'id': l['id'], 'name': l['name']} for l in library]}
 
@@ -1050,6 +1109,7 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
         if not asset or asset['sha256'] != body.sha256 or not (compatible_image(draft, clip, asset) if kind == 'image' else asset.get('signature') == expected):
             raise HTTPException(409, 'Material mudou; gere ou selecione uma versão compatível')
         if identity and (draft.identity_profile != identity['id'] or asset.get('identity_profile') != identity['id']
+                         or not identity_asset_matches(asset, identity)
                          or (kind == 'image' and asset.get('identity_reference_sha256') != identity['sha256'])
                          or (kind == 'video' and (not image or image.get('identity_profile') != identity['id']))):
             raise HTTPException(409, 'Este material não carrega a referência canônica do canal. Gere novamente antes da revisão.')
@@ -1123,18 +1183,17 @@ def validate_video_identity_source(identity, draft, clip, media, groups):
     """
     if clip.id == draft.base.id:
         source_image = media.get(str(clip.image_id))
-        if not source_image or source_image.get('identity_profile') != identity['id']:
+        if not identity_asset_matches(source_image, identity):
             raise HTTPException(409, 'Gere e aprove a imagem inicial com a referência canônica antes de animar.')
         return
     for group in groups:
         source = group.get('source') or {}
         source_image = media.get(str(source.get('source_image_id')))
-        canonical_source = source.get('identity_profile') == identity['id'] or bool(
-            source_image and source_image.get('identity_profile') == identity['id'])
+        canonical_source = identity_asset_matches(source, identity) or identity_asset_matches(source_image, identity)
         if group.get('source_kind') == 'base_video_cut':
             base_image = media.get(str(draft.base.image_id))
             canonical_source = canonical_source or bool(
-                base_image and base_image.get('identity_profile') == identity['id']
+                identity_asset_matches(base_image, identity)
                 and base_image.get('approved') and base_image.get('review_sha256') == base_image.get('sha256'))
         if not canonical_source:
             raise HTTPException(409, 'A fonte de continuidade desta inserção ainda não está vinculada à identidade canônica do canal.')
@@ -1298,7 +1357,8 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                     origin={'source':'previous_video_end','continuation_sha256':source['sha256']} if group['source_kind']=='previous_video_end' else {
                         'source':'base_video_cut','base_video_sha256':source['sha256'],'base_cut_frame':frame}
                     if identity:
-                        origin.update(identity_profile=identity['id'],identity_reference_sha256=identity['sha256'])
+                        origin.update(identity_profile=identity['id'],identity_reference_sha256=identity['sha256'],
+                                      identity_reference_sha256s=identity_reference_hashes(identity))
                     aid,derived=store_media(c,pid,raw,'image','image/png',origin|{
                         'clip_id':str(cid),'source_binding':group['key'],'signature':signature(draft,clip,'image'),
                         'visual_signature':signature(draft,clip,'image'),'approved':True,
@@ -1338,6 +1398,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 'visual_signature':signature(draft,clip,'image'),'source_image_id':str(effective.image_id) if effective.image_id else None,
                 'identity_profile':identity['id'] if identity else None,
                 'identity_reference_sha256':identity['sha256'] if identity and kind=='image' else None,
+                'identity_reference_sha256s':identity_reference_hashes(identity),
                 'reference_roles':([{'index':i,'role':'canonical_character_identity' if i==0 else 'channel_character_identity_reference',
                                     'sha256':a['sha256']} for i,a in enumerate(identity_assets)]
                     if identity and kind=='image' else []),
@@ -1539,6 +1600,8 @@ class Render(Strict):
     request_id: uuid.UUID
     revision: int
     variant_key: str | None = Field(default=None, pattern='^[a-f0-9]{64}$')
+    max_usd: Decimal | None = Field(default=None, ge=Decimal('0'), le=Decimal('1000'))
+    confirm_cost: bool = False
 
 
 class SplitRequest(Strict):
@@ -1639,6 +1702,8 @@ def preview_clip(pid: uuid.UUID, cid: uuid.UUID, body: Render):
             return public_task(old)
         if row['revision']!=body.revision: raise HTTPException(409,'Salve antes de preparar a prévia')
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        require_current_identity_assets(identity,draft,media)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         group=selected_variant(draft,clip,media,body.variant_key)
         effective=occurrence_clip(draft,clip,group,media) if group else clip
@@ -1698,8 +1763,61 @@ def soundtrack(c, row, draft):
         finally: obj['Body'].close()
         audio = manifest.get('audio', {})
         if audio.get('sha256'):
-            return {'program_id': source['id'], 'key': source['audio_key'], 'sha256': audio['sha256'], 'snapshot': sha}
+            measured=float(audio.get('unique_measured_seconds') or audio.get('seconds') or source['seconds'])
+            target=float(draft.minutes*60)
+            if measured + .05 < target:
+                continue
+            return {'program_id': source['id'], 'key': source['audio_key'], 'sha256': audio['sha256'],
+                    'snapshot': sha, 'source_seconds': measured, 'target_seconds': target,
+                    'trim_seconds': max(0.0,measured-target)}
     raise HTTPException(409, 'A música é obrigatória: revise uma trilha do canal com duração suficiente. Nenhuma música será comprada automaticamente.')
+
+
+def music_template(c, row, draft):
+    """Resolve an existing channel production as a style recipe, never as audio."""
+    query = '''SELECT b.id,p.data,pm.music_description,pm.title
+      FROM production_batches b
+      LEFT JOIN creator_plans p ON p.program_id=b.id
+      LEFT JOIN program_metadata pm ON pm.program_id=b.id
+      WHERE b.channel_id=%s AND b.state='ready' AND b.audio_key IS NOT NULL'''
+    params = [row['channel_id']]
+    if draft.music_program_id:
+        query += ' AND b.id=%s'; params.append(draft.music_program_id)
+    source = c.execute(query + ' ORDER BY b.updated_at DESC LIMIT 1', params).fetchone()
+    if not source:
+        raise HTTPException(409, 'Escolha uma produção musical pronta do canal para usar como referência de estilo.')
+    plan = dict(source['data'] or {})
+    recipe = plan.get('recipe') if isinstance(plan.get('recipe'), dict) else {}
+    music = recipe.get('music') if isinstance(recipe.get('music'), dict) else {}
+    description = str(plan.get('music_description') or source.get('music_description') or '').strip()
+    if not music and not description:
+        raise HTTPException(409, 'A produção escolhida não tem uma direção musical que possa servir de referência.')
+    # Keep the channel's recipe and sound bible; replace the old episode theme and
+    # avoid carrying its seasonal brief into this new composition.
+    if description and not music.get('bible'):
+        music = {**music, 'bible': description}
+        recipe = {**recipe, 'music': music}
+    plan.update(recipe=recipe, title=str(plan.get('title') or source.get('title') or 'Lo-Fi Vibe Coding'),
+                music_description=description, music_brief='',
+                theme=draft.theme, creative_theme=draft.theme)
+    plan['template_program_id'] = source['id']
+    template_hash = digest({'recipe': recipe, 'music_description': description,
+                            'title': plan['title']})
+    return {'program_id': source['id'], 'plan': plan, 'snapshot_sha256': template_hash}
+
+
+def soundtrack_quote(seconds):
+    from .audio_mix import estimated_tracks
+    from .runtime import MODELS
+    fade = 1.5
+    tracks = estimated_tracks(seconds, fade)
+    # One additional call is reserved for measured-duration variation on long mixes.
+    if seconds > MODELS['google/lyria-3-pro-preview']['max_seconds']:
+        tracks += 1
+    per_track = Decimal(MODELS['google/lyria-3-pro-preview']['price'])
+    return {'track_count': tracks, 'fade_seconds': fade,
+            'usd': (per_track * tracks).quantize(Decimal('.01')),
+            'per_track_usd': per_track, 'model': 'google/lyria-3-pro-preview'}
 
 
 def parent_soundtrack(c, row, draft, audio_proof):
@@ -1953,7 +2071,7 @@ def review_short(pid: uuid.UUID, tid: uuid.UUID, body: ShortReview):
     return {'approved': body.approve, 'state': payload['review_state']}
 
 
-@router.post('/projects/{pid}/render')
+@router.post('/projects/{pid}/render', dependencies=[Depends(require_spend_permission)])
 def render(pid: uuid.UUID, body: Render):
     with db() as c:
         row = project(c, pid, True)
@@ -1966,22 +2084,49 @@ def render(pid: uuid.UUID, body: Render):
         if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'operation'='render' AND status IN ('QUEUED','RUNNING')", (KIND, str(pid))).fetchone():
             raise HTTPException(409, 'Já existe uma montagem em andamento neste projeto')
         draft = Draft.model_validate(row['data'])
-        try: segments = assemble(draft, assets(c, pid))
+        media=assets(c,pid)
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        require_current_identity_assets(identity,draft,media)
+        try: segments = assemble(draft, media)
         except ValueError as e: raise HTTPException(409, str(e)) from None
         if not worker_online(c): raise HTTPException(503, 'O montador está offline. Ative o worker de exportação antes de montar.')
-        audio = soundtrack(c, row, draft)
-        media = assets(c, pid)
-        for cl in clips(draft):
-            if cl.id!=draft.base.id and not any(i.clip_id==cl.id for i in draft.insertions):continue
-            state=status(draft,cl,media)
-            for variant in state.get('variants',[state]):
-                video=variant.get('video') or {}
-                if not draft.automatic_motion and video.get('continuity_review_version') and video.get('reviewed_audio')!=audio:
-                    raise HTTPException(409,'A trilha mudou; revise as prévias com a música atual')
+        template = music_template(c, row, draft)
+        quote = soundtrack_quote(int(segments[-1]['end'] + .999))
+        if not body.confirm_cost:
+            raise HTTPException(422, 'Confirme o custo estimado da música original antes de montar o vídeo.')
+        if body.max_usd != quote['usd']:
+            raise HTTPException(409, f"A estimativa mudou; confirme novamente o teto de US${quote['usd']:.2f}.")
+        from .financial import check_available
+        check_available(c, quote['usd'])
+        if c.execute("SELECT to_regclass('visual_project_budgets') t").fetchone()['t']:
+            budget = c.execute('SELECT limit_usd FROM visual_project_budgets WHERE project_id=%s', (pid,)).fetchone()
+            if budget and project_generation_usage(c, pid) + quote['usd'] > budget['limit_usd']:
+                raise HTTPException(409, 'O teto autorizado deste projeto não cobre a nova trilha. Nenhuma geração foi iniciada.')
+        draft_sha=digest(row['data'])
+        identity_hashes=identity_reference_hashes(identity)
         payload = {'project_id': str(pid), 'operation': 'render', 'draft_sha256': digest(row['data']),
-                   'seconds': segments[-1]['end'], 'segments': segments, 'audio': audio}
-        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_ffmpeg_v1',%s,0,'QUEUED','Montagem com música e retorno à base')",
-                  (body.request_id, KIND, json.dumps(payload))); c.commit()
+                   'seconds': segments[-1]['end'], 'segments': segments,
+                   'creative_contract': {'version':1,'theme':draft.theme,'scene':draft.scene,
+                                         'scene_motion':draft.scene_motion,
+                                         'identity_profile':draft.identity_profile,
+                                         'identity_reference_sha256s':identity_hashes,
+                                         'scheduled_insertions':[{'clip_id':str(event.clip_id),
+                                                                  'minute':event.minute,
+                                                                  'seconds':get_clip(draft,event.clip_id).seconds}
+                                                                 for event in sorted(draft.insertions,key=lambda item:item.minute)],
+                                         'target_seconds':segments[-1]['end']},
+           'audio_plan': {'mode':'new_ephemeral_theme_track',
+                          'template_program_id':template['program_id'],
+                          'template_snapshot_sha256':template['snapshot_sha256'],
+                          'template_plan':template['plan'],
+                          'track_count':quote['track_count'],
+                          'per_track_usd':str(quote['per_track_usd']),
+                          'reserved_usd':str(quote['usd']),
+                          'fade_seconds':quote['fade_seconds'],
+                          'target_duration_seconds':segments[-1]['end'],
+                          'theme':draft.theme,'trim_only':True}}
+        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'google/lyria-3-pro-preview',%s,%s,'QUEUED','Nova trilha temática reservada; arquivos temporários')",
+                  (body.request_id, KIND, json.dumps(payload), quote['usd'])); c.commit()
     return {'id': str(body.request_id), 'status': 'QUEUED'}
 
 
@@ -1994,6 +2139,14 @@ def retry_render(pid:uuid.UUID,tid:uuid.UUID):
         if t['payload']['operation']!='render':raise HTTPException(409,'Esta opção retoma somente montagens locais, sem geração paga.')
         if t['status'] in ('QUEUED','RUNNING'):return public_task(t)
         if t['status'] not in ('FAILED','INTERRUPTED'):raise HTTPException(409,'A montagem não está interrompida.')
+        audio_plan=t['payload'].get('audio_plan') or {}
+        if not audio_plan.get('mix_key'):
+            from .audio_mix import coverage
+            tracks=audio_plan.get('tracks') or []
+            reusable_seconds=coverage(sum(float(item.get('seconds') or 0) for item in tracks),
+                                      len(tracks),float(audio_plan.get('fade_seconds') or 1.5))
+            if reusable_seconds + .001 < float(audio_plan.get('target_duration_seconds') or 0):
+                raise HTTPException(409,'A trilha não foi concluída. A retomada não fará novas chamadas musicais pagas; prepare outra montagem após revisar o custo.')
         draft=Draft.model_validate(row['data'])
         if digest(row['data'])!=t['payload']['draft_sha256']:
             raise HTTPException(409,'O projeto mudou. Prepare uma montagem com a versão atual.')
