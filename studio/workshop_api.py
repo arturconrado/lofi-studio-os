@@ -302,7 +302,7 @@ def identity_asset_matches(asset, identity):
     expected = identity_reference_hashes(identity)
     human_review = asset.get('human_identity_review') or {}
     if (human_review.get('identity_profile') == identity.get('id')
-            and human_review.get('image_sha256') == asset.get('sha256')
+            and (human_review.get('asset_sha256') or human_review.get('image_sha256')) == asset.get('sha256')
             and human_review.get('reference_sha256s') == expected
             and human_review.get('confirmed') is True):
         return True
@@ -310,6 +310,28 @@ def identity_asset_matches(asset, identity):
     if recorded:
         return recorded == expected
     return len(expected) == 1 and asset.get('identity_reference_sha256') == expected[0]
+
+
+def attest_existing_base_identity(draft, media, identity, video_sha256):
+    """Record an explicit human review without inventing generation provenance."""
+    image = media.get(str(draft.base.image_id)) or {}
+    video = media.get(str(draft.base.video_id)) or {}
+    if not identity or draft.identity_profile != identity['id']:
+        raise HTTPException(409, 'A identidade do projeto mudou. Atualize o projeto antes de confirmar.')
+    if (image.get('kind') != 'image' or not image.get('sha256') or not image.get('approved') or image.get('review_sha256') != image.get('sha256')
+            or not identity_asset_matches(image, identity)):
+        raise HTTPException(409, 'A imagem de origem precisa estar aprovada para a identidade atual.')
+    if (video.get('kind') != 'video' or not video_sha256 or video.get('sha256') != video_sha256
+            or str(video.get('source_image_id')) != str(draft.base.image_id)
+            or video.get('identity_profile') not in (None, identity['id'])
+            or not _status(draft, draft.base, media)['video_ready']):
+        raise HTTPException(409, 'A animação selecionada não corresponde à imagem ou ao movimento atuais.')
+    reviewed = dict(video)
+    reviewed['identity_profile'] = identity['id']
+    reviewed['human_identity_review'] = {'confirmed': True, 'identity_profile': identity['id'],
+        'asset_sha256': video_sha256, 'source_image_sha256': image['sha256'],
+        'reference_sha256s': identity_reference_hashes(identity)}
+    return reviewed
 
 
 def require_current_identity_assets(identity, draft, media):
@@ -1101,6 +1123,35 @@ class ShortReview(Strict):
     confirm_source_and_rights: bool = False
     note: str = Field(default='', max_length=2000)
     reason: str = Field(default='', max_length=2000)
+
+
+class ExistingBaseIdentityReview(Strict):
+    revision: int = Field(ge=1)
+    sha256: str = Field(pattern='^[a-f0-9]{64}$')
+    confirm_identity_and_motion: bool = False
+
+
+@router.post('/projects/{pid}/base/identity-review')
+def review_existing_base_identity(pid: uuid.UUID, body: ExistingBaseIdentityReview):
+    if not body.confirm_identity_and_motion:
+        raise HTTPException(422, 'Confirme a identidade e o movimento da animação selecionada.')
+    with db() as c:
+        row = project(c, pid, True)
+        if row['revision'] != body.revision:
+            raise HTTPException(409, 'O projeto mudou. Atualize a tela antes de confirmar.')
+        draft = Draft.model_validate(row['data']); media = assets(c, pid)
+        identity = identity_profile_for_channel(c, row['channel_id'])
+        if not identity or not identity_reference_status(pid, identity, draft, media)['bound']:
+            raise HTTPException(409, 'Vincule as referências atuais do canal antes de confirmar.')
+        reviewed = attest_existing_base_identity(draft, media, identity, body.sha256)
+        c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s',
+                  (json.dumps(reviewed), draft.base.video_id, pid))
+        audit(c, 'VISUAL_BASE_IDENTITY_HUMAN_CONFIRMED', str(draft.base.video_id),
+              json.dumps({'identity_profile': identity['id'], 'video_sha256': body.sha256,
+                          'source_image_sha256': reviewed['human_identity_review']['source_image_sha256'],
+                          'reference_sha256s': identity_reference_hashes(identity)}, sort_keys=True))
+        c.commit()
+    return {'reviewed': True}
 
 
 @router.post('/projects/{pid}/clips/{cid}/review/{kind}')

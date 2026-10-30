@@ -26,6 +26,43 @@ def fixture():
     return draft, assets
 
 
+def test_existing_base_identity_review_binds_exact_video_source_and_reference_pack():
+    from fastapi import HTTPException
+    from studio.workshop_api import attest_existing_base_identity, identity_asset_matches
+    d, media = fixture()
+    d.identity_profile = 'channel-a'
+    identity = {'id': 'channel-a', 'references': [{'sha256': 'd' * 64}, {'sha256': 'e' * 64}]}
+    image = media[str(d.base.image_id)]; video = media[str(d.base.video_id)]
+    image.update(identity_profile='channel-a', identity_reference_sha256s=['d' * 64, 'e' * 64], signature=signature(d, d.base, 'image'))
+    video.update(identity_profile='channel-a', identity_reference_sha256s=['f' * 64], source_image_id=str(d.base.image_id),
+                 signature=signature(d, d.base, 'video', image['sha256']))
+    assert not identity_asset_matches(video, identity)
+    reviewed = attest_existing_base_identity(d, media, identity, video['sha256'])
+    assert identity_asset_matches(reviewed, identity)
+    assert not identity_asset_matches({**reviewed, 'sha256': '1' * 64}, identity)
+    assert not identity_asset_matches(reviewed, {**identity, 'references': [{'sha256': '2' * 64}]})
+    for change in ('wrong_hash', 'wrong_source', 'wrong_channel', 'short_video', 'changed_motion', 'unapproved_image'):
+        current_d = d.model_copy(deep=True); current_media = copy.deepcopy(media)
+        current_image = current_media[str(current_d.base.image_id)]; current_video = current_media[str(current_d.base.video_id)]
+        supplied_sha = current_video['sha256']
+        if change == 'wrong_hash': supplied_sha = '1' * 64
+        elif change == 'wrong_source': current_video['source_image_id'] = str(uuid.uuid4())
+        elif change == 'wrong_channel': current_video['identity_profile'] = 'channel-b'
+        elif change == 'short_video': current_video['seconds'] = 1
+        elif change == 'changed_motion': current_d.base.motion = 'Different motion'
+        else: current_image['approved'] = False
+        with pytest.raises(HTTPException):
+            attest_existing_base_identity(current_d, current_media, identity, supplied_sha)
+
+
+def test_existing_base_identity_review_requires_explicit_confirmation():
+    from fastapi import HTTPException
+    from studio.workshop_api import ExistingBaseIdentityReview, review_existing_base_identity
+    with pytest.raises(HTTPException) as error:
+        review_existing_base_identity(uuid.uuid4(), ExistingBaseIdentityReview(revision=1, sha256='a' * 64))
+    assert error.value.status_code == 422
+
+
 def test_base_fills_every_gap_and_returns_after_each_insertion():
     d, a = fixture(); segments = assemble(d, a)
     assert [(s['start'], s['end'], s['loop']) for s in segments] == [(0,6,True),(6,8,False),(8,18,True),(18,20,False),(20,60,True)]

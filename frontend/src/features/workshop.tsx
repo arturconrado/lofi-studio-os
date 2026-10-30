@@ -331,6 +331,10 @@ export function Workshop({ id }: { id?: string }) {
           {kind === 'video' && !base && !scheduled && <small>Marque ao menos um horário para esta inserção antes de gerar.</small>}
           {kind === 'video' && !capabilities.data?.durations?.includes(clip.seconds) && <small role="alert">{capabilities.error || 'Selecione uma duração disponível no modelo. Sua imagem será mantida.'}</small>}
           {asset && <a class="btn ghost" href={asset.url + '?download=true'} download>Baixar {kind === 'image' ? 'imagem' : 'vídeo'} desta versão</a>}
+          {base && kind === 'video' && asset && automatic && state?.image_approved && !state?.video_ready && d?.identity?.configured && <button class="btn secondary" disabled={busy || dirty} onClick={() => {
+            if (confirm('Registrar que você já conferiu esta animação e aprovou a identidade e o movimento dos personagens? A confirmação vale para esta versão exata e para as referências atuais do canal.'))
+              run(() => post(`${prefix}/projects/${id}/base/identity-review`, { revision: d!.revision, sha256: asset.sha256, confirm_identity_and_motion: true }), 'Identidade da animação registrada para esta versão.');
+          }}>Registrar identidade da animação já aprovada</button>}
           {asset && (kind === 'image' || !automatic) && <><Pill tone={ok ? 'ok' : 'warn'}>{ok ? 'Aprovado nesta versão' : 'Revisão necessária'}</Pill>
             <label><input type="checkbox" checked={!!reviewed[key]} onChange={e => setReviewed({ ...reviewed, [key]: e.currentTarget.checked })} /> {kind === 'image' ? 'Conferi cenário e identidade dos personagens' : 'Assisti às prévias com música e conferi identidade, movimento, entrada e retorno'}</label>
             <div class="row"><button class="btn primary" disabled={busy || dirty || !reviewed[key] || (kind==='video' && !d?.jobs.some(j=>j.operation==='preview' && j.clip_id===clip.id && (!variant || j.variant_key===variant.key) && j.status==='COMPLETED' && j.current !== false))} onClick={() => review(displayed,kind,true,variant?.key)}>Aprovar {kind === 'image' ? 'imagem' : 'vídeo'}</button>
