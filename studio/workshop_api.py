@@ -399,6 +399,11 @@ def public_task(t):
             'url': f'/api/creator/workshop/projects/{p["project_id"]}/renders/{t["id"]}' if p.get('video_key') else None}
     if p.get('editorial_memory'):
         out['editorial_memory'] = p['editorial_memory']
+    if p.get('operation') == 'render' and t['status'] in ('FAILED','INTERRUPTED'):
+        try:
+            out['soundtrack_resume'] = soundtrack_resume_quote(t)
+        except HTTPException:
+            pass
     if p.get('cancel_requested_at'):
         terminal = p.get('provider_terminal_status')
         out['cancel_state'] = ('confirmed' if terminal == 'cancelled' else
@@ -1689,6 +1694,12 @@ class Render(Strict):
     output_resolution: Literal['auto', '1080p_upscaled'] = 'auto'
 
 
+class ResumeSoundtrack(Strict):
+    request_id: uuid.UUID
+    max_additional_usd: Decimal = Field(ge=Decimal('0'), le=Decimal('1000'))
+    confirm_cost: bool = False
+
+
 class SplitRequest(Strict):
     revision: int
     total_seconds: int = Field(ge=2,le=600)
@@ -2215,6 +2226,78 @@ def render(pid: uuid.UUID, body: Render):
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'google/lyria-3-pro-preview',%s,%s,'QUEUED','Nova trilha temática reservada; arquivos temporários')",
                   (body.request_id, KIND, json.dumps(payload), quote['usd'])); c.commit()
     return {'id': str(body.request_id), 'status': 'QUEUED'}
+
+
+def soundtrack_resume_quote(t):
+    p=t['payload'].get('audio_plan') or {}
+    tracks=p.get('tracks') or []
+    failed=p.get('failed_generation') or p.get('pending_generation') or {}
+    if (t['status'] not in ('FAILED','INTERRUPTED') or p.get('mix_key') or
+            not failed.get('sequence') or p.get('ephemeral_cleanup')):
+        raise HTTPException(409,'Esta trilha incompleta não tem faixas preservadas para retomada paga.')
+    sequences=[item.get('sequence') for item in tracks]
+    if (sequences != list(range(1,len(tracks)+1)) or failed['sequence'] != len(tracks)+1 or
+            failed['sequence'] > int(p.get('track_count') or 0) or
+            any(not item.get('key') or not item.get('sha256') for item in tracks)):
+        raise HTTPException(409,'As faixas preservadas não formam uma sequência verificável.')
+    extra=Decimal(str(p.get('per_track_usd') or '0'))
+    if not extra.is_finite() or extra <= 0:
+        raise HTTPException(409,'Não foi possível determinar o custo de uma nova tentativa.')
+    if failed.get('reported_cost_usd') is not None:
+        reported=Decimal(str(failed['reported_cost_usd']))
+        if not reported.is_finite() or reported < 0:
+            raise HTTPException(409,'O custo informado da tentativa interrompida é inválido.')
+        extra=max(extra,reported)
+    return {'additional_usd':str(extra), 'preserved_tracks':len(tracks),
+            'remaining_calls_max':max(0,int(p['track_count'])-len(tracks)),
+            'failed_sequence':failed['sequence']}
+
+
+@router.get('/projects/{pid}/jobs/{tid}/soundtrack-resume-quote')
+def resume_soundtrack_quote(pid:uuid.UUID,tid:uuid.UUID):
+    with db() as c:
+        project(c,pid)
+        t=task(c,tid,pid)
+        if t['payload'].get('operation')!='render':raise HTTPException(409,'Não é uma montagem de vídeo.')
+        return soundtrack_resume_quote(t)
+
+
+@router.post('/projects/{pid}/jobs/{tid}/resume-soundtrack', dependencies=[Depends(require_spend_permission)])
+def resume_soundtrack(pid:uuid.UUID,tid:uuid.UUID,body:ResumeSoundtrack):
+    with db() as c:
+        row=project(c,pid,True)
+        c.execute('SELECT pg_advisory_xact_lock(192837472)')
+        t=task(c,tid,pid)
+        p=t['payload']
+        plan=p.get('audio_plan') or {}
+        # An interrupted response cannot reserve the same paid continuation twice.
+        if str(body.request_id) in (plan.get('resume_request_ids') or []):
+            return public_task(t)
+        quote=soundtrack_resume_quote(t)
+        extra=Decimal(quote['additional_usd'])
+        if not body.confirm_cost or body.max_additional_usd != extra:
+            raise HTTPException(409,'Confirme a reserva adicional informada antes de retomar.')
+        draft=Draft.model_validate(row['data'])
+        if digest(row['data'])!=p['draft_sha256'] or assemble(draft,assets(c,pid))!=p['segments']:
+            raise HTTPException(409,'O projeto ou as fontes mudaram; a retomada foi bloqueada.')
+        if not worker_online(c):raise HTTPException(503,'O montador está offline.')
+        if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'operation'='render' AND status IN ('QUEUED','RUNNING')",(KIND,str(pid))).fetchone():
+            raise HTTPException(409,'Já existe uma montagem em andamento.')
+        from .financial import check_available
+        check_available(c,extra)
+        if c.execute("SELECT to_regclass('visual_project_budgets') t").fetchone()['t']:
+            budget=c.execute('SELECT limit_usd FROM visual_project_budgets WHERE project_id=%s',(pid,)).fetchone()
+            if budget and project_generation_usage(c,pid)+extra>budget['limit_usd']:
+                raise HTTPException(409,'O teto do projeto não cobre a reserva adicional.')
+        plan=dict(plan)
+        previous=plan.pop('failed_generation',None) or plan.pop('pending_generation')
+        plan['failed_attempts']=[*(plan.get('failed_attempts') or []),previous]
+        plan['resume_request_ids']=[*(plan.get('resume_request_ids') or []),str(body.request_id)]
+        p=dict(p);p['audio_plan']=plan
+        c.execute("UPDATE factory_tasks SET payload=%s,reserved_cost=reserved_cost+%s,actual_cost=NULL,status='QUEUED',detail='Retomando trilha com faixas preservadas',updated_at=now() WHERE id=%s",(json.dumps(p),extra,tid))
+        audit(c,'WORKSHOP_SOUNDTRACK_RESUMED',str(tid),'Explicit continuation with preserved tracks and additional reservation')
+        c.commit()
+    return {'id':str(tid),'status':'QUEUED'}
 
 
 @router.post('/projects/{pid}/jobs/{tid}/retry-render')
