@@ -287,16 +287,25 @@ def identity_reference_hashes(identity):
 
 
 def identity_asset_matches(asset, identity):
-    """Check that media was generated from this channel's current reference pack.
+    """Check generated provenance or a byte-bound human identity review.
 
     Older single-reference assets only recorded the primary hash. Preserve those
     when that hash still matches; a multi-reference pack requires its full list.
+    A reviewer may also attest that a legacy still visually matches the channel's
+    current identity pack. That attestation is separate from generation provenance
+    and is valid only for the exact image bytes and exact reference pack reviewed.
     """
     if not identity:
         return True
     if not asset or asset.get('identity_profile') != identity.get('id'):
         return False
     expected = identity_reference_hashes(identity)
+    human_review = asset.get('human_identity_review') or {}
+    if (human_review.get('identity_profile') == identity.get('id')
+            and human_review.get('image_sha256') == asset.get('sha256')
+            and human_review.get('reference_sha256s') == expected
+            and human_review.get('confirmed') is True):
+        return True
     recorded = asset.get('identity_reference_sha256s')
     if recorded:
         return recorded == expected
@@ -1108,9 +1117,28 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
         expected = signature(draft, effective, kind, image['sha256'] if kind == 'video' and image else None)
         if not asset or asset['sha256'] != body.sha256 or not (compatible_image(draft, clip, asset) if kind == 'image' else asset.get('signature') == expected):
             raise HTTPException(409, 'Material mudou; gere ou selecione uma versão compatível')
+        identity_reviewed = False
+        if (identity and kind == 'image' and body.approve and body.confirm_identity
+                and draft.identity_profile == identity['id']
+                and not identity_asset_matches(asset, identity)):
+            # Legacy stills can predate canonical reference-pack metadata. Preserve
+            # the exact pixels and require an explicit human identity confirmation;
+            # do not relabel the image as if the provider had received references.
+            existing_profile = asset.get('identity_profile')
+            if existing_profile not in (None, identity['id']):
+                raise HTTPException(409, 'A imagem está vinculada à identidade de outro canal.')
+            if not identity_reference_status(pid, identity, draft, media)['bound']:
+                raise HTTPException(409, 'Vincule as referências canônicas atuais antes da revisão humana.')
+            asset['identity_profile'] = identity['id']
+            asset['human_identity_review'] = {
+                'confirmed': True,
+                'identity_profile': identity['id'],
+                'image_sha256': asset['sha256'],
+                'reference_sha256s': identity_reference_hashes(identity),
+            }
+            identity_reviewed = True
         if identity and (draft.identity_profile != identity['id'] or asset.get('identity_profile') != identity['id']
                          or not identity_asset_matches(asset, identity)
-                         or (kind == 'image' and asset.get('identity_reference_sha256') != identity['sha256'])
                          or (kind == 'video' and (not image or image.get('identity_profile') != identity['id']))):
             raise HTTPException(409, 'Este material não carrega a referência canônica do canal. Gere novamente antes da revisão.')
         if body.approve:
@@ -1136,6 +1164,11 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
         if kind == 'image': asset['visual_signature'] = signature(draft, clip, 'image')
         asset.update(approved=body.approve, review_sha256=body.sha256, review_note=body.note)
         c.execute('UPDATE visual_media SET data=%s WHERE id=%s AND project_id=%s', (json.dumps(asset), aid, pid))
+        if identity_reviewed:
+            audit(c, 'VISUAL_IDENTITY_HUMAN_CONFIRMED', str(aid),
+                  json.dumps({'identity_profile': identity['id'],
+                              'image_sha256': body.sha256,
+                              'reference_sha256s': identity_reference_hashes(identity)}, sort_keys=True))
         audit(c, 'VISUAL_MEDIA_REVIEWED', str(aid), 'approved' if body.approve else 'changes_requested'); c.commit()
     return {'reviewed': True}
 
