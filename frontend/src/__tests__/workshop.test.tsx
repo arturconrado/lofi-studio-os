@@ -5,6 +5,8 @@ import { channels, channelId } from '../lib/store';
 
 beforeEach(() => {
   window.scrollTo = () => {};
+  if (!HTMLDialogElement.prototype.showModal) HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  if (!HTMLDialogElement.prototype.close) HTMLDialogElement.prototype.close = function () { this.open = false; };
   channels.value = [{ id: 'channel', name: 'Canal' } as any]; channelId.value = 'channel';
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -80,6 +82,8 @@ it('records the already approved base identity without requesting a new generati
   await waitFor(() => expect(view.queryByText('Registrar identidade da animação já aprovada')).not.toBeNull());
   expect(view.getByText(/A base selecionada foi gerada em 720p/)).not.toBeNull();
   fireEvent.click(view.getByText('Registrar identidade da animação já aprovada'));
+  expect(fetcher.mock.calls.some(([url]) => url.endsWith('/base/identity-review'))).toBe(false);
+  fireEvent.click(view.getByText('Confirmar identidade já aprovada'));
   await waitFor(() => expect(fetcher.mock.calls.some(([url, init]) => url.endsWith('/base/identity-review') && init?.method === 'POST')).toBe(true));
   const request = fetcher.mock.calls.find(([url]) => url.endsWith('/base/identity-review'))!;
   expect(JSON.parse(String(request[1]!.body))).toEqual({ revision: 3, sha256: 'b'.repeat(64), confirm_identity_and_motion: true });
@@ -192,6 +196,10 @@ it('quotes all necessary variants once and sends their total budget', async () =
   vi.stubGlobal('fetch',fetcher);const view=render(<Workshop id="p" />);
   await waitFor(()=>expect(view.queryByText('Gerar versões necessárias para os horários')).not.toBeNull());
   fireEvent.click(view.getByText('Gerar versões necessárias para os horários'));
+  await waitFor(()=>expect(view.queryByText('Confirmar geração')).not.toBeNull());
+  expect(fetcher.mock.calls.some(c=>c[0].endsWith('/generate/video'))).toBe(false);
+  await waitFor(()=>expect((view.getByText('Confirmar geração') as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(view.getByText('Confirmar geração'));
   await waitFor(()=>expect(fetcher.mock.calls.some(c=>c[0].endsWith('/generate/video'))).toBe(true));
   const request=fetcher.mock.calls.find(c=>c[0].endsWith('/generate/video'));
   expect(JSON.parse(String(request![1]!.body)).max_usd).toBe(.4);

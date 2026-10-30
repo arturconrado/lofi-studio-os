@@ -10,6 +10,7 @@ type Character = { name: string; description: string; references: string[] };
 type AttemptReasonRequest =
   | { mode: 'scope'; message: string }
   | { mode: 'correction'; clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string };
+type PaidApproval = { clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string; reason?: string; revision: number; resolution: '720p' | '1080p' };
 type Draft = { automatic_motion?: boolean; identity_profile?: string | null; name: string; minutes: number; theme: string; scene: string; scene_motion: string; scene_references: string[];
   characters: Character[]; base: Clip; clips: Clip[]; insertions: { id: string; clip_id: string; minute: number }[]; music_program_id: string | null };
 type Media = { id: string; url: string; sha256: string; kind: string; approved: boolean; clip_id?: string; resolution?: '720p' | '1080p' };
@@ -67,6 +68,8 @@ export function Workshop({ id }: { id?: string }) {
   const [actionKey, setActionKey] = useState('');
   const [attemptReasonRequest, setAttemptReasonRequest] = useState<AttemptReasonRequest | null>(null);
   const [attemptReason, setAttemptReason] = useState('');
+  const [paidApproval, setPaidApproval] = useState<PaidApproval | null>(null);
+  const [identityReview, setIdentityReview] = useState<{sha256:string;revision:number} | null>(null);
   const [splitSeconds, setSplitSeconds] = useState<Record<string,number>>({});
   const [splitPlan, setSplitPlan] = useState<{clip_id:string;total_seconds:number;usd_max:number;new_clips_max:number;parts:{seconds:number;motion:string}[]} | null>(null);
   const polling = useRef(false);
@@ -227,12 +230,16 @@ export function Workshop({ id }: { id?: string }) {
         request_id: uuid(), revision: d!.revision, reason, confirm_current_actions: true
       }), 'Escopo da entrega revisado. Confira novamente o orçamento e confirme a geração separadamente.');
     }
-    const q = request.quote;
-    const attemptLabel = q.attempt?.stage === 'correction' ? 'Único ciclo de correção' : 'Tentativa inicial';
-    if (!confirm(`${request.history}\n\n${attemptLabel}: gerar ${request.kind === 'image' ? 'imagem' : 'vídeo'} de “${request.clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. ${q.waiting_variants || 0} versão(ões) aguardam o vídeo anterior. Não haverá repetição paga automática.`)) return;
+    setPaidApproval({clip:request.clip,kind:request.kind,variantKey:request.variantKey,quote:request.quote,
+      history:request.history,reason,revision:d!.revision,resolution});
+  };
+  const submitPaidApproval = () => {
+    const request = paidApproval; if (!request || busy) return;
+    setPaidApproval(null);
     return run(() => post(`${prefix}/projects/${id}/clips/${request.clip.id}/generate/${request.kind}`, {
-      request_id: uuid(), revision: d!.revision, max_usd: q.usd, confirm_cost: true, variant_key: request.variantKey || null,
-      correction_reason: reason, ...(request.kind === 'video' ? { resolution } : {})
+      request_id: uuid(), revision: request.revision, max_usd: request.quote.usd, confirm_cost: true,
+      variant_key: request.variantKey || null, ...(request.reason ? {correction_reason:request.reason} : {}),
+      ...(request.kind === 'video' ? {resolution:request.resolution} : {})
     }), 'Pedido incluído na fila. Acompanhe em Fila e histórico.');
   };
   const createShort = () => {
@@ -273,7 +280,6 @@ export function Workshop({ id }: { id?: string }) {
     if(q.new_clips===0){setMessage('Os vídeos já estão disponíveis para revisão.');return;}
     const historyAndAlternatives=attemptContext(q.attempt);
     if(q.attempt?.scope_review_required){
-      if(!confirm(`${q.attempt.message}\n\nA revisão salva somente o escopo atual; não inicia geração nem amplia o orçamento financeiro.`))return;
       requestAttemptReason({mode:'scope',message:q.attempt.message});
       return;
     }
@@ -282,9 +288,7 @@ export function Workshop({ id }: { id?: string }) {
       requestAttemptReason({mode:'correction',clip,kind,variantKey,quote:q,history:historyAndAlternatives});
       return;
     }
-    const attemptLabel=q.attempt?.stage==='correction'?'Único ciclo de correção':'Tentativa inicial';
-    if (!confirm(`${historyAndAlternatives}\n\n${attemptLabel}: gerar ${kind === 'image' ? 'imagem' : 'vídeo'} de “${clip.name}”? ${q.new_clips || 1} vídeo(s)/imagem(ns) novos. Reserva máxima de US$ ${Number(q.usd).toFixed(2)}. ${q.reused_occurrences || 0} ocorrência(s) com material reaproveitado. ${q.waiting_variants || 0} versão(ões) aguardam o vídeo anterior. Não haverá repetição paga automática.`)) return;
-    await post(`${prefix}/projects/${id}/clips/${clip.id}/generate/${kind}`, { request_id: uuid(), revision: d!.revision, max_usd: q.usd, confirm_cost: true, variant_key:variantKey || null, ...(kind === 'video' ? { resolution } : {}) });
+    setPaidApproval({clip,kind,variantKey,quote:q,history:historyAndAlternatives,revision:d!.revision,resolution});
   }); };
   const review = (clip: Clip, kind: 'image' | 'video', approve: boolean, variantKey?: string) => run(async () => {
     const asset = d!.media[String(kind === 'image' ? clip.image_id : clip.video_id)];
@@ -332,10 +336,7 @@ export function Workshop({ id }: { id?: string }) {
           {kind === 'video' && !base && !scheduled && <small>Marque ao menos um horário para esta inserção antes de gerar.</small>}
           {kind === 'video' && !capabilities.data?.durations?.includes(clip.seconds) && <small role="alert">{capabilities.error || 'Selecione uma duração disponível no modelo. Sua imagem será mantida.'}</small>}
           {asset && <a class="btn ghost" href={asset.url + '?download=true'} download>Baixar {kind === 'image' ? 'imagem' : 'vídeo'} desta versão</a>}
-          {base && kind === 'video' && asset && automatic && state?.image_approved && !state?.video_ready && d?.identity?.configured && <button class="btn secondary" disabled={busy || dirty} onClick={() => {
-            if (confirm('Registrar que você já conferiu esta animação e aprovou a identidade e o movimento dos personagens? A confirmação vale para esta versão exata e para as referências atuais do canal.'))
-              run(() => post(`${prefix}/projects/${id}/base/identity-review`, { revision: d!.revision, sha256: asset.sha256, confirm_identity_and_motion: true }), 'Identidade da animação registrada para esta versão.');
-          }}>Registrar identidade da animação já aprovada</button>}
+          {base && kind === 'video' && asset && automatic && state?.image_approved && !state?.video_ready && d?.identity?.configured && <button class="btn secondary" disabled={busy || dirty} onClick={() => setIdentityReview({revision:d!.revision,sha256:asset.sha256})}>Registrar identidade da animação já aprovada</button>}
           {asset && (kind === 'image' || !automatic) && <><Pill tone={ok ? 'ok' : 'warn'}>{ok ? 'Aprovado nesta versão' : 'Revisão necessária'}</Pill>
             <label><input type="checkbox" checked={!!reviewed[key]} onChange={e => setReviewed({ ...reviewed, [key]: e.currentTarget.checked })} /> {kind === 'image' ? 'Conferi cenário e identidade dos personagens' : 'Assisti às prévias com música e conferi identidade, movimento, entrada e retorno'}</label>
             <div class="row"><button class="btn primary" disabled={busy || dirty || !reviewed[key] || (kind==='video' && !d?.jobs.some(j=>j.operation==='preview' && j.clip_id===clip.id && (!variant || j.variant_key===variant.key) && j.status==='COMPLETED' && j.current !== false))} onClick={() => review(displayed,kind,true,variant?.key)}>Aprovar {kind === 'image' ? 'imagem' : 'vídeo'}</button>
@@ -378,6 +379,17 @@ export function Workshop({ id }: { id?: string }) {
   if (id && resource.loading) return <Skeleton />;
   if (id && resource.error) return <Empty title="Não foi possível abrir o projeto"><p>{resource.error}</p><button class="btn" onClick={resource.reload}>Tentar novamente</button></Empty>;
   return <div class="stack">
+    <Dialog open={!!identityReview} onClose={() => setIdentityReview(null)} title="Registrar identidade da animação">
+      <p>Registre que você já conferiu esta animação e aprovou a identidade e o movimento dos personagens. A confirmação vale para esta versão exata e para as referências atuais do canal.</p>
+      <div class="row"><button class="btn ghost" onClick={() => setIdentityReview(null)}>Cancelar</button><button class="btn primary" disabled={busy} onClick={() => {
+        const review = identityReview; if (!review) return; setIdentityReview(null);
+        run(() => post(`${prefix}/projects/${id}/base/identity-review`, { ...review, confirm_identity_and_motion: true }), 'Identidade da animação registrada para esta versão.');
+      }}>Confirmar identidade já aprovada</button></div>
+    </Dialog>
+    <Dialog open={!!paidApproval} onClose={() => setPaidApproval(null)} title="Confirmar custo da geração">
+      {paidApproval && <><p style={{whiteSpace:'pre-line'}}>{paidApproval.history}</p><p>{paidApproval.quote.attempt?.stage === 'correction' ? 'Único ciclo de correção' : 'Tentativa inicial'}: gerar {paidApproval.kind === 'image' ? 'imagem' : 'vídeo'} de “{paidApproval.clip.name}”. {paidApproval.quote.new_clips || 1} novo(s), reserva máxima de US$ {Number(paidApproval.quote.usd).toFixed(2)}. {paidApproval.quote.reused_occurrences || 0} ocorrência(s) reaproveitada(s); {paidApproval.quote.waiting_variants || 0} aguardando o vídeo anterior. Não haverá repetição paga automática.</p></>}
+      <div class="row"><button class="btn ghost" onClick={() => setPaidApproval(null)}>Cancelar</button><button class="btn primary" disabled={busy || !paidApproval} onClick={submitPaidApproval}>Confirmar geração</button></div>
+    </Dialog>
     <Dialog open={!!attemptReasonRequest} onClose={() => { setAttemptReasonRequest(null); setAttemptReason(''); }} title={attemptReasonRequest?.mode === 'scope' ? 'Justificar o escopo atual' : 'Justificar correção paga'}>
       {attemptReasonRequest?.mode === 'scope'
         ? <p>{attemptReasonRequest.message} A justificativa apenas registra o escopo atual; não amplia o orçamento nem inicia uma geração.</p>
