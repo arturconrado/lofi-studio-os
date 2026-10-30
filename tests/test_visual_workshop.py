@@ -288,7 +288,8 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
         assert segments==original['payload']['segments'] and seconds==original['payload']['seconds']
         assert len(sources)>=1 and Path(audio).exists()
         Path(final).write_bytes(b'recovered-render')
-        return {'sha256':'f'*64,'seconds':seconds,'audio_seconds':seconds,'full_decode_pass':True}
+        return {'sha256':'f'*64,'seconds':seconds,'audio_seconds':seconds,'full_decode_pass':True,
+                'audio_alignment':{}}
     monkeypatch.setattr(workshop_worker,'render_segments',resumed_render)
     marker=WORKSPACE.set(identity['workspace_id'])
     try:assert workshop_worker.tick() is True
