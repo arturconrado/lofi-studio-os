@@ -228,6 +228,24 @@ it('requires a reason and an explicit cost confirmation for a paid correction', 
   expect(body).toMatchObject({revision:7,resolution:'1080p',max_usd:.4,confirm_cost:true,correction_reason:'Usar a imagem aprovada e gerar a versão em 1080p.'});
 });
 
+it('reviews a changed delivery scope without starting paid generation', async () => {
+  const draft=initialDraft(); const detail={id:'p',revision:4,data:draft,media:{},states:{[draft.base.id]:{image_approved:true,video_ready:false,video_approved:false}},jobs:[],library:[],music:[]};
+  const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(
+    url.endsWith('/capabilities')?{durations:[8]}:url.includes('/quote/')?{usd:.4,new_clips:1,attempt:{allowed:false,scope_review_required:true,message:'Revise o escopo'}}:init?.method==='POST'?{saved:true}:detail),{status:200}));
+  vi.stubGlobal('fetch',fetcher);const view=render(<Workshop id="p" />);
+  await waitFor(()=>expect(view.queryByText('Gerar vídeo de Base tranquila')).not.toBeNull());
+  fireEvent.click(view.getByText('Gerar vídeo de Base tranquila'));
+  await waitFor(()=>expect(view.queryByText('Registrar escopo')).not.toBeNull());
+  fireEvent.input(view.getByLabelText('Motivo'),{target:{value:'Adicionar as inserções já agendadas para o vídeo.'}});
+  await waitFor(()=>expect((view.getByText('Registrar escopo') as HTMLButtonElement).disabled).toBe(false));
+  expect(fetcher.mock.calls.some(([url])=>url.includes('/attempt-scope/review'))).toBe(false);
+  fireEvent.click(view.getByText('Registrar escopo'));
+  await waitFor(()=>expect(fetcher.mock.calls.some(([url])=>url.endsWith('/attempt-scope/review'))).toBe(true));
+  const body=JSON.parse(String(fetcher.mock.calls.find(([url])=>url.endsWith('/attempt-scope/review'))![1]!.body));
+  expect(body).toMatchObject({revision:4,confirm_current_actions:true,reason:'Adicionar as inserções já agendadas para o vídeo.'});
+  expect(fetcher.mock.calls.some(([url])=>url.includes('/generate/'))).toBe(false);
+});
+
 it('binds preview and approval controls to the version shown for its hours', async () => {
   const draft=initialDraft();const clip={...draft.base,id:'action',name:'Carinho',image_id:'i1',video_id:'v1'};draft.clips=[clip];draft.insertions=[{id:'e1',clip_id:clip.id,minute:15},{id:'e2',clip_id:clip.id,minute:30}];
   const variants=['a','b'].map((key,n)=>({key:key.repeat(64),minutes:[15+n*15],event_ids:['e'+n],image_id:'i'+(n+1),video_id:'v'+(n+1),image_approved:true,video_ready:true,video_approved:false,seams_approved:false,source_ready:true}));
