@@ -206,6 +206,28 @@ it('quotes all necessary variants once and sends their total budget', async () =
   expect(fetcher.mock.calls.filter(c=>c[0].endsWith('/generate/video'))).toHaveLength(1);
 });
 
+it('requires a reason and an explicit cost confirmation for a paid correction', async () => {
+  const draft = initialDraft();
+  const detail = {id:'p',revision:7,data:draft,media:{},states:{[draft.base.id]:{image_approved:true,video_ready:false,video_approved:false}},jobs:[],library:[],music:[]};
+  const fetcher = vi.fn(async(url:string, init?:RequestInit) => new Response(JSON.stringify(
+    url.endsWith('/capabilities') ? {durations:[8]} : url.includes('/quote/') ? {usd:.4,new_clips:1,attempt:{allowed:true,stage:'correction',requires_reason:true}}
+      : init?.method === 'POST' ? {id:'job'} : detail), {status:200}));
+  vi.stubGlobal('fetch',fetcher); const view=render(<Workshop id="p" />);
+  await waitFor(()=>expect(view.queryByText('Gerar vídeo de Base tranquila')).not.toBeNull());
+  fireEvent.change(view.getByLabelText(/Resolução dos novos trechos/),{target:{value:'1080p'}});
+  fireEvent.click(view.getByText('Gerar vídeo de Base tranquila'));
+  await waitFor(()=>expect(view.queryByText('Continuar para confirmação de custo')).not.toBeNull());
+  fireEvent.input(view.getByLabelText('Motivo'),{target:{value:'Usar a imagem aprovada e gerar a versão em 1080p.'}});
+  await waitFor(()=>expect((view.getByText('Continuar para confirmação de custo') as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(view.getByText('Continuar para confirmação de custo'));
+  await waitFor(()=>expect((view.getByText('Confirmar geração') as HTMLButtonElement).disabled).toBe(false));
+  expect(fetcher.mock.calls.some(([url])=>url.includes('/generate/'))).toBe(false);
+  fireEvent.click(view.getByText('Confirmar geração'));
+  await waitFor(()=>expect(fetcher.mock.calls.some(([url])=>url.endsWith('/generate/video'))).toBe(true));
+  const body=JSON.parse(String(fetcher.mock.calls.find(([url])=>url.endsWith('/generate/video'))![1]!.body));
+  expect(body).toMatchObject({revision:7,resolution:'1080p',max_usd:.4,confirm_cost:true,correction_reason:'Usar a imagem aprovada e gerar a versão em 1080p.'});
+});
+
 it('binds preview and approval controls to the version shown for its hours', async () => {
   const draft=initialDraft();const clip={...draft.base,id:'action',name:'Carinho',image_id:'i1',video_id:'v1'};draft.clips=[clip];draft.insertions=[{id:'e1',clip_id:clip.id,minute:15},{id:'e2',clip_id:clip.id,minute:30}];
   const variants=['a','b'].map((key,n)=>({key:key.repeat(64),minutes:[15+n*15],event_ids:['e'+n],image_id:'i'+(n+1),video_id:'v'+(n+1),image_approved:true,video_ready:true,video_approved:false,seams_approved:false,source_ready:true}));

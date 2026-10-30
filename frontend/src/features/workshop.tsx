@@ -8,8 +8,8 @@ import { Field, Empty, Skeleton, Pill, Dialog } from '../ds/ui';
 type Clip = { action_goal?: string | null; continues_from?: string | null; id: string; name: string; motion: string; seconds: number; references: string[]; image_id: string | null; video_id: string | null };
 type Character = { name: string; description: string; references: string[] };
 type AttemptReasonRequest =
-  | { mode: 'scope'; message: string }
-  | { mode: 'correction'; clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string };
+  | { mode: 'scope'; message: string; revision: number }
+  | { mode: 'correction'; clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string; revision: number; resolution: '720p' | '1080p' };
 type PaidApproval = { clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string; reason?: string; revision: number; resolution: '720p' | '1080p' };
 type Draft = { automatic_motion?: boolean; identity_profile?: string | null; name: string; minutes: number; theme: string; scene: string; scene_motion: string; scene_references: string[];
   characters: Character[]; base: Clip; clips: Clip[]; insertions: { id: string; clip_id: string; minute: number }[]; music_program_id: string | null };
@@ -227,11 +227,11 @@ export function Workshop({ id }: { id?: string }) {
     setAttemptReason('');
     if (request.mode === 'scope') {
       return run(() => post(`${prefix}/projects/${id}/attempt-scope/review`, {
-        request_id: uuid(), revision: d!.revision, reason, confirm_current_actions: true
+        request_id: uuid(), revision: request.revision, reason, confirm_current_actions: true
       }), 'Escopo da entrega revisado. Confira novamente o orçamento e confirme a geração separadamente.');
     }
     setPaidApproval({clip:request.clip,kind:request.kind,variantKey:request.variantKey,quote:request.quote,
-      history:request.history,reason,revision:d!.revision,resolution});
+      history:request.history,reason,revision:request.revision,resolution:request.resolution});
   };
   const submitPaidApproval = () => {
     const request = paidApproval; if (!request || busy) return;
@@ -280,12 +280,12 @@ export function Workshop({ id }: { id?: string }) {
     if(q.new_clips===0){setMessage('Os vídeos já estão disponíveis para revisão.');return;}
     const historyAndAlternatives=attemptContext(q.attempt);
     if(q.attempt?.scope_review_required){
-      requestAttemptReason({mode:'scope',message:q.attempt.message});
+      requestAttemptReason({mode:'scope',message:q.attempt.message,revision:d!.revision});
       return;
     }
     if(q.attempt?.allowed===false){setMessage([q.attempt.message || 'O limite desta unidade criativa foi atingido.',historyAndAlternatives].filter(Boolean).join('\n\n'));return;}
     if(q.attempt?.requires_reason){
-      requestAttemptReason({mode:'correction',clip,kind,variantKey,quote:q,history:historyAndAlternatives});
+      requestAttemptReason({mode:'correction',clip,kind,variantKey,quote:q,history:historyAndAlternatives,revision:d!.revision,resolution});
       return;
     }
     setPaidApproval({clip,kind,variantKey,quote:q,history:historyAndAlternatives,revision:d!.revision,resolution});
