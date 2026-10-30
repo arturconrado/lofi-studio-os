@@ -42,6 +42,28 @@ describe('visual workshop', () => {
   });
 });
 
+it('keeps the generation blocker visible and identifies clips blocking assembly', async () => {
+  const draft = initialDraft();
+  const insertion = { ...draft.base, id: 'insertion', name: 'Inserção de outono' };
+  draft.clips = [insertion];
+  draft.insertions = [{ id: 'event', clip_id: insertion.id, minute: 15 }];
+  const detail = { id: 'p', revision: 1, data: draft, media: {}, states: {
+    [draft.base.id]: { image_approved: true, video_ready: false, video_approved: false },
+    insertion: { image_approved: false, video_ready: false, video_approved: false }
+  }, jobs: [], library: [], music: [] };
+  const fetcher = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(
+    url.includes('/quote/video') ? { usd: 0.24, new_clips: 1, attempt: { allowed: false, message: 'Limite de tentativas atingido.' } }
+      : url.endsWith('/capabilities') ? { durations: [8] } : detail
+  ), { status: 200 }));
+  vi.stubGlobal('fetch', fetcher);
+  const view = render(<Workshop id="p" />);
+  await waitFor(() => expect(view.getByText(/Trechos ainda não prontos para montagem: Base tranquila, Inserção de outono/)).not.toBeNull());
+  fireEvent.click(view.getByText('Gerar vídeo de Base tranquila'));
+  await waitFor(() => expect(view.getAllByText(/Limite de tentativas atingido/).length).toBeGreaterThan(0));
+  expect(fetcher.mock.calls.some(([url, init]) => url.includes('/generate/') && init?.method === 'POST')).toBe(false);
+  expect((view.getByText('Montar vídeo completo') as HTMLButtonElement).disabled).toBe(true);
+});
+
 
 it('shows active generation beside the action, prevents another request and exposes preserved media', async () => {
   const draft=initialDraft(); draft.base.image_id='image';

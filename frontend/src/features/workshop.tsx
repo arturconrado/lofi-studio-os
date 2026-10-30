@@ -91,7 +91,8 @@ export function Workshop({ id }: { id?: string }) {
   const activeRender = d?.jobs.some(j=>j.operation==='render' && ['QUEUED','RUNNING'].includes(j.status));
   const activeShortRender = d?.jobs.some(j=>j.operation==='short_render' && ['QUEUED','RUNNING'].includes(j.status));
   const automatic = draft.automatic_motion === true;
-  const allApproved = [draft.base,...draft.clips.filter(c=>scheduledIds.has(c.id))].every(c=>automatic ? d?.states[c.id]?.video_ready : d?.states[c.id]?.video_approved && d?.states[c.id]?.seams_approved !== false);
+  const unreadyClips = [draft.base,...draft.clips.filter(c=>scheduledIds.has(c.id))].filter(c=>automatic ? !d?.states[c.id]?.video_ready : !d?.states[c.id]?.video_approved || d?.states[c.id]?.seams_approved === false);
+  const allApproved = unreadyClips.length === 0;
   const scheduleIssue = ordered.some((i,n)=>{const c=draft.clips.find(c=>c.id===i.clip_id); const prev=ordered[n-1];const pc=draft.clips.find(c=>c.id===prev?.clip_id);return !c || i.minute*60+(c?.seconds||0)>draft.minutes*60 || (prev && i.minute*60<prev.minute*60+(pc?.seconds||0));});
   const shortSource = (() => {
     const root = draft.clips.find(c => !c.continues_from && c.name.toLowerCase().includes('pausa para acariciar o gato'));
@@ -206,7 +207,7 @@ export function Workshop({ id }: { id?: string }) {
     if (busy || running.current) return;
     running.current = true;
     setBusy(true); setMessage('');
-    try { const result = await fn(); if (id) await resource.reload(); setMessage(success); return result; }
+    try { const result = await fn(); if (id) await resource.reload(); if (success) setMessage(success); return result; }
     catch (e: any) { setMessage(e.message || 'Não foi possível concluir'); }
     finally { running.current=false; setBusy(false); }
   };
@@ -461,7 +462,7 @@ export function Workshop({ id }: { id?: string }) {
       <button class="btn" disabled={!draft.clips.length || draft.insertions.length >= 500} onClick={()=>{const first=draft.clips.find(c=>!c.continues_from);if(first)field('insertions',[...draft.insertions,...scheduleAction(first.id,0)]);}}>Adicionar horário</button>
       <p class="faint">Os minutos são contados desde o início. Inserções não prolongam a duração total e não podem se sobrepor.</p>
     </section>
-    <section class="card stack"><h3>4. Música, prévia e vídeo completo</h3><Field label="Resolução dos novos trechos de vídeo"><select class="select" value={resolution} onChange={e => setResolution(e.currentTarget.value as '720p' | '1080p')}><option value="720p">720p</option><option value="1080p">1080p</option></select><small>A resolução se aplica às próximas gerações; os materiais existentes são preservados.</small></Field><p>Total: {formatTime(draft.minutes)} · {ordered.length} inserções</p>{!allApproved && <p>Aprove a imagem inicial e aguarde a preparação dos clipes. As emendas são tratadas automaticamente.</p>}{activeRender && <p role="status">Montagem do vídeo longo em andamento.</p>}
+    <section class="card stack"><h3>4. Música, prévia e vídeo completo</h3><Field label="Resolução dos novos trechos de vídeo"><select class="select" value={resolution} onChange={e => setResolution(e.currentTarget.value as '720p' | '1080p')}><option value="720p">720p</option><option value="1080p">1080p</option></select><small>A resolução se aplica às próximas gerações; os materiais existentes são preservados.</small></Field><p>Total: {formatTime(draft.minutes)} · {ordered.length} inserções</p>{!allApproved && <p>Trechos ainda não prontos para montagem: {unreadyClips.map(c=>c.name).join(', ')}. {automatic ? 'Use o próximo passo para preparar cada trecho; materiais compatíveis podem seguir automaticamente.' : 'Revise cada trecho e suas emendas antes de montar.'}</p>}{activeRender && <p role="status">Montagem do vídeo longo em andamento.</p>}
       <Field label="Referência de estilo musical"><select class="select" value={draft.music_program_id || ''} onChange={e => field('music_program_id', e.currentTarget.value || null)}><option value="">Padrão: estilo da produção mais recente do canal</option>{d?.music.map(m => <option value={m.id}>{m.id} · {Math.floor(m.seconds / 60)} min de referência</option>)}</select><small>O áudio dessa produção não será reutilizado. O Harness cria uma trilha inédita para o tema atual e remove os arquivos temporários ao concluir o vídeo.</small></Field>
       <p class="faint">Ao clicar em montar, você autoriza um teto de até {soundtrackTrackCap} composições, US$ {soundtrackCostCap.toFixed(2)}. Esse valor aparece antes do início e o servidor bloqueia a tarefa se o limite global ou o deste projeto não comportar a reserva. Se a duração medida das composições não cobrir o vídeo, a montagem para sem completar o arquivo ou fazer chamadas pagas extras automaticamente.</p>
       <button class="btn primary" disabled={!id || dirty || busy || !allApproved || scheduleIssue || activeRender} onClick={renderFull}>Montar vídeo completo</button>
