@@ -20,6 +20,7 @@ jobs:
       - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg git ca-certificates
       - uses: actions/checkout@v4
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: python -m py_compile ops/export-worker-capacity.py studio/render_resources.py
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
