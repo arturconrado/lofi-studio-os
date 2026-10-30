@@ -174,7 +174,7 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
     from studio import workshop_api as api, workshop_provider as provider, financial
     from studio.core import db
     from PIL import Image
-    import io
+    import io, json
     cl=client;_,identity=signup(cl);cl.headers.update({'X-CSRF-Token':identity['csrf_token']})
     cid=cl.get('/api/channels').json()[0]['id']
     draft=Draft(name='Real API test',minutes=1,scene='Room',characters=[Character(name='Cat',description='Orange')],base=Clip(name='Base',motion='Breathing'))
