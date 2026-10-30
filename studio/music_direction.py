@@ -42,7 +42,7 @@ def composition_request(plan_data, sequence):
         'it also fits the current theme.'
     )
     if theme:
-        direction.append('Creative theme: ' + theme)
+        direction.append('Production theme: ' + theme)
         direction.append(
             'Interpret the theme musically with a few recognizable, original instrumental colors and motifs '
             'that fit its mood. Keep those elements as tasteful arrangement variations inside the channel’s '
