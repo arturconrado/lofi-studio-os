@@ -1115,6 +1115,31 @@ def generation_targets(draft, clip, media, variant_key=None, resolution=None):
     return groups
 
 
+def validate_video_identity_source(identity, draft, clip, media, groups):
+    """Require canonical identity on the actual frame source used for animation.
+
+    Insertions without an image are valid when continuity will derive their
+    starting frame from a canonical source in the same generation request.
+    """
+    if clip.id == draft.base.id:
+        source_image = media.get(str(clip.image_id))
+        if not source_image or source_image.get('identity_profile') != identity['id']:
+            raise HTTPException(409, 'Gere e aprove a imagem inicial com a referência canônica antes de animar.')
+        return
+    for group in groups:
+        source = group.get('source') or {}
+        source_image = media.get(str(source.get('source_image_id')))
+        canonical_source = source.get('identity_profile') == identity['id'] or bool(
+            source_image and source_image.get('identity_profile') == identity['id'])
+        if group.get('source_kind') == 'base_video_cut':
+            base_image = media.get(str(draft.base.image_id))
+            canonical_source = canonical_source or bool(
+                base_image and base_image.get('identity_profile') == identity['id']
+                and base_image.get('approved') and base_image.get('review_sha256') == base_image.get('sha256'))
+        if not canonical_source:
+            raise HTTPException(409, 'A fonte de continuidade desta inserção ainda não está vinculada à identidade canônica do canal.')
+
+
 def project_generation_usage(c, project_id):
     """Return reconciled project spend, keeping reservations for unknown tasks."""
     return c.execute("""SELECT COALESCE(sum(COALESCE(actual_cost,
@@ -1138,11 +1163,9 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
             raise HTTPException(409,'Escolha um still aprovado deste canal como referência de identidade antes de gerar. Se este canal ainda não tem assets aprovados, gere e aprove a primeira imagem-base para iniciar a identidade.')
         if identity and (draft.identity_profile!=identity['id'] or not identity_reference_status(pid,identity,draft,media)['bound']):
             raise HTTPException(409,'Este projeto ainda não está vinculado à referência canônica do canal. Salve uma nova versão visual antes de gerar.')
-        if identity and kind=='video':
-            source_image=media.get(str(clip.image_id))
-            if not source_image or source_image.get('identity_profile')!=identity['id']:
-                raise HTTPException(409,'Gere e aprove a imagem inicial com a referência canônica antes de animar.')
         groups=generation_targets(draft,clip,media,variant_key,resolution) if kind=='video' else [None]
+        if identity and kind=='video':
+            validate_video_identity_source(identity,draft,clip,media,groups)
         attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media,pid,row['channel_id'])
     q=(provider_quote(kind,clip.seconds,resolution) if resolution!='720p' else provider_quote(kind,clip.seconds)) if groups else {'usd':0,'seconds':clip.seconds}
     return {**q,'unit_usd':q['usd'],'usd':round(q['usd']*len(groups),6),'new_clips':len(groups),
@@ -1178,10 +1201,6 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if identity:
             if draft.identity_profile!=identity['id'] or not identity_reference_status(pid,identity,draft,media)['bound']:
                 raise HTTPException(409,'Este projeto ainda não está vinculado à referência canônica do canal. Salve uma nova versão visual antes de gerar.')
-            if kind=='video':
-                source_image=media.get(str(clip.image_id))
-                if not source_image or source_image.get('identity_profile')!=identity['id']:
-                    raise HTTPException(409,'Gere e aprove a imagem inicial com a referência canônica antes de animar.')
             if kind=='image':
                 verify_identity_source(identity)
         identity_prompt = None
@@ -1219,12 +1238,10 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
             if len(identity_assets)!=len(identity.get('references') or [identity]):
                 raise HTTPException(409,'A referência canônica deste projeto está indisponível; nenhum envio foi feito.')
             identity_asset=identity_assets[0]
-            if kind=='video':
-                source_image=media.get(str(clip.image_id))
-                if not source_image or source_image.get('identity_profile')!=identity['id']:
-                    raise HTTPException(409,'Gere e aprove a imagem inicial com a referência canônica antes de animar.')
         if q['seconds']!=clip.seconds: raise HTTPException(409,'A duração mudou; consulte o custo novamente')
         groups=generation_targets(draft,clip,media,body.variant_key,body.resolution) if kind=='video' else [None]
+        if identity and kind=='video':
+            validate_video_identity_source(identity,draft,clip,media,groups)
         if not groups: raise HTTPException(409,'Os vídeos já estão disponíveis para revisão')
         decision=attempt_decision(c,draft,clip,kind,body.resolution,groups,media,pid,row['channel_id'])
         if not decision['allowed']:raise HTTPException(409,decision['message'])
