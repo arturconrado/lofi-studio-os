@@ -19,7 +19,7 @@ COMPOSE = Path('/opt/lofi-studio-os-releases/d877875/compose.production-final.pr
 CONTAINER = 'lofi-vibe-coding-export-worker-1'
 PROJECT = 'lofi-vibe-coding'
 CPU = 4
-MEMORY = 1024**3
+MEMORY = 4 * 1024**3
 SWAP = 2 * MEMORY  # Docker counts RAM plus swap here; this is not reserved RAM.
 
 
@@ -54,14 +54,16 @@ def apply():
     if labels.get('com.docker.compose.project') != PROJECT or labels.get('com.docker.compose.service') != 'export-worker':
         raise RuntimeError('Unexpected container identity')
     h = before['HostConfig']
-    if h['NanoCpus'] not in (200_000_000, CPU * 10**9) or h['Memory'] not in (384 * 1024**2, MEMORY) or h['MemorySwap'] not in (768 * 1024**2, SWAP):
+    if h['NanoCpus'] not in (200_000_000, CPU * 10**9) or h['Memory'] not in (384 * 1024**2, 1024**3, MEMORY) or h['MemorySwap'] not in (768 * 1024**2, 2 * 1024**3, SWAP):
         raise RuntimeError('Unexpected resource configuration; review before changing')
     if h['CpuQuota'] or h['CpuPeriod'] or h['CpusetCpus']:
         raise RuntimeError('Conflicting CPU controls require review')
     if len(os.sched_getaffinity(0)) != CPU:
         raise RuntimeError('This policy is reviewed for the four-core production host')
     available = next(int(line.split()[1]) * 1024 for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:'))
-    if not target_runtime(before) and available < 2 * MEMORY:
+    # Account for the complete new limit plus 1 GiB for host/other-service growth.
+    # Existing worker RAM is already counted as used: this is conservative.
+    if not target_runtime(before) and available < MEMORY + 1024**3:
         raise RuntimeError('Insufficient host memory headroom')
     if not COMPOSE.is_file() or COMPOSE.is_symlink():
         raise RuntimeError('Unexpected Compose file')
@@ -70,10 +72,10 @@ def apply():
     service = config['services']['export-worker']
     if any(key in service for key in ('cpu_quota', 'cpu_period', 'cpuset', 'deploy')):
         raise RuntimeError('Conflicting Compose resources require review')
-    if str(service.get('cpus')) not in ('0.20', '0.2', '4', '4.0') or service.get('mem_limit') not in ('384m', '1g') or service.get('memswap_limit') not in (None, '2g'):
+    if str(service.get('cpus')) not in ('0.20', '0.2', '4', '4.0') or service.get('mem_limit') not in ('384m', '1g', '4g') or service.get('memswap_limit') not in (None, '2g', '8g'):
         raise RuntimeError('Unexpected persistent resource configuration')
     updated = copy.deepcopy(config)
-    updated['services']['export-worker'].update(cpus='4.0', mem_limit='1g', memswap_limit='2g')
+    updated['services']['export-worker'].update(cpus='4.0', mem_limit='4g', memswap_limit='8g')
     if updated != config:
         metadata = COMPOSE.stat()
         descriptor, candidate_name = tempfile.mkstemp(prefix='.export-capacity-', suffix='.private.json', dir=COMPOSE.parent)
