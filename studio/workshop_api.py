@@ -2391,13 +2391,15 @@ def reedit(pid: uuid.UUID, tid: uuid.UUID, body: ReeditRequest):
             proof=task(c,body.proof_id,pid); p=proof['payload']
             if (proof['status']!='COMPLETED' or not p.get('director_proof') or not p.get('approved')
                 or p.get('reedit_binding')!=binding or p.get('review_sha256')!=p.get('report',{}).get('sha256')
-                or not p.get('report',{}).get('director',{}).get('technical_passed')):
+                or not p.get('report',{}).get('director',{}).get('technical_passed')
+                or not p.get('report',{}).get('director',{}).get('plan_sha256')):
                 raise HTTPException(409,'Revise a amostra de continuidade desta versão antes da montagem longa')
         payload={'project_id':str(pid),'operation':'render' if body.proof_id else 'preview',
                  'director_proof':not bool(body.proof_id),'proof_id':str(body.proof_id) if body.proof_id else None,
                  'draft_sha256':digest(row['data']),'segments':segments,'seconds':seconds,
                  'output_resolution':original.get('output_resolution','auto'),
                  'reedit_source':source,'reedit_binding':binding,'director_contract':direction,
+                 'approved_plan_sha256':p['report']['director']['plan_sha256'] if body.proof_id else None,
                  'editorial_memory':metadata,'approved':False}
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_director_reedit',%s,0,'QUEUED','Preparando continuidade com a memória deste canal; sem geração paga')",
                   (body.request_id,KIND,json.dumps(payload)))

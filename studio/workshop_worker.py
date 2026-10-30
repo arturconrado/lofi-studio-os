@@ -276,6 +276,8 @@ def tick():
             with db() as c:
                 c.execute("UPDATE factory_tasks SET payload=jsonb_set(payload,'{continuity_diagnostics}',%s::jsonb) WHERE id=%s",
                           (json.dumps(prepared_plan['director']),t['id']));c.commit()
+            if p.get('approved_plan_sha256') and p['approved_plan_sha256']!=prepared_plan['director']['plan_sha256']:
+                raise ValueError('Prepared edit differs from the approved continuity proof')
             if not prepared_plan['director']['technical_passed'] and not p.get('director_proof'):
                 raise ContinuityRejected(prepared_plan['director'])
         audio = folder / 'audio.mp3'
@@ -375,6 +377,11 @@ def tick():
         # authorized continuation can reuse them. Successful renders still
         # remove their temporary soundtrack after the final file is stored.
         with db() as c:
+            if type(e).__name__=='ContinuityRejected':
+                saved=c.execute('SELECT payload FROM factory_tasks WHERE id=%s',(t['id'],)).fetchone()
+                saved_audio=(saved or {}).get('payload',{}).get('audio_plan',{})
+                if not any(saved_audio.get(k) for k in ('tracks','mix_key','pending_generation','failed_attempts','failed_generation')):
+                    c.execute('UPDATE factory_tasks SET actual_cost=0 WHERE id=%s',(t['id'],))
             c.execute("UPDATE factory_tasks SET status='FAILED',detail=%s,updated_at=now() WHERE id=%s",
                       (('Continuidade reprovada: confira o diagnóstico e prepare uma amostra antes de remontar.' if type(e).__name__=='ContinuityRejected' else 'Montagem interrompida (' + type(e).__name__ + '). Confira as fontes e o espaço disponível.'), t['id'])); c.commit()
     finally:

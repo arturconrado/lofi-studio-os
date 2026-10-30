@@ -136,7 +136,7 @@ def prepare(plan, sources, folder, width, height, fps, profile=None):
     joins=[{'at_seconds':b['start'],**_boundary(window(a,True),window(b,False))}
            for a,b in zip(segments,segments[1:])]
     action_sources=[s['asset_sha256'] for s in segments if not s['repeat_short_clip']]
-    report={'action_source_count':len(action_sources),'distinct_action_sources':len(set(action_sources)),
+    report={'plan_sha256':digest({'segments':segments,'policy':VERSION}),'action_source_count':len(action_sources),'distinct_action_sources':len(set(action_sources)),
             'variety_requires_visual_review':True, 'version':VERSION,'joins':joins,'base_phases':phases,'source_motion':diagnostics,
             'technical_passed':all(j['passed'] for j in joins) and not any(d['requires_visual_review'] for d in diagnostics),
             'artistic_acceptance':False,'static_morphs':0,
