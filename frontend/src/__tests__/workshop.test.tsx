@@ -42,6 +42,50 @@ describe('visual workshop', () => {
   });
 });
 
+it('keeps the generation blocker visible and identifies clips blocking assembly', async () => {
+  const draft = initialDraft();
+  const insertion = { ...draft.base, id: 'insertion', name: 'Inserção de outono' };
+  draft.clips = [insertion];
+  draft.insertions = [{ id: 'event', clip_id: insertion.id, minute: 15 }];
+  const detail = { id: 'p', revision: 1, data: draft, media: {}, states: {
+    [draft.base.id]: { image_approved: true, video_ready: false, video_approved: false },
+    insertion: { image_approved: false, video_ready: false, video_approved: false }
+  }, jobs: [], library: [], music: [] };
+  const fetcher = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(
+    url.includes('/quote/video') ? { usd: 0.24, new_clips: 1, attempt: { allowed: false, message: 'Limite de tentativas atingido.' } }
+      : url.endsWith('/capabilities') ? { durations: [8] } : detail
+  ), { status: 200 }));
+  vi.stubGlobal('fetch', fetcher);
+  const view = render(<Workshop id="p" />);
+  await waitFor(() => expect(view.getByText(/Trechos ainda não prontos para montagem: Base tranquila, Inserção de outono/)).not.toBeNull());
+  fireEvent.click(view.getByText('Gerar vídeo de Base tranquila'));
+  await waitFor(() => expect(view.getAllByText(/Limite de tentativas atingido/).length).toBeGreaterThan(0));
+  expect(fetcher.mock.calls.some(([url, init]) => url.includes('/generate/') && init?.method === 'POST')).toBe(false);
+  expect((view.getByText('Montar vídeo completo') as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('records the already approved base identity without requesting a new generation', async () => {
+  const draft = initialDraft(); draft.base.image_id = 'image'; draft.base.video_id = 'video';
+  const detail = { id: 'p', revision: 3, data: draft, media: {
+    image: { id: 'image', kind: 'image', url: '/image', sha256: 'a'.repeat(64), approved: true },
+    video: { id: 'video', kind: 'video', url: '/video', sha256: 'b'.repeat(64), approved: false, resolution: '720p' }
+  }, identity: { required: false, configured: true }, states: {
+    [draft.base.id]: { image_approved: true, video_ready: false, video_approved: false }
+  }, jobs: [], library: [], music: [] };
+  const fetcher = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(
+    url.endsWith('/capabilities') ? { durations: [8] } : detail
+  ), { status: 200 }));
+  vi.stubGlobal('fetch', fetcher); vi.stubGlobal('confirm', () => true);
+  const view = render(<Workshop id="p" />);
+  await waitFor(() => expect(view.queryByText('Registrar identidade da animação já aprovada')).not.toBeNull());
+  expect(view.getByText(/A base selecionada foi gerada em 720p/)).not.toBeNull();
+  fireEvent.click(view.getByText('Registrar identidade da animação já aprovada'));
+  await waitFor(() => expect(fetcher.mock.calls.some(([url, init]) => url.endsWith('/base/identity-review') && init?.method === 'POST')).toBe(true));
+  const request = fetcher.mock.calls.find(([url]) => url.endsWith('/base/identity-review'))!;
+  expect(JSON.parse(String(request[1]!.body))).toEqual({ revision: 3, sha256: 'b'.repeat(64), confirm_identity_and_motion: true });
+  expect(fetcher.mock.calls.some(([url]) => url.includes('/generate/'))).toBe(false);
+});
+
 
 it('shows active generation beside the action, prevents another request and exposes preserved media', async () => {
   const draft=initialDraft(); draft.base.image_id='image';

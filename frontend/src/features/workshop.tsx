@@ -12,7 +12,7 @@ type AttemptReasonRequest =
   | { mode: 'correction'; clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string };
 type Draft = { automatic_motion?: boolean; identity_profile?: string | null; name: string; minutes: number; theme: string; scene: string; scene_motion: string; scene_references: string[];
   characters: Character[]; base: Clip; clips: Clip[]; insertions: { id: string; clip_id: string; minute: number }[]; music_program_id: string | null };
-type Media = { id: string; url: string; sha256: string; kind: string; approved: boolean; clip_id?: string };
+type Media = { id: string; url: string; sha256: string; kind: string; approved: boolean; clip_id?: string; resolution?: '720p' | '1080p' };
 type Variant = { key: string; minutes: number[]; event_ids: string[]; image_id: string | null; video_id: string | null; image_approved: boolean; video_ready: boolean; video_approved: boolean; seams_approved: boolean; source_ready: boolean };
 type Detail = { id: string; revision: number; data: Draft; media: Record<string, Media>;
   identity?: { required: boolean; configured: boolean; profile_id: string | null; bound: boolean; title: string | null; reference_url: string | null; reference_sha256: string | null; reference_count?: number;
@@ -91,7 +91,8 @@ export function Workshop({ id }: { id?: string }) {
   const activeRender = d?.jobs.some(j=>j.operation==='render' && ['QUEUED','RUNNING'].includes(j.status));
   const activeShortRender = d?.jobs.some(j=>j.operation==='short_render' && ['QUEUED','RUNNING'].includes(j.status));
   const automatic = draft.automatic_motion === true;
-  const allApproved = [draft.base,...draft.clips.filter(c=>scheduledIds.has(c.id))].every(c=>automatic ? d?.states[c.id]?.video_ready : d?.states[c.id]?.video_approved && d?.states[c.id]?.seams_approved !== false);
+  const unreadyClips = [draft.base,...draft.clips.filter(c=>scheduledIds.has(c.id))].filter(c=>automatic ? !d?.states[c.id]?.video_ready : !d?.states[c.id]?.video_approved || d?.states[c.id]?.seams_approved === false);
+  const allApproved = unreadyClips.length === 0;
   const scheduleIssue = ordered.some((i,n)=>{const c=draft.clips.find(c=>c.id===i.clip_id); const prev=ordered[n-1];const pc=draft.clips.find(c=>c.id===prev?.clip_id);return !c || i.minute*60+(c?.seconds||0)>draft.minutes*60 || (prev && i.minute*60<prev.minute*60+(pc?.seconds||0));});
   const shortSource = (() => {
     const root = draft.clips.find(c => !c.continues_from && c.name.toLowerCase().includes('pausa para acariciar o gato'));
@@ -206,7 +207,7 @@ export function Workshop({ id }: { id?: string }) {
     if (busy || running.current) return;
     running.current = true;
     setBusy(true); setMessage('');
-    try { const result = await fn(); if (id) await resource.reload(); setMessage(success); return result; }
+    try { const result = await fn(); if (id) await resource.reload(); if (success) setMessage(success); return result; }
     catch (e: any) { setMessage(e.message || 'Não foi possível concluir'); }
     finally { running.current=false; setBusy(false); }
   };
@@ -330,6 +331,10 @@ export function Workshop({ id }: { id?: string }) {
           {kind === 'video' && !base && !scheduled && <small>Marque ao menos um horário para esta inserção antes de gerar.</small>}
           {kind === 'video' && !capabilities.data?.durations?.includes(clip.seconds) && <small role="alert">{capabilities.error || 'Selecione uma duração disponível no modelo. Sua imagem será mantida.'}</small>}
           {asset && <a class="btn ghost" href={asset.url + '?download=true'} download>Baixar {kind === 'image' ? 'imagem' : 'vídeo'} desta versão</a>}
+          {base && kind === 'video' && asset && automatic && state?.image_approved && !state?.video_ready && d?.identity?.configured && <button class="btn secondary" disabled={busy || dirty} onClick={() => {
+            if (confirm('Registrar que você já conferiu esta animação e aprovou a identidade e o movimento dos personagens? A confirmação vale para esta versão exata e para as referências atuais do canal.'))
+              run(() => post(`${prefix}/projects/${id}/base/identity-review`, { revision: d!.revision, sha256: asset.sha256, confirm_identity_and_motion: true }), 'Identidade da animação registrada para esta versão.');
+          }}>Registrar identidade da animação já aprovada</button>}
           {asset && (kind === 'image' || !automatic) && <><Pill tone={ok ? 'ok' : 'warn'}>{ok ? 'Aprovado nesta versão' : 'Revisão necessária'}</Pill>
             <label><input type="checkbox" checked={!!reviewed[key]} onChange={e => setReviewed({ ...reviewed, [key]: e.currentTarget.checked })} /> {kind === 'image' ? 'Conferi cenário e identidade dos personagens' : 'Assisti às prévias com música e conferi identidade, movimento, entrada e retorno'}</label>
             <div class="row"><button class="btn primary" disabled={busy || dirty || !reviewed[key] || (kind==='video' && !d?.jobs.some(j=>j.operation==='preview' && j.clip_id===clip.id && (!variant || j.variant_key===variant.key) && j.status==='COMPLETED' && j.current !== false))} onClick={() => review(displayed,kind,true,variant?.key)}>Aprovar {kind === 'image' ? 'imagem' : 'vídeo'}</button>
@@ -461,7 +466,8 @@ export function Workshop({ id }: { id?: string }) {
       <button class="btn" disabled={!draft.clips.length || draft.insertions.length >= 500} onClick={()=>{const first=draft.clips.find(c=>!c.continues_from);if(first)field('insertions',[...draft.insertions,...scheduleAction(first.id,0)]);}}>Adicionar horário</button>
       <p class="faint">Os minutos são contados desde o início. Inserções não prolongam a duração total e não podem se sobrepor.</p>
     </section>
-    <section class="card stack"><h3>4. Música, prévia e vídeo completo</h3><Field label="Resolução dos novos trechos de vídeo"><select class="select" value={resolution} onChange={e => setResolution(e.currentTarget.value as '720p' | '1080p')}><option value="720p">720p</option><option value="1080p">1080p</option></select><small>A resolução se aplica às próximas gerações; os materiais existentes são preservados.</small></Field><p>Total: {formatTime(draft.minutes)} · {ordered.length} inserções</p>{!allApproved && <p>Aprove a imagem inicial e aguarde a preparação dos clipes. As emendas são tratadas automaticamente.</p>}{activeRender && <p role="status">Montagem do vídeo longo em andamento.</p>}
+    <section class="card stack"><h3>4. Música, prévia e vídeo completo</h3><Field label="Resolução dos novos trechos de vídeo"><select class="select" value={resolution} onChange={e => setResolution(e.currentTarget.value as '720p' | '1080p')}><option value="720p">720p</option><option value="1080p">1080p</option></select><small>A resolução se aplica às próximas gerações; os materiais existentes são preservados.</small></Field><p>Total: {formatTime(draft.minutes)} · {ordered.length} inserções</p>{!allApproved && <p>Trechos ainda não prontos para montagem: {unreadyClips.map(c=>c.name).join(', ')}. {automatic ? 'Use o próximo passo para preparar cada trecho; materiais compatíveis podem seguir automaticamente.' : 'Revise cada trecho e suas emendas antes de montar.'}</p>}{activeRender && <p role="status">Montagem do vídeo longo em andamento.</p>}
+      {draft.base.video_id && d?.media[draft.base.video_id]?.resolution === '720p' && <p class="notice warn">A base selecionada foi gerada em 720p. A montagem usa 720p se algum trecho tiver resolução inferior a Full HD; selecionar 1080p para novas gerações não altera a base existente.</p>}
       <Field label="Referência de estilo musical"><select class="select" value={draft.music_program_id || ''} onChange={e => field('music_program_id', e.currentTarget.value || null)}><option value="">Padrão: estilo da produção mais recente do canal</option>{d?.music.map(m => <option value={m.id}>{m.id} · {Math.floor(m.seconds / 60)} min de referência</option>)}</select><small>O áudio dessa produção não será reutilizado. O Harness cria uma trilha inédita para o tema atual e remove os arquivos temporários ao concluir o vídeo.</small></Field>
       <p class="faint">Ao clicar em montar, você autoriza um teto de até {soundtrackTrackCap} composições, US$ {soundtrackCostCap.toFixed(2)}. Esse valor aparece antes do início e o servidor bloqueia a tarefa se o limite global ou o deste projeto não comportar a reserva. Se a duração medida das composições não cobrir o vídeo, a montagem para sem completar o arquivo ou fazer chamadas pagas extras automaticamente.</p>
       <button class="btn primary" disabled={!id || dirty || busy || !allApproved || scheduleIssue || activeRender} onClick={renderFull}>Montar vídeo completo</button>
