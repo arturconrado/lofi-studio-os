@@ -353,12 +353,21 @@ export function Workshop({ id }: { id?: string }) {
   const missingVariant = nextClip && d?.states[nextClip.id]?.variants?.some(v=>!v.video_ready);
   const generatingNext = !!(nextClip && pending(nextClip.id, 'video')) || !!pending(draft.base.id, 'image');
   const nextLabel = !id || dirty ? 'Salvar' : generatingNext ? 'Gerando' : !d?.states[draft.base.id]?.image_approved ? 'Preparar imagem inicial' : nextClip ? !automatic && nextClip.video_id && !missingVariant ? 'Revisar '+nextClip.name : 'Gerar vídeo de '+nextClip.name : activeRender ? 'Montagem em andamento' : completeVideo ? completeVideo.approved ? 'Vídeo completo aprovado' : 'Revisar vídeo completo' : 'Montar vídeo';
+  const soundtrackTargetSeconds = Math.ceil(draft.minutes * 60);
+  const soundtrackTrackCap = Math.max(1, Math.ceil((soundtrackTargetSeconds - 1.5) / (120 - 1.5))) + (soundtrackTargetSeconds > 180 ? 1 : 0);
+  const soundtrackCostCap = Number((soundtrackTrackCap * 0.08).toFixed(2));
+  const renderFull = () => {
+    if (!id || !d) return;
+    return run(() => post(`${prefix}/projects/${id}/render`, {
+      request_id: uuid(), revision: d.revision, max_usd: soundtrackCostCap, confirm_cost: true
+    }), 'Montagem enviada com geração de trilha inédita.');
+  };
   const nextAction = () => {
     if(!id || dirty) return save();
     if(!d?.states[draft.base.id]?.image_approved) return draft.base.image_id ? focusClip(draft.base) : generate(draft.base,'image');
     if(nextClip) return !automatic && nextClip.video_id && !missingVariant ? focusClip(nextClip) : generate(nextClip,'video');
     if(completeVideo) return document.getElementById('job-'+completeVideo.id)?.scrollIntoView({behavior:'smooth'});
-    return run(()=>post(`${prefix}/projects/${id}/render`,{request_id:uuid(),revision:d!.revision}),'Montagem enviada.');
+    return renderFull();
   };
   if (id && resource.loading) return <Skeleton />;
   if (id && resource.error) return <Empty title="Não foi possível abrir o projeto"><p>{resource.error}</p><button class="btn" onClick={resource.reload}>Tentar novamente</button></Empty>;
@@ -389,7 +398,9 @@ export function Workshop({ id }: { id?: string }) {
     {!id && listing.data?.projects.length ? <section class="card"><h3>Projetos salvos</h3>{listing.data.projects.map(p => <p><a href={href('/criar-video/' + p.id)}>{p.name}</a></p>)}</section> : null}
     <section class="card stack"><h3>1. Duração, cenário e personagens</h3>
       <label><input type="checkbox" checked={automatic} onChange={e => field('automatic_motion', e.currentTarget.checked)} /> Preparar continuidade automaticamente sem aprovar cada trecho</label>
-      <p class="faint">Desativado: cada trecho e emenda exige sua aprovação antes da montagem. Projetos antigos continuam neste modo até você ativá-lo.</p>
+      <p class="faint">{automatic
+        ? 'Ativado: trechos compatíveis podem seguir para a montagem sem uma aprovação individual. A identidade do canal e a revisão do arquivo final continuam protegidas.'
+        : 'Desativado: cada trecho e emenda exige sua aprovação antes da montagem. Projetos antigos continuam neste modo até você ativá-lo.'}</p>
       {visualLocked && <div class="notice">Visual aprovado e protegido. Duração, movimentos, música e horários continuam editáveis. <button class="btn" onClick={() => { if(confirm('Editar o visual cria uma nova versão. Os arquivos anteriores ficam preservados. Continuar?')) setEditVisual(true); }}>Editar visual — criar nova versão</button></div>}
       {d?.identity?.required && <div class="card stack" aria-label="Referência canônica de identidade">
         {d.identity.configured ? <div class="row wrap">
@@ -451,9 +462,9 @@ export function Workshop({ id }: { id?: string }) {
       <p class="faint">Os minutos são contados desde o início. Inserções não prolongam a duração total e não podem se sobrepor.</p>
     </section>
     <section class="card stack"><h3>4. Música, prévia e vídeo completo</h3><Field label="Resolução dos novos trechos de vídeo"><select class="select" value={resolution} onChange={e => setResolution(e.currentTarget.value as '720p' | '1080p')}><option value="720p">720p</option><option value="1080p">1080p</option></select><small>A resolução se aplica às próximas gerações; os materiais existentes são preservados.</small></Field><p>Total: {formatTime(draft.minutes)} · {ordered.length} inserções</p>{!allApproved && <p>Aprove a imagem inicial e aguarde a preparação dos clipes. As emendas são tratadas automaticamente.</p>}{activeRender && <p role="status">Montagem do vídeo longo em andamento.</p>}
-      <Field label="Música incluída"><select class="select" value={draft.music_program_id || ''} onChange={e => field('music_program_id', e.currentTarget.value || null)}><option value="">Padrão: trilha aprovada mais recente do canal</option>{d?.music.map(m => <option value={m.id}>{m.id} · {Math.floor(m.seconds / 60)} min</option>)}</select></Field>
-      <p class="faint">A montagem inclui a música aprovada do canal. Se não houver áudio suficiente, será preciso prepará-lo e revisá-lo na produção musical existente.</p>
-      <button class="btn primary" disabled={!id || dirty || busy || !allApproved || scheduleIssue || activeRender} onClick={() => run(() => post(`${prefix}/projects/${id}/render`, { request_id: uuid(), revision: d!.revision }), 'Montagem enviada. Atualize o andamento para acompanhar.')}>Montar vídeo completo</button>
+      <Field label="Referência de estilo musical"><select class="select" value={draft.music_program_id || ''} onChange={e => field('music_program_id', e.currentTarget.value || null)}><option value="">Padrão: estilo da produção mais recente do canal</option>{d?.music.map(m => <option value={m.id}>{m.id} · {Math.floor(m.seconds / 60)} min de referência</option>)}</select><small>O áudio dessa produção não será reutilizado. O Harness cria uma trilha inédita para o tema atual e remove os arquivos temporários ao concluir o vídeo.</small></Field>
+      <p class="faint">Ao clicar em montar, você autoriza um teto de até {soundtrackTrackCap} composições, US$ {soundtrackCostCap.toFixed(2)}. Esse valor aparece antes do início e o servidor bloqueia a tarefa se o limite global ou o deste projeto não comportar a reserva. Se a duração medida das composições não cobrir o vídeo, a montagem para sem completar o arquivo ou fazer chamadas pagas extras automaticamente.</p>
+      <button class="btn primary" disabled={!id || dirty || busy || !allApproved || scheduleIssue || activeRender} onClick={renderFull}>Montar vídeo completo</button>
     </section>
     </fieldset>
     {d && <details class="card stack"><summary>Todos os materiais gerados neste projeto</summary><p>Os arquivos continuam aqui mesmo quando um trecho é substituído. Recuperar não gera cobrança.</p>

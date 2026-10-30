@@ -1,8 +1,10 @@
 """Local FFmpeg assembly of reviewed clips. Never loop insertions or omit music."""
 import json
+import hashlib
 import logging
 import os
 import uuid
+from decimal import Decimal
 from pathlib import Path
 from .core import db, storage
 from .timeline_compositor import file_hash, measure
@@ -11,6 +13,130 @@ from .workshop_api import KIND, ready
 from .workshop_shorts import ShortSpec, render_short
 
 logger = logging.getLogger(__name__)
+
+
+def _save_task_audio_plan(task_id, audio_plan, actual_cost=None):
+    with db() as c:
+        c.execute('UPDATE factory_tasks SET payload=jsonb_set(payload,\'{audio_plan}\',%s::jsonb),'
+                  'actual_cost=%s,updated_at=now() WHERE id=%s',
+                  (json.dumps(audio_plan), actual_cost, task_id))
+        c.commit()
+
+
+def generate_ephemeral_soundtrack(task_id, payload, folder):
+    """Generate a new theme-led mix from channel style metadata; never publish its tracks."""
+    from .audio_mix import mix
+    from .music_direction import composition_request
+    from .provider import generate
+    from .timeline_compositor import measure, file_hash
+    from . import runtime
+
+    plan = dict(payload['audio_plan'])
+    bucket = os.environ['S3_BUCKET']
+    if plan.get('mix_key'):
+        mixed = folder / 'audio.mp3'
+        fetch(plan['mix_key'], mixed, plan['mix_sha256'], 1024**3)
+        return {'key':plan['mix_key'],'sha256':plan['mix_sha256'],
+                'program_id':plan['template_program_id'],'snapshot':plan['template_snapshot_sha256'],
+                'source_type':'new_ephemeral_original'}, plan
+
+    tracks = list(plan.get('tracks') or [])
+    source_paths = []
+    model = 'google/lyria-3-pro-preview'
+    from .audio_mix import coverage
+    def enough_audio():
+        return bool(source_paths) and coverage(
+            sum(measure(audio_path,'audio')[0] for audio_path in source_paths),
+            len(source_paths),float(plan['fade_seconds'])) >= float(plan['target_duration_seconds'])
+    for seq in range(1, int(plan['track_count']) + 1):
+        existing = next((item for item in tracks if item.get('sequence') == seq), None)
+        if existing:
+            path = folder / f"music-{seq:03}.mp3"
+            fetch(existing['key'], path, existing['sha256'], 32 * 1024**2)
+            source_paths.append(path)
+            if enough_audio(): break
+            continue
+        if not runtime.settings()['enabled']:
+            raise RuntimeError('Geração musical desativada antes do próximo trecho')
+        direction = composition_request(plan['template_plan'], seq)
+        try:
+            raw, generation_id, reported_cost = generate(direction['prompt'], model)
+        except Exception as exc:
+            from .provider import PartialGenerationError
+            failed = dict(plan)
+            failed['failed_generation'] = {'sequence':seq,'error_type':type(exc).__name__}
+            if isinstance(exc, PartialGenerationError) and exc.cost is not None:
+                failed['failed_generation']['reported_cost_usd'] = str(exc.cost)
+            _save_task_audio_plan(task_id, failed)
+            raise
+        path = folder / f'music-{seq:03}.mp3'
+        path.write_bytes(raw)
+        duration, _ = measure(path, 'audio')
+        sha = file_hash(path)
+        key = f'workshop-ephemeral/{payload["project_id"]}/{task_id}/track-{seq:03}-{sha}.mp3'
+        storage().upload_file(str(path), bucket, key, ExtraArgs={'ContentType':'audio/mpeg'})
+        cost_exact = reported_cost is not None
+        cost = Decimal(str(reported_cost)) if cost_exact else Decimal(str(plan['per_track_usd']))
+        track = {'sequence':seq,'key':key,'sha256':sha,'seconds':duration,
+                 'generation_id':generation_id,'reported_cost_usd':str(cost) if cost_exact else None,
+                 'estimated_cost_usd':str(cost),'cost_exact':cost_exact,
+                 'prompt_sha256':hashlib.sha256(direction['prompt'].encode()).hexdigest(),
+                 'title':direction['title'],'intended_bpm':direction['bpm']}
+        tracks.append(track)
+        plan['tracks'] = tracks
+        plan['known_cost_usd'] = str(sum((Decimal(item['estimated_cost_usd']) for item in tracks), Decimal('0')))
+        _save_task_audio_plan(task_id, plan)
+        source_paths.append(path)
+        if enough_audio(): break
+
+    mixed = folder / 'audio.mp3'
+    report = mix(source_paths, mixed, float(plan['fade_seconds']), float(plan['target_duration_seconds']))
+    key = f'workshop-ephemeral/{payload["project_id"]}/{task_id}/mix-{report["sha256"]}.mp3'
+    storage().upload_file(str(mixed), bucket, key, ExtraArgs={'ContentType':'audio/mpeg'})
+    plan.update(mix_key=key,mix_sha256=report['sha256'],mix_seconds=report['duration_seconds'],
+                mix_report=report, track_provenance=[{k:v for k,v in item.items() if k!='key'} for item in tracks])
+    exact = all(item.get('cost_exact') for item in tracks)
+    actual_cost = Decimal(plan['known_cost_usd']) if exact and plan.get('known_cost_usd') else None
+    _save_task_audio_plan(task_id, plan, actual_cost)
+    return {'key':key,'sha256':report['sha256'],'program_id':plan['template_program_id'],
+            'snapshot':plan['template_snapshot_sha256'],'source_type':'new_ephemeral_original'}, plan
+
+
+def cleanup_pending_soundtracks():
+    with db() as c:
+        rows = c.execute("SELECT id,payload->'audio_plan' plan FROM factory_tasks WHERE kind=%s "
+                         "AND (status='COMPLETED' OR (status='FAILED' AND payload->'audio_plan'->>'mix_key' IS NULL)) "
+                         "AND payload->'audio_plan'->>'ephemeral_cleanup'='pending' LIMIT 20",
+                         (KIND,)).fetchall()
+    for row in rows:
+        plan = dict(row['plan'] or {})
+        try:
+            for key in plan.get('_ephemeral_cleanup_keys',[]):
+                storage().delete_object(Bucket=os.environ['S3_BUCKET'], Key=key)
+            plan['ephemeral_cleanup']='complete';plan['_ephemeral_cleanup_keys']=[]
+            with db() as c:
+                c.execute("UPDATE factory_tasks SET payload=jsonb_set(payload,'{audio_plan}',%s::jsonb),updated_at=now() WHERE id=%s",
+                          (json.dumps(plan),row['id']));c.commit()
+        except Exception as exc:
+            logger.warning('Ephemeral soundtrack cleanup pending task=%s error_type=%s',
+                           row['id'],type(exc).__name__)
+
+
+def discard_incomplete_soundtrack(task_id):
+    with db() as c:
+        row = c.execute("SELECT payload->'audio_plan' plan FROM factory_tasks WHERE id=%s",(task_id,)).fetchone()
+    plan = dict((row or {}).get('plan') or {})
+    if not plan or plan.get('mix_key'):
+        return
+    keys=[item['key'] for item in plan.get('tracks',[]) if item.get('key')]
+    plan['track_provenance']=[{k:v for k,v in item.items() if k!='key'} for item in plan.get('tracks',[])]
+    plan.pop('tracks',None);plan['ephemeral_cleanup']='pending';plan['_ephemeral_cleanup_keys']=keys
+    try:
+        for key in keys:storage().delete_object(Bucket=os.environ['S3_BUCKET'],Key=key)
+        plan['ephemeral_cleanup']='complete';plan['_ephemeral_cleanup_keys']=[]
+    except Exception as exc:
+        logger.warning('Failed soundtrack cleanup pending task=%s error_type=%s',task_id,type(exc).__name__)
+    _save_task_audio_plan(task_id,plan)
 
 
 def render_segments(segments, sources, audio, destination, seconds, preview_range=None):
@@ -44,9 +170,12 @@ def render_segments(segments, sources, audio, destination, seconds, preview_rang
     full_hd=bool(native_sizes) and all(w>=1920 and h>=1080 for w,h in native_sizes)
     if full_hd:compiled['encoding_profile']={'crf':15,'preset':'medium','threads':2,'lookahead_frames':8}
     report = render(compiled, plan, sources, audio, {}, destination,width=1920 if full_hd else 1280,height=1080 if full_hd else 720)
+    source_audio_seconds, _ = measure(audio, 'audio')
     measured, _ = measure(destination, 'video')
     soundtrack, _ = measure(destination, 'audio')
     target = compiled['duration_seconds']
+    if source_audio_seconds + .001 < target:
+        raise ValueError('Soundtrack shorter than requested video duration')
     if abs(measured - target) > .15 or abs(soundtrack - target) > .15:
         raise ValueError('Final duration mismatch')
     return {'sha256': file_hash(destination), 'seconds': measured, 'audio_seconds': soundtrack,
@@ -54,6 +183,9 @@ def render_segments(segments, sources, audio, destination, seconds, preview_rang
             'encoding_profile':compiled.get('encoding_profile'), 'local_resources':report['local_resources'],
             'continuity_policy':report.get('continuity_policy'), 'motion_bridges':report.get('motion_bridges',[]),
             'join_checks':report.get('join_checks',[]),
+            'audio_alignment': {'source_seconds':source_audio_seconds,'target_seconds':target,
+                                'trimmed_seconds':max(0.0,source_audio_seconds-target),
+                                'source_preserved':True,'looped':False},
             'segments': report['segments'], 'full_decode_pass': report['video']['full_decode_pass'],
             'final_review_required': True, 'continuous_transitions_reviewed': False,
             'engine': 'production_harness/timeline_compositor', 'preview_range': preview_range}
@@ -62,6 +194,7 @@ def render_segments(segments, sources, audio, destination, seconds, preview_rang
 def tick():
     from .radio import CACHE
     ready()
+    cleanup_pending_soundtracks()
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837472)')
         if c.execute("SELECT 1 FROM export_jobs WHERE state='running'").fetchone() or c.execute(
@@ -109,19 +242,62 @@ def tick():
             sha = segment['asset_sha256']
             if sha in sources: continue
             path = folder / (sha + '.mp4'); fetch(segment['asset_key'], path, sha, 64 * 1024**2); sources[sha] = path
-        audio = folder / 'audio.mp3'; fetch(p['audio']['key'], audio, p['audio']['sha256'], 1024**3)
+        audio = folder / 'audio.mp3'
+        ephemeral = bool(p.get('audio_plan'))
+        if ephemeral:
+            audio_info, audio_plan = generate_ephemeral_soundtrack(t['id'], p, folder)
+            if not audio.exists(): fetch(audio_info['key'], audio, audio_info['sha256'], 1024**3)
+        else:
+            # Preserve compatibility with render tasks queued before this hotfix.
+            audio_info = p['audio']; audio_plan = {}
+            fetch(audio_info['key'], audio, audio_info['sha256'], 1024**3)
         final = folder / 'final.mp4'; report = render_segments(p['segments'], sources, audio, final, p['seconds'], p.get('preview_range'))
+        if ephemeral:
+            report['audio_alignment'].update({'program_id':audio_info['program_id'],
+                'source_sha256':audio_info['sha256'],'source_type':'new_ephemeral_original',
+                'template_snapshot_sha256':audio_info['snapshot'], 'theme':audio_plan.get('theme'),
+                'tracks':audio_plan.get('track_provenance',[]),'mix_report':audio_plan.get('mix_report'),
+                'generation_reserved_usd':audio_plan.get('reserved_usd'),
+                'generation_known_cost_usd':audio_plan.get('known_cost_usd'),
+                'source_preserved':False,'temporary_audio_removed_after_render':True})
         key = f'visual-workshop/{p["project_id"]}/renders/{t["id"]}/{report["sha256"]}.mp4'
         storage().upload_file(str(final), os.environ['S3_BUCKET'], key, ExtraArgs={'ContentType': 'video/mp4'})
+        ephemeral_keys = [item['key'] for item in audio_plan.get('tracks',[]) if item.get('key')]
+        if audio_plan.get('mix_key'): ephemeral_keys.append(audio_plan['mix_key'])
+        final_audio_plan = dict(audio_plan)
+        if ephemeral:
+            for hidden in ('tracks','mix_key','template_plan'):
+                final_audio_plan.pop(hidden, None)
+            final_audio_plan.update(mode='new_ephemeral_theme_track',
+                track_provenance=audio_plan.get('track_provenance',[]),
+                mix_report=audio_plan.get('mix_report'),ephemeral_cleanup='pending',
+                _ephemeral_cleanup_keys=ephemeral_keys)
+        task_update={'report':report,'video_key':key}
+        if ephemeral:task_update['audio_plan']=final_audio_plan
         with db() as c:
-            c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Vídeo completo pronto para revisão',updated_at=now() WHERE id=%s",
-                      (json.dumps({'report': report, 'video_key': key}), t['id'])); c.commit()
+            detail='Vídeo completo pronto para revisão; trilha temporária será removida' if ephemeral else 'Vídeo completo pronto para revisão'
+            c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail=%s,updated_at=now() WHERE id=%s",
+                      (json.dumps(task_update), detail, t['id'])); c.commit()
+        if ephemeral:
+            try:
+                for ephemeral_key in ephemeral_keys:
+                    storage().delete_object(Bucket=os.environ['S3_BUCKET'], Key=ephemeral_key)
+                final_audio_plan['ephemeral_cleanup']='complete'
+                final_audio_plan['_ephemeral_cleanup_keys']=[]
+                with db() as c:
+                    c.execute("UPDATE factory_tasks SET payload=jsonb_set(payload,'{audio_plan}',%s::jsonb),updated_at=now() WHERE id=%s",
+                              (json.dumps(final_audio_plan),t['id'])); c.commit()
+            except Exception as cleanup_error:
+                logger.warning('Ephemeral soundtrack cleanup pending task=%s error_type=%s',
+                               t['id'],type(cleanup_error).__name__)
     except Exception as e:
         # Provider/filesystem exception messages can echo request material or
         # credentials. Keep the operational identifiers and exception class,
         # but do not log the exception text or traceback.
         logger.error('Visual Workshop task failed id=%s operation=%s error_type=%s',
                      t['id'], t['payload'].get('operation'), type(e).__name__)
+        if t['payload'].get('operation') == 'render':
+            discard_incomplete_soundtrack(t['id'])
         with db() as c:
             c.execute("UPDATE factory_tasks SET status='FAILED',detail=%s,updated_at=now() WHERE id=%s",
                       ('Montagem interrompida (' + type(e).__name__ + '). Confira as fontes e o espaço disponível.', t['id'])); c.commit()
