@@ -345,6 +345,22 @@ def test_http_reviewed_assets_render_snapshot_and_tenant_isolation(client,monkey
         c.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema_name(identity['workspace_id']))))
         c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",
                   ('{"video_key":"test-preview","report":{"sha256":"'+'e'*64+'","full_decode_pass":true}}',preview.json()['id']));c.commit()
+    # Seed the evaluator receipt at the external vision boundary; this fixture
+    # verifies API orchestration and uses synthetic, non-decodable provider media.
+    from studio import workshop_api as review_api
+    from studio.semantic_review import VERSION as review_version
+    from studio.tenancy import WORKSPACE as review_workspace
+    marker=review_workspace.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            review_row=review_api.project(c,url.rsplit('/',1)[-1])
+            review_draft=Draft.model_validate(review_row['data'])
+            review_media=review_api.assets(c,review_row['id'])
+            review_identity=review_api.identity_profile_for_channel(c,review_row['channel_id'])
+            context,review_asset=review_api.semantic_context_for(review_row,review_draft,review_draft.base,review_media,review_identity,None)
+            receipt={'version':review_version,'binding':context['binding'],'state':'passed'}
+            c.execute("UPDATE visual_media SET data=jsonb_set(data,'{semantic_review}',%s::jsonb) WHERE id=%s",(json.dumps(receipt),review_asset['id']));c.commit()
+    finally:review_workspace.reset(marker)
     assert cl.post(review_url+'video',json=review_body).status_code==200
     quote=api.soundtrack_quote(60)
     request={'request_id':str(uuid.uuid4()),'revision':state['revision'],

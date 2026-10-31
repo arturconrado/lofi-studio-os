@@ -166,5 +166,16 @@ def channel_reviews(c, channel_id):
           AND t.payload->>'review_sha256'=t.payload->'report'->>'sha256'
           AND COALESCE(t.payload->>'review_note','')<>''
         ORDER BY t.updated_at DESC LIMIT 12""",(channel_id,)).fetchall()
-    return [{'kind':'human_audiovisual_review','task_id':str(r['id']),
+    evidence=[{'kind':'human_audiovisual_review','task_id':str(r['id']),
              'note':r['note'][:2000],'approved':r['approved'],'sha256':r['sha256']} for r in rows]
+    # Rejected generated actions supply warnings only, never canonical identity.
+    failures=c.execute("""SELECT m.id,m.data->'semantic_review' review FROM visual_media m
+        JOIN visual_projects p ON p.id=m.project_id WHERE p.channel_id=%s
+        AND m.data->'semantic_review'->>'state'='blocked'
+        AND m.data->'semantic_review'->>'asset_sha256'=m.data->>'sha256'
+        ORDER BY m.created_at DESC LIMIT 8""",(channel_id,)).fetchall()
+    for failure in failures:
+        review=failure['review']
+        evidence.append({'kind':'model_visual_warning_not_identity_reference','asset_id':str(failure['id']),
+                         'sha256':review['asset_sha256'],'findings':review.get('findings',{})})
+    return evidence

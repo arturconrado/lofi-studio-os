@@ -785,6 +785,22 @@ def test_http_batch_quotes_reserves_once_recovers_and_reviews_each_variant(clien
             assert row['payload']['variant_key']==variant['key']
             c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'video_key':'preview','report':{'sha256':'e'*64,'full_decode_pass':True}}),preview.json()['id']));c.commit()
     finally:WORKSPACE.reset(token)
+    # Seed the evaluator receipt at the external vision boundary; this fixture
+    # verifies API orchestration and uses synthetic, non-decodable provider media.
+    from studio import workshop_api as review_api
+    from studio.semantic_review import VERSION as review_version
+    from studio.tenancy import WORKSPACE as review_workspace
+    marker=review_workspace.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            review_row=review_api.project(c,url.rsplit('/',1)[-1])
+            review_draft=Draft.model_validate(review_row['data'])
+            review_media=review_api.assets(c,review_row['id'])
+            review_identity=review_api.identity_profile_for_channel(c,review_row['channel_id'])
+            context,review_asset=review_api.semantic_context_for(review_row,review_draft,next(c for c in review_draft.clips if c.id==clip.id),review_media,review_identity,variant['key'])
+            receipt={'version':review_version,'binding':context['binding'],'state':'passed'}
+            c.execute("UPDATE visual_media SET data=jsonb_set(data,'{semantic_review}',%s::jsonb) WHERE id=%s",(json.dumps(receipt),review_asset['id']));c.commit()
+    finally:review_workspace.reset(marker)
     result=client.post(url+f'/clips/{clip.id}/review/video',json=review);assert result.status_code==200,result.text
     updated=client.get(url).json()['states'][str(clip.id)]['variants']
     assert sum(v['video_approved'] for v in updated)==1

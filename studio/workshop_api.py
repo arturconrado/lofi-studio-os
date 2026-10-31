@@ -399,6 +399,7 @@ def public_task(t):
             'reedit_parent_id': p.get('reedit_source', {}).get('task_id'),
             'director': p.get('director_contract'),
             'continuity_diagnostics': p.get('continuity_diagnostics'),
+            'semantic_review': p.get('semantic_review'),
             'preview_range': p.get('preview_range'),
             'report': p.get('report'), 'approved': p.get('approved', False),
             'url': f'/api/creator/workshop/projects/{p["project_id"]}/renders/{t["id"]}' if p.get('video_key') else None}
@@ -995,6 +996,16 @@ def detail(pid: uuid.UUID):
             if current.get('variants'):
                 for key in ('image_approved','video_ready','video_approved','seams_approved'):
                     current[key]=all(v.get(key,False) for v in variants)
+    for cl in clips(draft):
+        variants=states[str(cl.id)].get('variants') or [None]
+        for variant in variants:
+            asset=media.get(str((variant or {}).get('video_id') or cl.video_id))
+            if not asset:continue
+            asset['semantic_current']=False
+            try:
+                context,_=semantic_context_for(row,draft,cl,media,identity,(variant or {}).get('key'))
+                asset['semantic_current']=(asset.get('semantic_review') or {}).get('binding')==context['binding']
+            except (HTTPException,ValueError,KeyError):pass
     return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,
             'identity': identity_reference_status(pid, identity, draft, media) | {'candidates':candidates}, 'planning_errors':planning_errors,
             'states': states,
@@ -1203,6 +1214,10 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
                          or (kind == 'video' and (not image or image.get('identity_profile') != identity['id']))):
             raise HTTPException(409, 'Este material não carrega a referência canônica do canal. Gere novamente antes da revisão.')
         if body.approve:
+            if kind=='video':
+                from .semantic_review import require_pass
+                context,_=semantic_context_for(row,draft,clip,media,identity,body.variant_key)
+                require_pass(context,asset)
             if not body.confirm_identity or (kind == 'video' and not body.confirm_motion_and_return):
                 raise HTTPException(422, 'Confira a identidade e, no vídeo, o movimento e a volta à base')
             if kind == 'video' and not _status(draft,effective,media,group)['image_approved']:
@@ -1232,6 +1247,81 @@ def review(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image', 'video'], body
                               'reference_sha256s': identity_reference_hashes(identity)}, sort_keys=True))
         audit(c, 'VISUAL_MEDIA_REVIEWED', str(aid), 'approved' if body.approve else 'changes_requested'); c.commit()
     return {'reviewed': True}
+
+
+def semantic_context_for(row, draft, clip, media, identity, variant_key=None):
+    from .semantic_review import snapshot
+    group=selected_variant(draft,clip,media,variant_key) if variant_key else None
+    effective=occurrence_clip(draft,clip,group,media) if group else clip
+    asset=media.get(str(effective.video_id)); image=media.get(str(effective.image_id))
+    return snapshot(row['channel_id'],draft,effective,asset,image,identity,media),asset
+
+
+def require_semantic_segments(row,draft,media,identity,segments):
+    from .semantic_review import require_pass
+    receipts=[];seen=set()
+    for segment in segments:
+        sha=segment.get('asset_sha256')
+        if sha in seen:continue
+        seen.add(sha)
+        clip=get_clip(draft,uuid.UUID(str(segment['clip_id'])))
+        asset=next((a for a in media.values() if a.get('sha256')==sha and a.get('kind')=='video'),None)
+        if not clip or not asset:raise HTTPException(409,'Fonte da avaliação visual indisponível.')
+        context,selected=semantic_context_for(row,draft,clip,media,identity,asset.get('variant_key'))
+        if selected['sha256']!=sha:raise HTTPException(409,'A avaliação deve corresponder à versão selecionada.')
+        receipts.append(require_pass(context,asset))
+    return receipts
+
+
+class SemanticReviewRequest(Strict):
+    request_id: uuid.UUID
+    revision: int = Field(ge=1)
+    variant_key: str | None = Field(default=None,pattern='^[a-f0-9]{64}$')
+    confirm_cost: bool = False
+    max_usd: Decimal = Field(ge=0,le=Decimal('.20'))
+
+
+@router.post('/projects/{pid}/clips/{cid}/semantic-review',dependencies=[Depends(require_spend_permission)])
+def semantic_review(pid:uuid.UUID,cid:uuid.UUID,body:SemanticReviewRequest):
+    from .semantic_review import quote, CAP, MODEL, VERSION
+    from .financial import check_available
+    if not body.confirm_cost or body.max_usd!=CAP:raise HTTPException(422,'Confirme o teto de US$0,20 por avaliação visual.')
+    # Idempotency is checked before quoting or performing any paid work.
+    with db() as c:
+        row=project(c,pid,True)
+        old=c.execute('SELECT * FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone()
+        if old:
+            old=task(c,body.request_id,pid)
+            if old['payload'].get('operation')!='semantic_review' or old['payload'].get('clip_id')!=str(cid) or old['payload'].get('variant_key')!=body.variant_key:
+                raise HTTPException(409,'Pedido já utilizado para outra avaliação.')
+            return public_task(old)
+    cost=quote()
+    with db() as c:
+        c.execute('SELECT pg_advisory_xact_lock(192837467)')
+        row=project(c,pid,True)
+        if row['revision']!=body.revision:raise HTTPException(409,'Salve e atualize antes de avaliar.')
+        draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
+        if not clip:raise HTTPException(404,'Trecho não encontrado')
+        identity=identity_profile_for_channel(c,row['channel_id'])
+        require_current_identity_assets(identity,draft,media)
+        context,asset=semantic_context_for(row,draft,clip,media,identity,body.variant_key)
+        existing=c.execute("SELECT * FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'operation'='semantic_review' AND payload->'semantic_context'->>'binding'=%s ORDER BY created_at DESC LIMIT 1",
+                           (KIND,str(pid),context['binding'])).fetchone()
+        if existing:
+            # A new request_id must never silently repeat a charged/uncertain review.
+            return public_task(existing)
+        if c.execute('SELECT 1 FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone():raise HTTPException(409,'Pedido já registrado.')
+        if not worker_online(c):raise HTTPException(503,'O avaliador está offline.')
+        check_available(c,cost)
+        if c.execute("SELECT to_regclass('visual_project_budgets') t").fetchone()['t']:
+            budget=c.execute('SELECT limit_usd FROM visual_project_budgets WHERE project_id=%s',(pid,)).fetchone()
+            if budget and project_generation_usage(c,pid)+cost>budget['limit_usd']:raise HTTPException(409,'O teto do projeto não cobre a avaliação visual.')
+        payload={'project_id':str(pid),'channel_id':str(row['channel_id']),'clip_id':str(cid),'operation':'semantic_review',
+                 'variant_key':body.variant_key,'semantic_context':context,'human_reviews':channel_reviews(c,row['channel_id']),
+                 'semantic_version':VERSION}
+        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'QUEUED','Avaliação visual obrigatória: identidade, objetos, contato e ação')",
+                  (body.request_id,KIND,MODEL,json.dumps(payload),cost));audit(c,'VISUAL_SEMANTIC_REVIEW_QUEUED',str(body.request_id),context['binding']);c.commit()
+        return public_task(c.execute('SELECT * FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone())
 
 
 class Generate(Strict):
@@ -2093,6 +2183,7 @@ def render_short(pid: uuid.UUID, body: ShortRender):
         if not identity and identity_candidates(c,row['channel_id']):
             raise HTTPException(409,'Defina a identidade visual deste canal antes de montar o Short.')
         sources = _short_source_segments(c, pid, row, draft, body.spec, media, parent_render,identity)
+        require_semantic_segments(row,draft,media,identity,sources)
         if body.spec.audio_mode=='parent_excerpt':
             parent_audio = parent_render['payload'].get('audio') or {}
             audio = parent_soundtrack(c, row, draft, parent_audio)
@@ -2192,6 +2283,7 @@ def render(pid: uuid.UUID, body: Render):
         try: segments = assemble(draft, media)
         except ValueError as e: raise HTTPException(409, str(e)) from None
         if not worker_online(c): raise HTTPException(503, 'O montador está offline. Ative o worker de exportação antes de montar.')
+        semantic_receipts=require_semantic_segments(row,draft,media,identity,segments)
         template = music_template(c, row, draft)
         quote = soundtrack_quote(int(segments[-1]['end'] + .999))
         if not body.confirm_cost:
@@ -2213,6 +2305,7 @@ def render(pid: uuid.UUID, body: Render):
                    'output_resolution': body.output_resolution,
                    'seconds': segments[-1]['end'], 'segments': segments,
                    'director_contract': director, 'editorial_memory': editorial_meta,
+                   'semantic_reviews':semantic_receipts,
                    'creative_contract': {'version':1,'theme':draft.theme,'scene':draft.scene,
                                          'scene_motion':draft.scene_motion,
                                          'identity_profile':draft.identity_profile,
@@ -2289,6 +2382,7 @@ def resume_soundtrack(pid:uuid.UUID,tid:uuid.UUID,body:ResumeSoundtrack):
         draft=Draft.model_validate(row['data'])
         if digest(row['data'])!=p['draft_sha256'] or assemble(draft,assets(c,pid))!=p['segments']:
             raise HTTPException(409,'O projeto ou as fontes mudaram; a retomada foi bloqueada.')
+        require_semantic_segments(row,draft,assets(c,pid),identity_profile_for_channel(c,row['channel_id']),t['payload']['segments'])
         if not worker_online(c):raise HTTPException(503,'O montador está offline.')
         if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'operation'='render' AND status IN ('QUEUED','RUNNING')",(KIND,str(pid))).fetchone():
             raise HTTPException(409,'Já existe uma montagem em andamento.')
@@ -2331,6 +2425,7 @@ def retry_render(pid:uuid.UUID,tid:uuid.UUID):
             raise HTTPException(409,'O projeto mudou. Prepare uma montagem com a versão atual.')
         if assemble(draft,assets(c,pid))!=t['payload']['segments']:
             raise HTTPException(409,'As fontes mudaram. Prepare uma montagem atualizada.')
+        require_semantic_segments(row,draft,assets(c,pid),identity_profile_for_channel(c,row['channel_id']),t['payload']['segments'])
         if not worker_online(c):raise HTTPException(503,'O montador está offline.')
         if c.execute("SELECT 1 FROM factory_tasks WHERE kind=%s AND payload->>'project_id'=%s AND payload->>'operation'='render' AND status IN ('QUEUED','RUNNING')",(KIND,str(pid))).fetchone():
             raise HTTPException(409,'Já existe uma montagem em andamento.')
@@ -2387,6 +2482,7 @@ def reedit(pid: uuid.UUID, tid: uuid.UUID, body: ReeditRequest):
         binding=digest({'source':source,'draft':row['data'],'segments':segments,
                         'identity':direction['channel_memory']['reference_sha256s'],
                         'identity_profile':draft.identity_profile,'version':direction['version']})
+        semantic_receipts=require_semantic_segments(row,draft,media,identity,segments) if body.proof_id else []
         if body.proof_id:
             proof=task(c,body.proof_id,pid); p=proof['payload']
             if (proof['status']!='COMPLETED' or not p.get('director_proof') or not p.get('approved')
@@ -2399,6 +2495,7 @@ def reedit(pid: uuid.UUID, tid: uuid.UUID, body: ReeditRequest):
                  'draft_sha256':digest(row['data']),'segments':segments,'seconds':seconds,
                  'output_resolution':original.get('output_resolution','auto'),
                  'reedit_source':source,'reedit_binding':binding,'director_contract':direction,
+                 'semantic_reviews':semantic_receipts,
                  'approved_plan_sha256':p['report']['director']['plan_sha256'] if body.proof_id else None,
                  'editorial_memory':metadata,'approved':False}
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,'local_director_reedit',%s,0,'QUEUED','Preparando continuidade com a memória deste canal; sem geração paga')",
@@ -2435,6 +2532,7 @@ def review_render(pid: uuid.UUID, tid: uuid.UUID, body: Review):
             current_draft=Draft.model_validate(row['data'])
             current_identity=identity_profile_for_channel(c,row['channel_id'])
             require_current_identity_assets(current_identity,current_draft,assets(c,pid))
+            require_semantic_segments(row,current_draft,assets(c,pid),current_identity,p['segments'])
             memory=p.get('director_contract',{}).get('channel_memory')
             if memory and (memory['identity_profile']!=current_draft.identity_profile or memory['reference_sha256s']!=sorted(identity_reference_hashes(current_identity))):
                 raise HTTPException(409,'A memória de identidade mudou; prepare uma revisão atualizada')
