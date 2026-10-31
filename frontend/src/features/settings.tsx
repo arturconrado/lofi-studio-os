@@ -1,3 +1,4 @@
+import { Team } from './team';
 import { useEffect, useState } from 'preact/hooks';
 import { useResource } from '../lib/resource';
 import { put } from '../lib/api';
@@ -8,7 +9,6 @@ import { Field, Check, Stat, Skeleton, Pill } from '../ds/ui';
 
 export function Settings() {
   const s = useResource<any>('/api/settings');
-  const members = useResource<any[]>(canAdmin.value ? '/api/auth/members' : null);
   const [form, setForm] = useState<any>(null);
   const [key, setKey] = useState('');
   const [confirmPaid, setConfirmPaid] = useState(false);
@@ -37,11 +37,7 @@ export function Settings() {
         <button class="btn primary" style={{ alignSelf: 'flex-start' }} disabled={!canAdmin.value} onClick={save}>Salvar</button>
         {!canAdmin.value && <p class="faint">Somente proprietários e administradores alteram limites.</p>}
       </section>
-      {Array.isArray(members.data) && <section class="card stack">
-        <h3>Equipe</h3>
-        <table class="table"><thead><tr><th>E-mail</th><th>Papel</th></tr></thead><tbody>{members.data.map(m => <tr><td>{m.email}</td><td><Pill>{m.role}</Pill></td></tr>)}</tbody></table>
-        <p class="faint" style={{ fontSize: '13px' }}>Convites e mudanças de papel continuam no <a href="/legacy?view=settings">portal antigo</a> nesta versão.</p>
-      </section>}
+      <Team />
     </>
   );
 }

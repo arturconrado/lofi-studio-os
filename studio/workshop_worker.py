@@ -220,12 +220,40 @@ def tick():
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837472)')
         if c.execute("SELECT 1 FROM export_jobs WHERE state='running'").fetchone() or c.execute(
-                "SELECT 1 FROM factory_tasks WHERE kind IN ('timeline_render_v1',%s) AND status='RUNNING' AND (kind='timeline_render_v1' OR payload->>'operation' IN ('render','preview','short_render','semantic_review'))", (KIND,)).fetchone(): return False
-        t = c.execute("UPDATE factory_tasks SET status='RUNNING',detail=CASE WHEN payload->>'operation'='short_render' THEN 'Compondo Short vertical' ELSE 'Montando base, inserções e música' END WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s AND payload->>'operation' IN ('render','preview','short_render','semantic_review') AND status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *", (KIND,)).fetchone(); c.commit()
+                "SELECT 1 FROM factory_tasks WHERE kind IN ('timeline_render_v1',%s) AND status='RUNNING' AND (kind='timeline_render_v1' OR payload->>'operation' IN ('render','preview','short_render','semantic_review','audio_only'))", (KIND,)).fetchone(): return False
+        t = c.execute("UPDATE factory_tasks SET status='RUNNING',detail=CASE WHEN payload->>'operation'='audio_only' THEN 'Compondo música original na duração solicitada' WHEN payload->>'operation'='short_render' THEN 'Compondo Short vertical' ELSE 'Montando base, inserções e música' END WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s AND payload->>'operation' IN ('render','preview','short_render','semantic_review','audio_only') AND status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *", (KIND,)).fetchone(); c.commit()
     if not t: return False
     folder = CACHE / 'visual-workshop' / str(t['id']); folder.mkdir(parents=True, exist_ok=True)
     try:
         p = t['payload']
+        if p.get('operation')=='audio_only':
+            required=int(p['seconds'])*(44100*2*4+48000)+512*1024**2
+            if shutil.disk_usage(folder).free < required:
+                raise ValueError('Insufficient workspace for audio mix')
+            audio, plan = generate_ephemeral_soundtrack(t['id'],p,folder)
+            source = folder/'audio.mp3'
+            final = folder/'delivery.mp3'
+            target=float(p['seconds'])
+            subprocess.run(['ffmpeg','-nostdin','-y','-i',str(source),'-vn','-t',str(target),
+                            '-af',f'afade=t=out:st={max(0,target-1)}:d=1',
+                            '-c:a','libmp3lame','-b:a','192k',str(final)],
+                           check=True,capture_output=True,timeout=max(300,target*2))
+            seconds, _ = measure(final,'audio')
+            if abs(seconds-float(p['seconds'])) > .15:
+                raise ValueError('Audio duration does not match request')
+            sha=file_hash(final)
+            key=f"audio-deliveries/{p['channel_id']}/{t['id']}/{sha}.mp3"
+            storage().upload_file(str(final),os.environ['S3_BUCKET'],key,ExtraArgs={'ContentType':'audio/mpeg'})
+            # Keep the final delivery separate from intermediate composition files.
+            temporary=[track['key'] for track in plan.get('tracks',[]) if track.get('key')]
+            if plan.get('mix_key'):temporary.append(plan['mix_key'])
+            plan.update(ephemeral_cleanup='pending',_ephemeral_cleanup_keys=temporary)
+            report={'sha256':sha,'seconds':seconds,'bytes':final.stat().st_size,'format':'mp3'}
+            with db() as c:
+                c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Áudio completo pronto para ouvir e baixar',updated_at=now() WHERE id=%s",
+                          (json.dumps({'audio_key':key,'report':report,'audio_plan':plan}),t['id']))
+                c.commit()
+            return True
         if p.get('operation')=='semantic_review':
             from .semantic_review import execute
             execute(t,folder)

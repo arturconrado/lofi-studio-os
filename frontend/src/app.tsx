@@ -1,3 +1,4 @@
+import { AudioStudio } from './features/audio-studio';
 import { path, match } from './lib/router';
 import { Shell } from './features/shell';
 import { StudioHome } from './features/studio';
@@ -30,6 +31,7 @@ class Boundary extends Component<{ children: ComponentChildren; route: string },
 
 const ROUTES: [string, (p: Record<string, string>) => any][] = [
   ['/', () => <StudioHome />],
+  ['/audio', () => <AudioStudio />],
   ['/produzir', () => <Produce />],
   ['/criar-video', () => <Workshop />],
   ['/criar-video/:id', p => <Workshop key={p.id} id={p.id} />],

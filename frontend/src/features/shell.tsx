@@ -16,6 +16,7 @@ const MAIN = [
   { to: '/ao-vivo', label: 'Ao vivo', icon: IconLive },
 ];
 const SECONDARY = [
+  { to: '/audio', label: 'Gerar só áudio', icon: IconRecipe },
   { to: '/produzir', label: 'Produzir por receita', icon: IconRecipe },
   { to: '/receitas', label: 'Receitas', icon: IconRecipe },
   { to: '/canais', label: 'Canais', icon: IconChannel },
@@ -57,7 +58,6 @@ function Palette({ open, onClose }: { open: boolean; onClose: () => void }) {
     ...SECONDARY.map(m => ({ label: 'Ir para ' + m.label, run: () => navigate(m.to) })),
     { label: 'Nova receita', run: () => navigate('/receitas/nova') },
     { label: 'Produzir 1 hora agora', run: () => navigate('/produzir?horas=1') },
-    { label: 'Abrir portal antigo', run: () => { location.href = '/legacy'; } },
     ...channels.value.map(c => ({ label: 'Canal: ' + c.name, run: () => selectChannel(c.id) })),
   ].filter(x => x.label.toLowerCase().includes(q.toLowerCase())), [q, channels.value]);
   useEffect(() => { const d = ref.current; if (!d) return; if (open && !d.open) { d.showModal(); setQ(''); setI(0); } if (!open && d.open) d.close(); }, [open]);
@@ -91,7 +91,6 @@ export function Shell({ children }: { children: ComponentChildren }) {
         <div class="rail-sep" /><span class="nav-section">Canal e ferramentas</span>
         {SECONDARY.map(m => <NavLink item={m as any} />)}
         <div class="rail-foot">
-          <a class="nav-item" href="/legacy" title="Portal anterior, mantido durante a transição"><span style={{ width: '18px' }} />Portal antigo</a>
         </div>
       </nav>
       <div class="main">
@@ -121,7 +120,6 @@ export function Shell({ children }: { children: ComponentChildren }) {
       <Dialog open={menu} onClose={() => setMenu(false)} title="Navegação do estúdio">
         <nav class="stack" aria-label="Todas as páginas" onClick={() => setMenu(false)}>
           {[...MAIN, ...SECONDARY].map(m => <NavLink item={m} />)}
-          <a class="nav-item" href="/legacy">Portal antigo</a>
         </nav>
         <button class="btn" onClick={() => setMenu(false)}>Fechar menu</button>
       </Dialog>
