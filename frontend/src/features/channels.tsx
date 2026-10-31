@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'preact/hooks';
 import { useResource } from '../lib/resource';
-import { api, post, put } from '../lib/api';
+import { api, post, put, uuid } from '../lib/api';
 import { channels, channel, selectChannel, loadChannels, canAdmin } from '../lib/store';
 import { attempt } from '../lib/toast';
 import { Field, Pill, Skeleton, Dialog } from '../ds/ui';
 import { IconPlus } from '../ds/icons';
+import { href, navigate } from '../lib/router';
 import type { Recipe } from './produce';
 
 function ChannelRecipes({ cid }: { cid: string }) {
@@ -12,13 +13,25 @@ function ChannelRecipes({ cid }: { cid: string }) {
   const bound = useResource<{ recipes: { recipe_id: string; is_default: boolean }[] }>(`/api/creator/channels/${cid}/recipes`, [], [cid]);
   const [picked, setPicked] = useState<string[]>([]);
   const [def, setDef] = useState<string | null>(null);
+  const [starter, setStarter] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [requestId, setRequestId] = useState(uuid);
+  const [brief, setBrief] = useState({name:'Meu primeiro vídeo',theme:'',scene:'',character:''});
   useEffect(() => { if (bound.data) { setPicked(bound.data.recipes.map(r => r.recipe_id)); setDef(bound.data.recipes.find(r => r.is_default)?.recipe_id || null); } }, [bound.data]);
   if (!all.data || !bound.data) return <Skeleton />;
   const toggle = (id: string) => { const next = picked.includes(id) ? picked.filter(x => x !== id) : [...picked, id]; setPicked(next); if (!next.includes(def || '')) setDef(next[0] || null); };
+  const savedDefault = bound.data.recipes.find(r=>r.is_default);
+  const selectedRecipe = all.data.recipes.find(r=>r.id===savedDefault?.recipe_id);
+  const startProject = async () => {
+    setStarting(true);
+    try { const result = await attempt(() => post(`/api/creator/workshop/channels/${cid}/starter`, {request_id:requestId,...brief}), 'Projeto criado sem iniciar geração paga');
+      if (result) navigate('/criar-video/'+result.id);
+    } finally { setStarting(false); }
+  };
   const save = () => attempt(async () => { await put(`/api/creator/channels/${cid}/recipes`, { recipes: picked.map(id => ({ recipe_id: id, is_default: id === def })) }); bound.reload(); }, 'Receitas do canal salvas');
   return (
     <div class="stack">
-      <p class="faint" style={{ fontSize: '13px' }}>Marque o que este canal pode produzir e escolha a receita padrão. Trocar 8-bit ↔ jazz é só mudar a padrão.</p>
+      <p class="faint" style={{ fontSize: '13px' }}>Marque o que este canal pode produzir e escolha a receita padrão. A receita orienta o estilo; o tema e os detalhes criativos variam em cada projeto. Projetos iniciados preservam a versão escolhida.</p>
       <div class="list">{all.data.recipes.filter(r => r.state !== 'archived').map(r => (
         <div class="list-item">
           <input type="checkbox" aria-label={`Permitir ${r.name}`} checked={picked.includes(r.id)} onChange={() => toggle(r.id)} style={{ accentColor: 'var(--accent)' }} />
@@ -26,6 +39,22 @@ function ChannelRecipes({ cid }: { cid: string }) {
           {!r.usable && <Pill tone="warn">Aguarda revisão</Pill>}
           <label class="row tight" style={{ fontSize: '13px' }}><input type="radio" name={`default-${cid}`} disabled={!picked.includes(r.id)} checked={def === r.id} onChange={() => setDef(r.id)} /> Padrão</label>
         </div>))}</div>
+      <section class="notice stack">
+        <b>Comece pela receita do seu canal</b>
+        <p>1. Salve a receita padrão. 2. Defina tema, cenário e personagem próprios. 3. Aprove a primeira imagem e fixe a identidade do canal. Depois, o motor prepara animações e música original para a duração escolhida.</p>
+        <p>{selectedRecipe ? `Receita salva: ${selectedRecipe.name}` : 'Salve uma receita padrão para começar.'}</p>
+        <button class="btn" disabled={!selectedRecipe?.usable || starting} onClick={()=>{setRequestId(uuid());setStarter(true);}}>Iniciar projeto com a receita</button>
+        <a href={href('/criar-video')}>Retomar projetos existentes</a>
+      </section>
+      <Dialog open={starter} onClose={()=>{if(!starting)setStarter(false);}} title="Primeiro projeto com a receita">
+        <p>{selectedRecipe?.name} · Nenhum crédito é consumido ao criar o projeto. Personagens de outros canais não serão importados.</p>
+        <Field label="Nome do projeto"><input class="input" value={brief.name} onInput={e=>setBrief({...brief,name:e.currentTarget.value})}/></Field>
+        <Field label="Tema deste vídeo"><input class="input" placeholder="Ex.: aventura espacial, Natal ou noite chuvosa" value={brief.theme} onInput={e=>setBrief({...brief,theme:e.currentTarget.value})}/></Field>
+        <Field label="Cenário desejado"><textarea class="textarea" value={brief.scene} onInput={e=>setBrief({...brief,scene:e.currentTarget.value})}/></Field>
+        <Field label="Personagem original deste canal"><textarea class="textarea" placeholder="Descreva aparência e elementos que devem permanecer; depois você aprovará a primeira imagem." value={brief.character} onInput={e=>setBrief({...brief,character:e.currentTarget.value})}/></Field>
+        <button class="btn primary" disabled={starting || !brief.name.trim() || !brief.theme.trim() || !brief.scene.trim() || brief.character.trim().length<3} onClick={startProject}>{starting?'Criando projeto…':'Criar projeto sem gerar mídia'}</button>
+        <button class="btn ghost" disabled={starting} onClick={()=>setStarter(false)}>Voltar</button>
+      </Dialog>
       <button class="btn primary" style={{ alignSelf: 'flex-start' }} disabled={!picked.length || !def} onClick={save}>Salvar receitas do canal</button>
     </div>
   );
@@ -83,9 +112,9 @@ export function Channels() {
             {c.desired === 'live' && <Pill tone="live">Ao vivo</Pill>}
           </button>))}</div>
         {current && <div class="stack lg">
-          <section class="card stack"><h3>Receitas</h3><ChannelRecipes cid={current.id} /></section>
-          <section class="card stack"><h3>YouTube</h3><YouTube cid={current.id} /></section>
-          <section class="card stack"><h3>Conexão de transmissão</h3><Connection cid={current.id} /></section>
+          <section class="card stack"><h3>Receitas</h3><ChannelRecipes key={current.id} cid={current.id} /></section>
+          <section class="card stack"><h3>YouTube</h3><YouTube key={current.id} cid={current.id} /></section>
+          <section class="card stack"><h3>Conexão de transmissão</h3><Connection key={current.id} cid={current.id} /></section>
         </div>}
       </div>
       <Dialog open={adding} onClose={() => setAdding(false)} title="Novo canal">

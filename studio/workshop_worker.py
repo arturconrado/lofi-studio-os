@@ -344,6 +344,8 @@ def tick():
             report['audio_alignment'].update({'program_id':audio_info['program_id'],
                 'source_sha256':audio_info['sha256'],'source_type':'new_ephemeral_original',
                 'template_snapshot_sha256':audio_info['snapshot'], 'theme':audio_plan.get('theme'),
+                'template_source':audio_plan.get('template_source','channel_production'),
+                'recipe_id':audio_plan.get('recipe_id'),'recipe_sha256':audio_plan.get('recipe_sha256'),
                 'tracks':audio_plan.get('track_provenance',[]),'mix_report':audio_plan.get('mix_report'),
                 'generation_reserved_usd':audio_plan.get('reserved_usd'),
                 'generation_known_cost_usd':audio_plan.get('known_cost_usd'),
