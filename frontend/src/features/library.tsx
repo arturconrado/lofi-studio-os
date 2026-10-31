@@ -1,3 +1,4 @@
+import { SavedPlans, VisualArchive, ProgramTools } from './archive-tools';
 import { AudioLibrary } from './audio-library';
 import { WorkshopProjects } from './workshop-projects';
 import { useMemo, useState } from 'preact/hooks';
@@ -178,6 +179,7 @@ export function Library() {
         <input class="input" style={{ maxWidth: '280px' }} aria-label="Buscar produções por título, ideia ou receita" placeholder="Buscar por título, ideia ou receita" value={q} onInput={e => setQ((e.target as HTMLInputElement).value)} />
       </div>
       {cid && <WorkshopProjects key={cid} cid={cid} />}
+      <a class="btn" href={href('/audio')}>Gerar ou consultar áudios completos</a>
       <h2>Produções por receita</h2>
       <p class="faint">Os filtros abaixo se aplicam às produções por receita e aos programas anteriores.</p>
       <Segmented label="Filtro" value={group} onChange={setGroup} options={[
@@ -188,6 +190,8 @@ export function Library() {
         : <div class="grid cols-2">{list.map(p => <ProjectCard p={p} />)}</div>}
       {cid && <Publications cid={cid} />}
       {cid && <AudioLibrary key={cid} cid={cid} />}
+      {cid && <SavedPlans key={cid} cid={cid} />}
+      <VisualArchive />
       {old.length > 0 && (
         <section class="card">
           <div class="card-head"><h3 class="grow">Programas anteriores</h3></div>
@@ -200,6 +204,7 @@ export function Library() {
                   <td>{duration(Number(p.seconds))}</td><td class="faint">{ago(p.updated_at)}</td>
                   <td style={{ textAlign: 'right' }}>
                     {p.stage === 'AGUARDANDO_REVISAO' && <a class="btn primary sm" href={href('/revisao?item=' + encodeURIComponent('block_review:' + p.program_id))}>Revisar</a>}
+                    <ProgramTools key={p.program_id} id={p.program_id} />
                     {p.export?.state === 'completed' && <a class="btn sm" href={`/api/exports/${p.export.id}/download`}>Baixar</a>}
                   </td>
                 </tr>))}</tbody></table>

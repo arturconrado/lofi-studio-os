@@ -16,6 +16,7 @@ const MAIN = [
   { to: '/ao-vivo', label: 'Ao vivo', icon: IconLive },
 ];
 const SECONDARY = [
+  { to: '/audio', label: 'Gerar só áudio', icon: IconRecipe },
   { to: '/produzir', label: 'Produzir por receita', icon: IconRecipe },
   { to: '/receitas', label: 'Receitas', icon: IconRecipe },
   { to: '/canais', label: 'Canais', icon: IconChannel },

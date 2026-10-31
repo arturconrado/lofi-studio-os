@@ -467,3 +467,6 @@ app.include_router(youtube_publications_router)
 
 from .live_presentation import router as live_presentation_router
 app.include_router(live_presentation_router)
+
+from .audio_studio import router as audio_studio_router
+app.include_router(audio_studio_router)
