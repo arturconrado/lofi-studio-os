@@ -1004,7 +1004,8 @@ def detail(pid: uuid.UUID):
             asset['semantic_current']=False
             try:
                 context,_=semantic_context_for(row,draft,cl,media,identity,(variant or {}).get('key'))
-                asset['semantic_current']=(asset.get('semantic_review') or {}).get('binding')==context['binding']
+                asset['semantic_current']=((asset.get('semantic_review') or {}).get('binding')==context['binding']
+                    and not (asset.get('approved') is False and asset.get('review_sha256')==asset.get('sha256')))
             except (HTTPException,ValueError,KeyError):pass
     return {'id': str(pid), 'revision': row['revision'], 'data': row['data'], 'media': media,
             'identity': identity_reference_status(pid, identity, draft, media) | {'candidates':candidates}, 'planning_errors':planning_errors,

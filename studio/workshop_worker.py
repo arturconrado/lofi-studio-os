@@ -230,6 +230,13 @@ def tick():
             from .semantic_review import execute
             execute(t,folder)
             return True
+        if p.get('operation')=='render' and 'semantic_reviews' in p:
+            from .workshop_api import project, assets, identity_profile_for_channel, require_semantic_segments
+            from .visual_workshop import Draft
+            with db() as c:
+                row=project(c,p['project_id'])
+                require_semantic_segments(row,Draft.model_validate(row['data']),assets(c,p['project_id']),
+                                          identity_profile_for_channel(c,row['channel_id']),p['segments'])
         if p.get('operation') == 'short_render':
             files = {}
             for source in p['sources']:
