@@ -113,12 +113,15 @@ def test_paid_resume_reserves_once_and_reuses_same_job(monkeypatch):
     @contextmanager
     def db(): yield conn
     monkeypatch.setattr(workshop_api,'db',db)
-    monkeypatch.setattr(workshop_api,'project',lambda *args: {'data':{}})
+    monkeypatch.setattr(workshop_api,'project',lambda *args: {'data':{},'channel_id':1})
     monkeypatch.setattr(workshop_api,'task',lambda *args:item)
     monkeypatch.setattr(workshop_api,'digest',lambda data:'draft')
     monkeypatch.setattr(workshop_api.Draft,'model_validate',lambda data:object())
     monkeypatch.setattr(workshop_api,'assets',lambda *args:{})
     monkeypatch.setattr(workshop_api,'assemble',lambda *args:['source'])
+    monkeypatch.setattr(workshop_api,'identity_profile_for_channel',lambda *args:{})
+    semantic_checks=[]
+    monkeypatch.setattr(workshop_api,'require_semantic_segments',lambda *args:semantic_checks.append(args[-1]))
     monkeypatch.setattr(workshop_api,'worker_online',lambda *args:True)
     monkeypatch.setattr(workshop_api,'audit',lambda *args:None)
     monkeypatch.setattr(workshop_api,'public_task',lambda t:{'id':str(t['id']),'status':t['status']})
@@ -134,3 +137,4 @@ def test_paid_resume_reserves_once_and_reuses_same_job(monkeypatch):
     assert len(item['payload']['audio_plan']['failed_attempts'])==1
     assert workshop_api.resume_soundtrack(pid,item['id'],request)['status']=='QUEUED'
     assert item['reserved_cost']==Decimal('0.32') and len(charges)==1
+    assert semantic_checks==[['source']]

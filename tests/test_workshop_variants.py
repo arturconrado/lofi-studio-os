@@ -785,9 +785,12 @@ def test_http_batch_quotes_reserves_once_recovers_and_reviews_each_variant(clien
             assert row['payload']['variant_key']==variant['key']
             c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb WHERE id=%s",(json.dumps({'video_key':'preview','report':{'sha256':'e'*64,'full_decode_pass':True}}),preview.json()['id']));c.commit()
     finally:WORKSPACE.reset(token)
-    result=client.post(url+f'/clips/{clip.id}/review/video',json=review);assert result.status_code==200,result.text
+    # A legacy channel without approved identity references may prepare previews,
+    # but must not approve an animation or enter final production.
+    result=client.post(url+f'/clips/{clip.id}/review/video',json=review);assert result.status_code==409,result.text
+    assert 'referências aprovadas' in result.json()['detail']
     updated=client.get(url).json()['states'][str(clip.id)]['variants']
-    assert sum(v['video_approved'] for v in updated)==1
+    assert sum(v['video_approved'] for v in updated)==0
     assert client.post(url+'/render',json={'request_id':str(uuid.uuid4()),'revision':state['revision']}).status_code==409
 
 

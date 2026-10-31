@@ -107,7 +107,7 @@ def tick():
     from .radio import CACHE
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837472)')
-        if c.execute("SELECT 1 FROM export_jobs WHERE state='running'").fetchone() or c.execute("SELECT 1 FROM factory_tasks WHERE status='RUNNING' AND (kind=%s OR (kind='visual_workshop_v1' AND payload->>'operation' IN ('render','preview')))",(KIND,)).fetchone():return False
+        if c.execute("SELECT 1 FROM export_jobs WHERE state='running'").fetchone() or c.execute("SELECT 1 FROM factory_tasks WHERE status='RUNNING' AND (kind=%s OR (kind='visual_workshop_v1' AND payload->>'operation' IN ('render','preview','short_render','semantic_review')))",(KIND,)).fetchone():return False
         row=c.execute("UPDATE factory_tasks SET status='RUNNING',detail='Conferindo fontes da montagem',updated_at=now() WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s AND status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *",(KIND,)).fetchone();c.commit()
     if not row:return False
     folder=CACHE/'timeline'/str(row['id']);folder.mkdir(parents=True,exist_ok=True)

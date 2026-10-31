@@ -220,12 +220,23 @@ def tick():
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837472)')
         if c.execute("SELECT 1 FROM export_jobs WHERE state='running'").fetchone() or c.execute(
-                "SELECT 1 FROM factory_tasks WHERE kind IN ('timeline_render_v1',%s) AND status='RUNNING' AND (kind='timeline_render_v1' OR payload->>'operation' IN ('render','preview','short_render'))", (KIND,)).fetchone(): return False
-        t = c.execute("UPDATE factory_tasks SET status='RUNNING',detail=CASE WHEN payload->>'operation'='short_render' THEN 'Compondo Short vertical' ELSE 'Montando base, inserções e música' END WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s AND payload->>'operation' IN ('render','preview','short_render') AND status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *", (KIND,)).fetchone(); c.commit()
+                "SELECT 1 FROM factory_tasks WHERE kind IN ('timeline_render_v1',%s) AND status='RUNNING' AND (kind='timeline_render_v1' OR payload->>'operation' IN ('render','preview','short_render','semantic_review'))", (KIND,)).fetchone(): return False
+        t = c.execute("UPDATE factory_tasks SET status='RUNNING',detail=CASE WHEN payload->>'operation'='short_render' THEN 'Compondo Short vertical' ELSE 'Montando base, inserções e música' END WHERE id=(SELECT id FROM factory_tasks WHERE kind=%s AND payload->>'operation' IN ('render','preview','short_render','semantic_review') AND status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *", (KIND,)).fetchone(); c.commit()
     if not t: return False
     folder = CACHE / 'visual-workshop' / str(t['id']); folder.mkdir(parents=True, exist_ok=True)
     try:
         p = t['payload']
+        if p.get('operation')=='semantic_review':
+            from .semantic_review import execute
+            execute(t,folder)
+            return True
+        if p.get('operation')=='render' and 'semantic_reviews' in p:
+            from .workshop_api import project, assets, identity_profile_for_channel, require_semantic_segments
+            from .visual_workshop import Draft
+            with db() as c:
+                row=project(c,p['project_id'])
+                require_semantic_segments(row,Draft.model_validate(row['data']),assets(c,p['project_id']),
+                                          identity_profile_for_channel(c,row['channel_id']),p['segments'])
         if p.get('operation') == 'short_render':
             files = {}
             for source in p['sources']:
