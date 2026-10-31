@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Literal
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
-from pydantic import Field
+from pydantic import Field, field_validator
 from PIL import Image
 from .core import db, storage, audit, ensure_once
 from .channels import profile
@@ -756,6 +756,14 @@ def create(body: Create):
     with db() as c:
         profile(c, body.channel_id)
         draft = body.data.model_copy(deep=True)
+        if draft.recipe_id:
+            from .recipes import for_channel
+            recipe = for_channel(c, body.channel_id, draft.recipe_id)
+            draft.recipe_sha256 = recipe['sha256']
+            draft.recipe_visual_direction = recipe_visual_direction(recipe['data'])
+            project_recipe(c, {'channel_id':body.channel_id}, draft)
+        elif draft.recipe_sha256 or draft.recipe_visual_direction:
+            raise HTTPException(422, 'Escolha uma receita válida antes de vincular sua direção.')
         identity = identity_profile_for_channel(c, body.channel_id)
         if identity:
             draft.identity_profile = identity['id']
@@ -1022,6 +1030,8 @@ def update(pid: uuid.UUID, body: Update):
         if row['revision'] != body.revision:
             raise HTTPException(409, 'O projeto mudou em outra janela; recarregue antes de salvar')
         media = assets(c, pid); old = Draft.model_validate(row['data'])
+        if (body.data.recipe_id,body.data.recipe_sha256,body.data.recipe_visual_direction) != (old.recipe_id,old.recipe_sha256,old.recipe_visual_direction):
+            raise HTTPException(409, 'A receita desta produção é versionada. Crie outro projeto para usar outra receita.')
         for cl in clips(old):
             image = media.get(str(cl.image_id))
             if image and not image.get('visual_signature') and compatible_image(old, cl, image):
@@ -1302,6 +1312,7 @@ def semantic_review(pid:uuid.UUID,cid:uuid.UUID,body:SemanticReviewRequest):
         row=project(c,pid,True)
         if row['revision']!=body.revision:raise HTTPException(409,'Salve e atualize antes de avaliar.')
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
+        if draft.recipe_id: project_recipe(c,row,draft)
         if not clip:raise HTTPException(404,'Trecho não encontrado')
         identity=identity_profile_for_channel(c,row['channel_id'])
         require_current_identity_assets(identity,draft,media)
@@ -1399,6 +1410,7 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
     ready()
     with db() as c:
         row=project(c,pid);draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
+        if draft.recipe_id: project_recipe(c,row,draft)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'Gere diretamente o vídeo da inserção')
         identity=identity_profile_for_channel(c,row['channel_id'])
@@ -1435,6 +1447,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 raise HTTPException(409,'Pedido já usado para outro trecho ou versão')
             return public_task(old)
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid)
+        if draft.recipe_id: project_recipe(c,row,draft)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'A imagem inicial é aprovada uma vez na base; gere o vídeo da inserção')
         identity=identity_profile_for_channel(c,row['channel_id'])
@@ -1463,6 +1476,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
             return public_task(old)
         if row['revision']!=body.revision: raise HTTPException(409,'Salve e confira a versão atual')
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
+        if draft.recipe_id: project_recipe(c,row,draft)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         identity=identity_profile_for_channel(c,row['channel_id'])
         identity_asset=None
@@ -1894,6 +1908,7 @@ def preview_clip(pid: uuid.UUID, cid: uuid.UUID, body: Render):
             return public_task(old)
         if row['revision']!=body.revision: raise HTTPException(409,'Salve antes de preparar a prévia')
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
+        if draft.recipe_id: project_recipe(c,row,draft)
         identity=identity_profile_for_channel(c,row['channel_id'])
         require_current_identity_assets(identity,draft,media)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
@@ -1965,8 +1980,84 @@ def soundtrack(c, row, draft):
     raise HTTPException(409, 'A música é obrigatória: revise uma trilha do canal com duração suficiente. Nenhuma música será comprada automaticamente.')
 
 
+def recipe_visual_direction(data):
+    variant = data['visual']['variant']
+    if variant in ('pixel_art_original','pixel_art_reviewed'):
+        return 'Original pixel art with crisp pixel clusters, limited palette and consistent pixel scale. Preserve this channel’s own approved characters; no photorealistic or painterly conversion.'
+    return 'Original illustrated scene, consistent illustration technique and palette. Preserve this channel’s own approved characters.'
+
+
+def project_recipe(c, row, draft):
+    """Resolve the immutable, channel-authorized recipe; never accept client recipe data."""
+    from .recipes import ready as recipes_ready, usable
+    recipes_ready()
+    item=c.execute('''SELECT r.*,v.sha256,v.data,v.visual_review FROM recipes r
+      JOIN recipe_revisions v ON v.recipe_id=r.id
+      WHERE r.id=%s AND v.sha256=%s''',(draft.recipe_id,draft.recipe_sha256)).fetchone()
+    if not item or item['state']=='archived' or not usable(item):
+        raise HTTPException(409, 'A receita vinculada está indisponível ou aguarda revisão.')
+    if not c.execute('SELECT 1 FROM channel_recipes WHERE channel_id=%s AND recipe_id=%s',
+                     (row['channel_id'],draft.recipe_id)).fetchone():
+        raise HTTPException(409, 'Esta receita não está autorizada para o canal.')
+    if recipe_visual_direction(item['data']) != draft.recipe_visual_direction:
+        raise HTTPException(409, 'A direção visual não corresponde à receita registrada.')
+    return item
+
+
+class Starter(Strict):
+    request_id: uuid.UUID
+    name: str = Field(min_length=1,max_length=120)
+    theme: str = Field(min_length=1,max_length=1000)
+    scene: str = Field(min_length=1,max_length=2000)
+    character: str = Field(min_length=3,max_length=2000)
+
+    @field_validator('name','theme','scene','character',mode='before')
+    @classmethod
+    def trim(cls,value):
+        return value.strip() if isinstance(value,str) else value
+
+
+@router.post('/channels/{cid}/starter')
+def start_channel_project(cid: uuid.UUID, body: Starter):
+    """Create only a draft, using the channel default. No paid request or shared assets."""
+    from .recipes import for_channel
+    from .visual_workshop import Character, Clip
+    ready()
+    with db() as c:
+        profile(c,cid)
+        c.execute('SELECT pg_advisory_xact_lock(192837495)')
+        old=c.execute('SELECT channel_id FROM visual_projects WHERE id=%s',(body.request_id,)).fetchone()
+        if old:
+            if str(old['channel_id'])!=str(cid):raise HTTPException(409,'Pedido já usado em outro canal')
+            return {'id':str(body.request_id)}
+        recipe=for_channel(c,cid)
+        draft=Draft(name=body.name.strip(),theme=body.theme.strip(),scene=body.scene.strip(),
+                    recipe_id=recipe['id'],recipe_sha256=recipe['sha256'],
+                    recipe_visual_direction=recipe_visual_direction(recipe['data']),
+                    characters=[Character(name='Personagem principal',description=body.character.strip())],
+                    base=Clip(name='Base tranquila',motion='Movimento suave e contínuo, retornando à pose inicial sem cortes.'),
+                    automatic_motion=True)
+        identity=identity_profile_for_channel(c,cid)
+        if identity:
+            draft.identity_profile=identity['id']
+            apply_canonical_channel_cast(draft,cid)
+        draft,_=plan_editorial_insertions(draft)
+        c.execute('INSERT INTO visual_projects(id,channel_id,data) VALUES(%s,%s,%s)',
+                  (body.request_id,cid,json.dumps(draft.model_dump(mode='json'))))
+        if identity:bind_identity_reference(c,body.request_id,identity)
+        audit(c,'CHANNEL_STARTER_CREATED',str(body.request_id),recipe['sha256']);c.commit()
+    return {'id':str(body.request_id)}
+
+
 def music_template(c, row, draft):
-    """Resolve an existing channel production as a style recipe, never as audio."""
+    """Use a pinned recipe for new projects, or preserve the legacy style source."""
+    if draft.recipe_id:
+        recipe=project_recipe(c,row,draft)
+        plan={'recipe':recipe['data'],'title':draft.name,'theme':draft.theme,
+              'creative_theme':draft.theme,'music_brief':draft.music_brief,
+              'template_source':'channel_recipe','recipe_id':str(recipe['id']),
+              'recipe_sha256':recipe['sha256']}
+        return {'program_id':None,'plan':plan,'snapshot_sha256':digest(plan)}
     query = '''SELECT b.id,p.data,pm.music_description,pm.title
       FROM production_batches b
       LEFT JOIN creator_plans p ON p.program_id=b.id
@@ -1977,7 +2068,7 @@ def music_template(c, row, draft):
         query += ' AND b.id=%s'; params.append(draft.music_program_id)
     source = c.execute(query + ' ORDER BY b.updated_at DESC LIMIT 1', params).fetchone()
     if not source:
-        raise HTTPException(409, 'Escolha uma produção musical pronta do canal para usar como referência de estilo.')
+        raise HTTPException(409, 'Este canal ainda não tem uma referência musical. Em Canais, salve uma receita padrão e use Iniciar projeto com a receita.')
     plan = dict(source['data'] or {})
     recipe = plan.get('recipe') if isinstance(plan.get('recipe'), dict) else {}
     music = recipe.get('music') if isinstance(recipe.get('music'), dict) else {}
@@ -1989,7 +2080,7 @@ def music_template(c, row, draft):
     if description and not music.get('bible'):
         music = {**music, 'bible': description}
         recipe = {**recipe, 'music': music}
-    plan.update(recipe=recipe, title=str(plan.get('title') or source.get('title') or 'Lo-Fi Vibe Coding'),
+    plan.update(recipe=recipe, title=str(plan.get('title') or source.get('title') or draft.name),
                 music_description=description, music_brief=draft.music_brief,
                 theme=draft.theme, creative_theme=draft.theme)
     plan['template_program_id'] = source['id']
@@ -2318,6 +2409,9 @@ def render(pid: uuid.UUID, body: Render):
                                          'target_seconds':segments[-1]['end']},
            'audio_plan': {'mode':'new_ephemeral_theme_track',
                           'template_program_id':template['program_id'],
+                          'template_source':template['plan'].get('template_source','channel_production'),
+                          'recipe_id':template['plan'].get('recipe_id'),
+                          'recipe_sha256':template['plan'].get('recipe_sha256'),
                           'template_snapshot_sha256':template['snapshot_sha256'],
                           'template_plan':template['plan'],
                           'track_count':quote['track_count'],
