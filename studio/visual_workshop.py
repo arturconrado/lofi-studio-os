@@ -42,6 +42,9 @@ class Insertion(Strict):
 
 class Draft(Strict):
     name: str = Field(min_length=1, max_length=120)
+    recipe_id: uuid.UUID | None = None
+    recipe_sha256: str | None = Field(default=None, pattern='^[a-f0-9]{64}$')
+    recipe_visual_direction: str = Field(default='', max_length=2000)
     identity_profile: str | None = Field(default=None, max_length=100)
     automatic_motion: bool = False
     minutes: float = Field(default=60, ge=1, le=1440)
@@ -185,6 +188,8 @@ def context(draft):
     # Keep legacy signatures stable; only identity-bound drafts include this key.
     if draft.identity_profile:
         result['identity_profile'] = draft.identity_profile
+    if draft.recipe_sha256:
+        result['recipe'] = {'sha256':draft.recipe_sha256,'visual_direction':draft.recipe_visual_direction}
     return result
 
 
@@ -196,7 +201,10 @@ def legacy_signature(draft, clip, kind, image_sha=None):
 
 
 def visual_context(draft):
-    return {k: v for k, v in context(draft).items() if k != 'scene_motion'}
+    result = {k: v for k, v in context(draft).items() if k != 'scene_motion'}
+    if draft.recipe_sha256:
+        result['recipe'] = {'sha256':draft.recipe_sha256,'visual_direction':draft.recipe_visual_direction}
+    return result
 
 
 def signature(draft, clip, kind, image_sha=None):
@@ -426,6 +434,10 @@ def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None, editor
                    'Start exactly from the supplied frame and continue that ongoing motion before beginning the requested action. '
                    'Show the entire action from its beginning; never start with the hand already on the cat or the cup already lifted. '
                    'Finish in the first pose of the base loop so it resumes naturally.'))))
+    if draft.recipe_visual_direction:
+        result += (' Recipe visual language: ' + draft.recipe_visual_direction +
+                   ' Invent original theme-specific scenery and actions inside this language. '
+                   'Recipe references are style guidance, never permission to copy another channel’s cast. ')
     if kind == 'video':
         result += (' Audiovisual direction: preserve the channel identity and complete a readable action with entry, development and return. '
                    'Maintain object ownership, hand contact, eyelines, lighting and screen direction. '
