@@ -206,7 +206,7 @@ export function Live() {
               : <button class="obs-btn primary" disabled={!selected || !c.stream_key_configured} onClick={openStart}>Iniciar transmissão</button>}
             <a class="obs-btn" href={href('/canais')}>Configurações</a>
             <a class="obs-btn" href={href('/revisao')}>Revisão</a>
-            <a class="obs-btn" href={`/static/program-player.html?channel=${cid}${selected ? '&batch=' + encodeURIComponent(selected) : ''}`}>Central antiga</a>
+            <a class="obs-btn" href={`/static/program-player.html?channel=${cid}${selected ? '&batch=' + encodeURIComponent(selected) : ''}`}>Controle detalhado da transmissão</a>
             {!c.stream_key_configured && <p class="obs-hint warn">Salve a chave RTMP em Canais para transmitir.</p>}
           </div>
         </Dock>

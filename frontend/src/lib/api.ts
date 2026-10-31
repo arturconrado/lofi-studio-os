@@ -1,4 +1,4 @@
-/* Same-origin API client. CSRF comes from the lofi_csrf cookie set at login (as in the legacy portal). */
+/* Same-origin API client. CSRF comes from the lofi_csrf cookie set at login. */
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }

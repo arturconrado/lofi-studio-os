@@ -1,3 +1,4 @@
+import { AudioLibrary } from './audio-library';
 import { WorkshopProjects } from './workshop-projects';
 import { useMemo, useState } from 'preact/hooks';
 import { post, uuid } from '../lib/api';
@@ -186,9 +187,10 @@ export function Library() {
         ? <div class="card"><Empty title="Nenhuma produção neste filtro" icon={<IconLibrary />}><a class="btn primary" href={href('/produzir')}>Produzir</a></Empty></div>
         : <div class="grid cols-2">{list.map(p => <ProjectCard p={p} />)}</div>}
       {cid && <Publications cid={cid} />}
+      {cid && <AudioLibrary key={cid} cid={cid} />}
       {old.length > 0 && (
         <section class="card">
-          <div class="card-head"><h3 class="grow">Programas anteriores</h3><a class="btn ghost sm" href="/legacy?view=catalog">Abrir no portal antigo</a></div>
+          <div class="card-head"><h3 class="grow">Programas anteriores</h3></div>
           <div style={{ overflowX: 'auto' }}>
             <table class="table"><thead><tr><th>Programa</th><th>Status</th><th>Duração</th><th>Atualizado</th><th /></tr></thead>
               <tbody>{old.map(p => (
