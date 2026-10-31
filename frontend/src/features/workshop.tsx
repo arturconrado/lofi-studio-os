@@ -369,12 +369,13 @@ export function Workshop({ id }: { id?: string }) {
     </section>;
   };
   const usedClips = [draft.base, ...draft.clips.filter(c=>scheduledIds.has(c.id))];
+  const nextSemanticClip = usedClips.find(c=>(d?.states[c.id]?.variants?.length ? d.states[c.id].variants!.map(v=>v.video_id) : [c.video_id]).some(aid=>!aid || !d?.media[aid]?.semantic_current || d.media[aid]?.semantic_review?.state!=='passed'));
   const nextClip = usedClips.find(c=>automatic ? !d?.states[c.id]?.video_ready : !d?.states[c.id]?.video_approved || d?.states[c.id]?.seams_approved === false);
   const focusClip = (clip: Clip) => { const node=document.getElementById('clip-'+clip.id); const parent=node?.closest('details'); if(parent) parent.open=true; node?.scrollIntoView({behavior:'smooth',block:'start'}); };
   const completeVideo = d?.jobs.find(j=>j.operation==='render' && j.status==='COMPLETED' && j.current !== false);
   const missingVariant = nextClip && d?.states[nextClip.id]?.variants?.some(v=>!v.video_ready);
   const generatingNext = !!(nextClip && pending(nextClip.id, 'video')) || !!pending(draft.base.id, 'image');
-  const nextLabel = !id || dirty ? 'Salvar' : generatingNext ? 'Gerando' : !d?.states[draft.base.id]?.image_approved ? 'Preparar imagem inicial' : nextClip ? !automatic && nextClip.video_id && !missingVariant ? 'Revisar '+nextClip.name : 'Gerar vídeo de '+nextClip.name : activeRender ? 'Montagem em andamento' : completeVideo ? completeVideo.approved ? 'Vídeo completo aprovado' : 'Revisar vídeo completo' : 'Montar vídeo';
+  const nextLabel = !id || dirty ? 'Salvar' : generatingNext ? 'Gerando' : !d?.states[draft.base.id]?.image_approved ? 'Preparar imagem inicial' : nextClip ? !automatic && nextClip.video_id && !missingVariant ? 'Revisar '+nextClip.name : 'Gerar vídeo de '+nextClip.name : activeRender ? 'Montagem em andamento' : !semanticReady ? 'Avaliar identidade, objetos e ação' : completeVideo ? completeVideo.approved ? 'Vídeo completo aprovado' : 'Revisar vídeo completo' : 'Montar vídeo';
   const soundtrackTargetSeconds = Math.ceil(draft.minutes * 60);
   const soundtrackTrackCap = Math.max(1, Math.ceil((soundtrackTargetSeconds - 1.5) / (120 - 1.5))) + (soundtrackTargetSeconds > 180 ? 1 : 0);
   const soundtrackCostCap = Number((soundtrackTrackCap * 0.08).toFixed(2));
@@ -388,6 +389,7 @@ export function Workshop({ id }: { id?: string }) {
     if(!id || dirty) return save();
     if(!d?.states[draft.base.id]?.image_approved) return draft.base.image_id ? focusClip(draft.base) : generate(draft.base,'image');
     if(nextClip) return !automatic && nextClip.video_id && !missingVariant ? focusClip(nextClip) : generate(nextClip,'video');
+    if(!semanticReady && nextSemanticClip) return focusClip(nextSemanticClip);
     if(completeVideo) return document.getElementById('job-'+completeVideo.id)?.scrollIntoView({behavior:'smooth'});
     return renderFull();
   };

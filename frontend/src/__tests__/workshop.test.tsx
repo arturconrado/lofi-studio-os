@@ -293,9 +293,9 @@ it('moves every continuous part when the action time changes', async () => {
 });
 
 
-it('assembles ready compatible clips without individual motion or seam approvals', async () => {
+it('assembles compatible clips with a current semantic receipt in automatic mode', async () => {
   const draft=initialDraft();draft.base.video_id='v';
-  const detail={id:'p',revision:1,data:draft,media:{v:{id:'v',kind:'video',sha256:'a'.repeat(64),url:'/v',approved:false}},
+  const detail={id:'p',revision:1,data:draft,media:{v:{id:'v',kind:'video',sha256:'a'.repeat(64),url:'/v',approved:false,semantic_current:true,semantic_review:{state:'passed',findings:{}}}},
     states:{[draft.base.id]:{image_approved:true,video_ready:true,video_approved:false,seams_approved:false}},jobs:[],library:[],music:[]};
   const fetcher=vi.fn(async(url:string,init?:RequestInit)=>new Response(JSON.stringify(url.endsWith('/capabilities')?{durations:[8]}:init?.method==='POST'?{id:'render'}:detail),{status:200}));
   vi.stubGlobal('fetch',fetcher);const view=render(<Workshop id="p" />);
