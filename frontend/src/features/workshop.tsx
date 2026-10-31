@@ -379,7 +379,7 @@ export function Workshop({ id }: { id?: string }) {
   const completeVideo = d?.jobs.find(j=>j.operation==='render' && j.status==='COMPLETED' && j.current !== false);
   const missingVariant = nextClip && d?.states[nextClip.id]?.variants?.some(v=>!v.video_ready);
   const generatingNext = !!(nextClip && pending(nextClip.id, 'video')) || !!pending(draft.base.id, 'image');
-  const nextLabel = !id || dirty ? 'Salvar' : generatingNext ? 'Gerando' : !d?.states[draft.base.id]?.image_approved ? 'Preparar imagem inicial' : needsFirstIdentity ? 'Fixar identidade deste canal' : nextClip ? !automatic && nextClip.video_id && !missingVariant ? 'Revisar '+nextClip.name : 'Gerar vídeo de '+nextClip.name : activeRender ? 'Montagem em andamento' : !semanticReady ? 'Avaliar identidade, objetos e ação' : completeVideo ? completeVideo.approved ? 'Vídeo completo aprovado' : 'Revisar vídeo completo' : 'Montar vídeo';
+  const nextLabel = !id || dirty ? 'Salvar' : generatingNext ? 'Gerando' : !d?.states[draft.base.id]?.image_approved ? 'Preparar imagem inicial' : needsFirstIdentity ? 'Fixar identidade deste canal' : nextClip ? !automatic && nextClip.video_id && !missingVariant ? 'Revisar '+nextClip.name : 'Gerar vídeo de '+nextClip.name : activeRender ? 'Montagem em andamento' : !semanticReady ? 'Avaliar identidade, objetos e ação' : completeVideo ? completeVideo.approved ? 'Vídeo completo aprovado' : 'Revisar vídeo completo' : 'Revisar música e montagem';
   const soundtrackTargetSeconds = Math.ceil(draft.minutes * 60);
   const soundtrackTrackCap = Math.max(1, Math.ceil((soundtrackTargetSeconds - 1.5) / (120 - 1.5))) + (soundtrackTargetSeconds > 180 ? 1 : 0);
   const soundtrackCostCap = Number((soundtrackTrackCap * 0.08).toFixed(2));
@@ -396,7 +396,7 @@ export function Workshop({ id }: { id?: string }) {
     if(nextClip) return !automatic && nextClip.video_id && !missingVariant ? focusClip(nextClip) : generate(nextClip,'video');
     if(!semanticReady && nextSemanticClip) return focusClip(nextSemanticClip);
     if(completeVideo) return focusJob(completeVideo.id);
-    return renderFull();
+    document.getElementById('music-assembly')?.scrollIntoView({behavior:'smooth',block:'start'});
   };
   if (id && resource.loading) return <Skeleton />;
   if (id && resource.error) return <Empty title="Não foi possível abrir o projeto"><p>{resource.error}</p><button class="btn" onClick={resource.reload}>Tentar novamente</button></Empty>;
@@ -461,7 +461,30 @@ export function Workshop({ id }: { id?: string }) {
       </article>)}
       {!d.jobs.some(j=>['QUEUED','SUBMITTING','RUNNING','UNCERTAIN'].includes(j.status)) && <p>Nenhuma tarefa ativa registrada na última consulta. Use o próximo passo para continuar.</p>}
     </section>}
-    <div class="card row"><b class="grow">Próximo passo do vídeo longo: {nextLabel}</b><button class="btn primary" disabled={busy || !!activeRender || scheduleIssue || (!!nextClip && !!pending(nextClip.id,"video")) || !!pending(draft.base.id,"image") || (!!completeVideo?.approved && allApproved && !dirty) || !channel.value} onClick={nextAction}>{nextLabel}</button></div>
+    <section class="card stack" aria-label="Como continuar">
+      <div class="row"><h2 class="grow">Próximo passo: {nextLabel}</h2><button class="btn primary" disabled={busy || !!activeRender || generatingNext || !channel.value} onClick={nextAction}>{nextLabel}</button></div>
+      {!channel.value && <p role="status">Selecione um canal para criar ou continuar seu projeto.</p>}
+      {busy && <p role="status">Registrando sua solicitação. Aguarde a confirmação antes de tentar novamente.</p>}
+      {generatingNext && <p role="status">O pedido desta cena já está em acompanhamento. Você pode consultar os detalhes abaixo sem gerar novamente.</p>}
+      {activeRender && <p role="status">A montagem está em andamento. Acompanhe a tarefa abaixo; não é necessário manter esta página aberta.</p>}
+      {dirty && <p>Há alterações não salvas. Salve primeiro; os materiais existentes continuam disponíveis.</p>}
+      {!dirty && !activeRender && !generatingNext && <p>Avance uma etapa por vez ou use os atalhos para personalizar o projeto. Antes de gerar, confira a confirmação de custo; antes de montar, revise as opções da trilha e da resolução.</p>}
+      {d && <details open={!allApproved || !semanticReady || scheduleIssue || !!d.planning_errors?.length}>
+        <summary>O que falta para montar o vídeo completo</summary>
+        <ul>
+          {scheduleIssue && <li>Há inserções sobrepostas ou fora da duração do vídeo. <a href="#insertion-schedule">Ajustar horários</a></li>}
+          {d.planning_errors?.map(error=><li key={error}>{error}</li>)}
+          {unreadyClips.map(clip=><li key={clip.id}>{clip.name}: preparar ou revisar a animação. <button class="btn ghost sm" onClick={()=>focusClip(clip)}>Abrir cena</button></li>)}
+          {!semanticReady && <li>As animações selecionadas precisam de avaliações atuais de identidade, objetos e ação. <button class="btn ghost sm" onClick={()=>focusClip(nextSemanticClip || draft.base)}>Ver avaliação pendente</button></li>}
+          {allApproved && semanticReady && !scheduleIssue && !d.planning_errors?.length && <li>Cenas e avaliações prontas. Confira música, duração, resolução e teto de custo antes de solicitar a montagem.</li>}
+        </ul>
+        <a class="btn" href="#music-assembly">Revisar música e montagem</a>
+      </details>}
+      {completeVideo && <button class="btn" onClick={()=>focusJob(completeVideo.id)}>Abrir vídeo completo e revisão</button>}
+      <nav class="journey-links" aria-label="Personalizar o projeto">
+        <a class="btn ghost" href="#project-brief">Tema e personagens</a><a class="btn ghost" href="#insertion-schedule">Horários das inserções</a><a class="btn ghost" href="#music-assembly">Música e qualidade</a>{d && <a class="btn ghost" href="#render-jobs">Tarefas e recuperação</a>}
+      </nav>
+    </section>
     {splitPlan && <section class="card stack"><h3>Proposta de ação em partes</h3><p>{splitPlan.total_seconds}s · Até {splitPlan.new_clips_max} vídeos novos · Custo máximo estimado: US$ {splitPlan.usd_max.toFixed(2)}</p><p>Revise a ação de cada parte. Aplicar esta proposta apenas salva o roteiro e os horários.</p>{splitPlan.parts.map((part,n)=><Field label={`Parte ${n+1} · ${part.seconds}s`}><textarea class="textarea" value={part.motion} onInput={e=>setSplitPlan({...splitPlan,parts:splitPlan.parts.map((p,i)=>i===n?{...p,motion:e.currentTarget.value}:p)})} /></Field>)}<button class="btn primary" disabled={busy || dirty} onClick={()=>run(async()=>{await post(`${prefix}/projects/${id}/clips/${splitPlan.clip_id}/split`,{revision:d!.revision,total_seconds:splitPlan.total_seconds,parts:splitPlan.parts});setSplitPlan(null);},'Partes e horários salvos. Nenhuma geração iniciada.')}>Aplicar partes e horários</button><button class="btn ghost" onClick={()=>setSplitPlan(null)}>Cancelar proposta</button></section>}
     {message && <div class="notice" role="status">{message}</div>}{busy && <p role="status">Processando… aguarde antes de enviar outro pedido.</p>}
     {d?.planning_errors?.map(error=><p role="alert" class="notice warn">{error}. Ajuste os horários das partes; os materiais estão preservados.</p>)}
@@ -532,7 +555,7 @@ export function Workshop({ id }: { id?: string }) {
     </details>
     {draft.clips.filter(c=>scheduledIds.has(c.id)).sort((a,b)=>ordered.find(i=>i.clip_id===a.id)!.minute-ordered.find(i=>i.clip_id===b.id)!.minute).map(c=><details key={c.id}><summary>{c.name} · {c.seconds}s · {ordered.filter(i=>i.clip_id===c.id).map(i=>formatTime(i.minute)).join(', ')}</summary>{card(c)}</details>)}
     <details><summary>Rascunhos não agendados</summary>{draft.clips.filter(c=>!scheduledIds.has(c.id)).map(c=>card(c))}</details>
-    <section class="card stack"><h3>Agenda das inserções</h3>
+    <section id="insertion-schedule" class="card stack"><h3>Agenda das inserções</h3>
       {ordered.map((event, index) => <div class="row" key={event.id}>
         <Field label={`Horário da inserção ${index + 1} (mm:ss)`}><input class="input" type="text" inputMode="numeric" disabled={!!draft.clips.find(c=>c.id===event.clip_id)?.continues_from && !d?.planning_errors?.length} defaultValue={formatTime(event.minute)} key={`${event.id}-${formatTime(event.minute)}`} onBlur={e => { const match=/^(\d+):([0-5]\d)$/.exec(e.currentTarget.value); if(match) moveOccurrence(event,Number(match[1])+Number(match[2])/60); else {e.currentTarget.value=formatTime(event.minute);setMessage('Use um horário como 15:08.');} }} /></Field>
         <Field label="Trecho"><select class="select" value={event.clip_id} disabled={!!draft.clips.find(c=>c.id===event.clip_id)?.continues_from} onChange={e=>{const ids=new Set(linkedOccurrences(event).map(i=>i.id));field('insertions',[...draft.insertions.filter(i=>!ids.has(i.id)),...scheduleAction(e.currentTarget.value,event.minute,event.id)]);}}>{draft.clips.filter(c=>!c.continues_from || c.id===event.clip_id).map(c => <option value={c.id}>{c.name} · {c.seconds}s</option>)}</select></Field>
