@@ -254,3 +254,18 @@ dialog::backdrop { background: rgba(8,7,12,.6); backdrop-filter: blur(2px); }
   .obs-docks { grid-template-columns: 1fr; }
   .obs-status { flex-wrap: wrap; white-space: normal; gap: 8px; }
 }
+
+/* Shared portal navigation: every destination stays reachable on small screens. */
+.rail { overflow-y: auto; }
+.nav-section { padding: 0 var(--s3); font-size: var(--t-xs); color: var(--text-3); }
+.mobile-menu { display: none; }
+.journey-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--s3); }
+.journey-links a { text-decoration: none; display: flex; flex-direction: column; gap: var(--s2); }
+.journey-links a:hover { border-color: var(--accent); }
+@media (max-width: 900px) {
+  .mobile-menu { display: inline-flex; }
+  .topbar { flex-wrap: wrap; }
+  .topbar .select { max-width: 65vw; }
+}
+
+[id^="clip-"], [id^="job-"], #project-brief, #music-assembly, #render-jobs, #long-video-workflow { scroll-margin-top: 100px; }

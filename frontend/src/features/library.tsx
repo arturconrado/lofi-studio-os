@@ -1,3 +1,4 @@
+import { WorkshopProjects } from './workshop-projects';
 import { useMemo, useState } from 'preact/hooks';
 import { post, uuid } from '../lib/api';
 import { attempt, toast } from '../lib/toast';
@@ -172,9 +173,12 @@ export function Library() {
   return (
     <>
       <div class="page-head">
-        <div class="grow"><h1>Biblioteca</h1><p class="muted">Cada produção com seu status único. Programas anteriores aparecem abaixo, sem alterações.</p></div>
-        <input class="input" style={{ maxWidth: '280px' }} placeholder="Buscar por título, ideia ou receita" value={q} onInput={e => setQ((e.target as HTMLInputElement).value)} />
+        <div class="grow"><h1>Biblioteca</h1><p class="muted">Encontre projetos, produções por receita e publicações do canal. Confira cada etapa antes de enviar ao YouTube.</p></div>
+        <input class="input" style={{ maxWidth: '280px' }} aria-label="Buscar produções por título, ideia ou receita" placeholder="Buscar por título, ideia ou receita" value={q} onInput={e => setQ((e.target as HTMLInputElement).value)} />
       </div>
+      {cid && <WorkshopProjects key={cid} cid={cid} />}
+      <h2>Produções por receita</h2>
+      <p class="faint">Os filtros abaixo se aplicam às produções por receita e aos programas anteriores.</p>
       <Segmented label="Filtro" value={group} onChange={setGroup} options={[
         { value: 'todos', label: 'Todos' }, { value: 'andamento', label: 'Em andamento' }, { value: 'revisar', label: 'Precisam de você' },
         { value: 'prontos', label: 'Prontos' }, { value: 'encerrados', label: 'Encerrados' }]} />

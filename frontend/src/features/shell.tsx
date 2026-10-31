@@ -5,18 +5,18 @@ import { channels, channel, selectChannel, inboxCount, settings, me } from '../l
 import { live } from '../lib/sse';
 import { post } from '../lib/api';
 import { usd } from '../lib/format';
-import { Toasts } from '../ds/ui';
+import { Dialog, Toasts } from '../ds/ui';
 import { IconHome, IconSpark, IconInbox, IconLibrary, IconLive, IconRecipe, IconChannel, IconSettings, IconPulse, IconCommand } from '../ds/icons';
 
 const MAIN = [
   { to: '/', label: 'Estúdio', icon: IconHome },
-  { to: '/produzir', label: 'Produzir', icon: IconSpark },
+  { to: '/criar-video', label: 'Criar vídeo', icon: IconSpark },
   { to: '/revisao', label: 'Revisão', icon: IconInbox, badge: true },
   { to: '/biblioteca', label: 'Biblioteca', icon: IconLibrary },
   { to: '/ao-vivo', label: 'Ao vivo', icon: IconLive },
 ];
 const SECONDARY = [
-  { to: '/criar-video', label: 'Criar vídeo', icon: IconSpark },
+  { to: '/produzir', label: 'Produzir por receita', icon: IconRecipe },
   { to: '/receitas', label: 'Receitas', icon: IconRecipe },
   { to: '/canais', label: 'Canais', icon: IconChannel },
   { to: '/ajustes', label: 'Ajustes', icon: IconSettings },
@@ -75,6 +75,8 @@ function Palette({ open, onClose }: { open: boolean; onClose: () => void }) {
 
 export function Shell({ children }: { children: ComponentChildren }) {
   const [palette, setPalette] = useState(false);
+  const [menu, setMenu] = useState(false);
+  useEffect(() => { setMenu(false); }, [path.value]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(p => !p); } };
     addEventListener('keydown', key); return () => removeEventListener('keydown', key);
@@ -86,7 +88,7 @@ export function Shell({ children }: { children: ComponentChildren }) {
       <nav class="rail" aria-label="Navegação principal">
         <div class="brand"><span class="brand-mark" />Lo-Fi Studio</div>
         {MAIN.map(m => <NavLink item={m} />)}
-        <div class="rail-sep" />
+        <div class="rail-sep" /><span class="nav-section">Canal e ferramentas</span>
         {SECONDARY.map(m => <NavLink item={m as any} />)}
         <div class="rail-foot">
           <a class="nav-item" href="/legacy" title="Portal anterior, mantido durante a transição"><span style={{ width: '18px' }} />Portal antigo</a>
@@ -94,6 +96,7 @@ export function Shell({ children }: { children: ComponentChildren }) {
       </nav>
       <div class="main">
         <header class="topbar">
+          <button class="btn ghost sm mobile-menu" onClick={() => setMenu(true)} aria-label="Abrir navegação completa">Menu</button>
           <label class="row tight">
             <span class="sr-only">Canal</span>
             <select class="select" style={{ width: 'auto', minHeight: '34px' }} value={channel.value?.id} onChange={e => selectChannel((e.target as HTMLSelectElement).value)}>
@@ -115,6 +118,13 @@ export function Shell({ children }: { children: ComponentChildren }) {
             {m.badge && inboxCount.value > 0 && <span class="nav-badge">{inboxCount.value}</span>}</a>
         ); })}
       </nav>
+      <Dialog open={menu} onClose={() => setMenu(false)} title="Navegação do estúdio">
+        <nav class="stack" aria-label="Todas as páginas" onClick={() => setMenu(false)}>
+          {[...MAIN, ...SECONDARY].map(m => <NavLink item={m} />)}
+          <a class="nav-item" href="/legacy">Portal antigo</a>
+        </nav>
+        <button class="btn" onClick={() => setMenu(false)}>Fechar menu</button>
+      </Dialog>
       <Palette open={palette} onClose={() => setPalette(false)} />
       <Toasts />
     </div>

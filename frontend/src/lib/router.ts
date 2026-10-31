@@ -22,6 +22,8 @@ export function onLink(e: MouseEvent) {
   if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || a.target) return;
   const url = new URL(a.href, location.origin);
   if (url.origin !== location.origin || !url.pathname.startsWith(BASE)) return;
+  // Let native anchors move within the current page without resetting its form.
+  if (url.hash && url.pathname === location.pathname && url.search === location.search) return;
   e.preventDefault(); navigate(strip(url.pathname) + url.search);
 }
 
