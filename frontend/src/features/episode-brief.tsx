@@ -37,7 +37,8 @@ function ThumbnailPanel({ base, revision }: { base: string; revision: number }) 
         {Object.entries(latest.small_urls || {}).map(([size, url]: any) => <figure style={{ margin: 0 }}><img src={url} alt={`Miniatura em ${size}`} /><figcaption class="faint">{size}</figcaption></figure>)}
       </div>}
       {latest.evaluation && <ul>{latest.evaluation.checks.map((c: any) => <li><Pill tone={c.state === 'pass' ? 'ok' : c.state === 'fail' ? 'bad' : 'warn'}>{c.state === 'pass' ? 'Ok' : c.state === 'fail' ? 'Falhou' : c.state === 'pending' ? 'Revisão humana' : c.state === 'uncertain' ? 'Inconclusivo' : 'Conferir'}</Pill> {c.label}: {c.evidence}</li>)}</ul>}
-      {latest.state === 'review_required' && <>
+      {['review_required', 'approved', 'rejected'].includes(latest.state) && <>
+        {latest.state === 'approved' && <p class="faint">Mudou o título ou o perfil do canal? Confira o conjunto e aprove novamente esta mesma arte. A publicação confere se a aprovação continua válida.</p>}
         <Check checked={checked} onChange={setChecked}>Conferi em 320×180 e 168×94, com o título e o vídeo</Check>
         {latest.evaluation?.needs_text_confirmation && <Check checked={textOk} onChange={setTextOk}>A leitura automática foi inconclusiva: confirmo que o texto está exatamente como no briefing</Check>}
         {latest.evaluation?.needs_language_confirmation && <Check checked={languageOk} onChange={setLanguageOk}>Conferi o idioma editorial ({latest.spec?.editorial_contract?.language}) e os nomes próprios na imagem real</Check>}
