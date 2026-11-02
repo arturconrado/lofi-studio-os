@@ -106,7 +106,7 @@ function ChangeCard({ c, selected, onSelect, onReload, base }: { c: Change; sele
     {!c.api_supported && <small class="faint">{c.manual_instructions}</small>}
     <div class="row">
       {open && draft !== c.suggested_value && <button class="btn secondary" onClick={save}>Salvar texto</button>}
-      {open && draft === c.suggested_value && c.state !== 'approved' && <button class="btn primary" onClick={() => decide('approve')}>Aprovar este texto</button>}
+      {open && draft === c.suggested_value && <button class="btn primary" onClick={() => decide('approve')}>Aprovar este texto</button>}
       {open && c.state !== 'rejected' && <button class="btn ghost" onClick={() => decide('reject')}>Rejeitar</button>}
       {c.state === 'approved' && c.api_supported && <Check checked={selected} onChange={onSelect}>Incluir na publicação</Check>}
       {((c.state === 'approved' && !c.api_supported) || ['applying', 'unverified', 'failed', 'conflict', 'verified'].includes(c.state)) && <button class="btn secondary" onClick={verify}>Reler no YouTube</button>}

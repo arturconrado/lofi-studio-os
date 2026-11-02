@@ -11,7 +11,7 @@ const OPENING = { first_track_experience: '', ambience_entry: 'with_music', ambi
 const THUMB = { text_policy: '', message: '', language: '', hierarchy: '', title_relation: '' };
 const OBS: Record<string, string> = { metadata: 'metadados', image: 'imagem', human_listening: 'ouvida', human_viewing: 'assistida', media_analysis: 'análise de mídia' };
 
-function ThumbnailPanel({ base, revision }: { base: string; revision: number }) {
+function ThumbnailPanel({ base, revision, language }: { base: string; revision: number; language?: string }) {
   const list = useResource<any>(`${base}/thumbnails`, [], [base]);
   const [quote, setQuote] = useState<any>(null);
   const [confirm, setConfirm] = useState(false);
@@ -41,7 +41,7 @@ function ThumbnailPanel({ base, revision }: { base: string; revision: number }) 
         {latest.state === 'approved' && <p class="faint">Mudou o título ou o perfil do canal? Confira o conjunto e aprove novamente esta mesma arte. A publicação confere se a aprovação continua válida.</p>}
         <Check checked={checked} onChange={setChecked}>Conferi em 320×180 e 168×94, com o título e o vídeo</Check>
         {latest.evaluation?.needs_text_confirmation && <Check checked={textOk} onChange={setTextOk}>A leitura automática foi inconclusiva: confirmo que o texto está exatamente como no briefing</Check>}
-        {latest.evaluation?.needs_language_confirmation && <Check checked={languageOk} onChange={setLanguageOk}>Conferi o idioma editorial ({latest.spec?.editorial_contract?.language}) e os nomes próprios na imagem real</Check>}
+        {latest.evaluation?.needs_language_confirmation && <Check checked={languageOk} onChange={setLanguageOk}>Conferi o idioma editorial ({language || latest.spec?.editorial_contract?.language}) e os nomes próprios na imagem real</Check>}
         <Field label="O que foi conferido"><textarea class="textarea" rows={2} value={note} onInput={e => setNote((e.target as HTMLTextAreaElement).value)} /></Field>
         <div class="row"><button class="btn primary" onClick={() => review(true)}>Aprovar miniatura</button><button class="btn ghost" onClick={() => review(false)}>Reprovar</button></div></>}
     </div>}
@@ -132,7 +132,7 @@ export function EpisodeBriefPanel({ projectId, channelId, renders, revision = 1 
       <Field label="Relação com o título"><input class="input" value={data.thumbnail.title_relation} onInput={e => setIn('thumbnail', 'title_relation', (e.target as HTMLInputElement).value)} /></Field>
     </div>}
     <button class="btn primary" style={{ alignSelf: 'flex-start' }} onClick={save}>Salvar briefing</button>
-    {saved.data?.brief?.data?.thumbnail && <ThumbnailPanel base={base} revision={revision} />}
+    {saved.data?.brief?.data?.thumbnail && <ThumbnailPanel base={base} revision={revision} language={saved.data?.editorial_contract?.language} />}
     {render && saved.data?.brief?.data?.opening && <div class="card flat stack" aria-label="Revisão da abertura">
       <h3>Revisão da abertura do vídeo montado</h3>
       {opening?.windows ? <ul>{opening.windows.map((w: any) => <li>Primeiros {w.seconds} s: {w.silent_seconds} s de silêncio, maior variação em 1 s {w.max_one_second_change_lu} LU{w.review_cues.length ? ` — conferir: ${w.review_cues.join(', ')}` : ''}</li>)}
