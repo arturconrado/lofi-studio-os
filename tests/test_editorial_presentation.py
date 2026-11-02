@@ -8,7 +8,7 @@ from studio import thumbnails
 from test_editorial import TEXT,PT
 
 POLICY=contract()
-PROPOSAL={'title':'Lo-fi music for coding | Rainy Bookshop','description':TEXT.replace('one hour of','a session of')+' '+TEXT.replace('one hour of','a session of')+'\n\nGrab a coffee and make this little corner your workspace while you work on your next project.',
+PROPOSAL={'title':'Lo-fi music for coding | Rainy Bookshop','description':'Find your flow for coding, studying, and getting things done. Settle into a cozy autumn bookshop, with warm lamplight, a cup of coffee, and rain at the window. Let this little corner keep you company while you work through your next project.\n\nPut on your headphones and take one task at a time, whether you are debugging a tricky issue, writing your next feature, or catching up on your studies. What language are you coding in today? Share what you are building, and subscribe for more cozy coding and study sessions.',
           'thumbnail':{'text_policy':'short_text','message':'RAINY BOOKSHOP','language':'','hierarchy':'Rainy window, coder and a compact readable label',
                        'title_relation':'The setting complements the coding purpose in the title.'},
           'presentation_rationale':'The rainy bookshop setting makes the episode recognizable while the title states the intended activity.'}
