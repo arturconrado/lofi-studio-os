@@ -9,7 +9,7 @@ import pytest
 @pytest.mark.parametrize('output,code,success', [('TABLE DATA public.example\n'*50000,0,True),('corrupt archive\n',0,False),('TABLE DATA public.example\n',1,False)], ids=['complete-list','missing-data','restore-error'])
 def test_backup_listing_consumes_all_output_and_checks_restore_exit(tmp_path,output,code,success):
     script=Path('ops/auto-deploy.sh').read_text()
-    check=script[script.index('listing="$dump.list"'):script.index("printf 'FROM")]
+    check=script[script.index('listing="$dump.list"'):script.index('# 4b.')]
     archive=tmp_path/'backup.dump';archive.write_bytes(b'fixture')
     listing=tmp_path/'restore-output.txt';listing.write_text(output)
     env={**os.environ,'TEST_DUMP':str(archive),'TEST_LISTING':str(listing),'TEST_EXIT':str(code)}
@@ -98,3 +98,70 @@ docker() {
     result=subprocess.run(['bash','-c',stub+rollback+'\nrollback'],env=env,capture_output=True,text=True)
     assert (result.returncode==0) is success
     assert current.read_text()==previous.read_text()
+
+
+@pytest.mark.parametrize('mode,revision,requirements,expected', [
+    ('', 'correct', 'different', 3),
+    ('', 'correct', 'same', 0),
+    ('full', 'correct', 'same', 0),
+    ('full', 'wrong', 'same', 3),
+    ('full', 'correct', 'different', 3),
+    ('wrong-name', 'correct', 'same', 3),
+])
+def test_full_image_requires_matching_revision_and_requirements(tmp_path,mode,revision,requirements,expected):
+    script=Path('ops/auto-deploy.sh').read_text()
+    gate=script[script.index('full_image=${'):script.index('# Transmitter code')]
+    (tmp_path/'requirements.txt').write_text('verified requirements\n')
+    stub='''set -euo pipefail
+fail() { exit "$2"; }
+FULL_SHA=0123456789012345678901234567890123456789
+SHA=0123456
+current=previous-image
+R="$TEST_RELEASE"
+docker() {
+  if [ "$1" = inspect ]; then
+    if [ "$TEST_REVISION" = correct ]; then echo "$FULL_SHA"; else echo other; fi
+  else
+    [ "$5" = "$TEST_EXPECTED_IMAGE" ] || return 2
+    if [ "$TEST_REQUIREMENTS" = same ]; then cat "$R/requirements.txt"; else echo different; fi
+  fi
+}
+'''
+    image={'full':'lofi-studio-os:full-0123456','wrong-name':'unrelated-image','':''}[mode]
+    env={**os.environ,'LOFI_PREBUILT_IMAGE':image,'TEST_RELEASE':str(tmp_path),
+         'TEST_REVISION':revision,'TEST_REQUIREMENTS':requirements,
+         'TEST_EXPECTED_IMAGE':image or 'previous-image'}
+    result=subprocess.run(['bash','-c',stub+gate],env=env,capture_output=True,text=True)
+    assert result.returncode==expected, result.stderr
+
+
+def test_full_deploy_builds_before_protected_activation():
+    workflow=Path('.github/workflows/deploy-full.yml').read_text()
+    build,deploy=workflow.split('  deploy:\n',1)
+    assert 'environment:' not in build
+    assert 'environment: production-bootstrap' in deploy
+    assert 'needs: build' in deploy
+    assert "github.ref == 'refs/heads/main'" in build
+    assert 'event=push' in build and '$COMMIT success' in build
+    assert 'docker build --build-arg "SOURCE_SHA=$sha"' in build
+    assert 'python -m pip check' in build
+    assert 'import langid,studio.api' in build
+    assert 'actions/upload-artifact@v4' in build
+    assert 'actions/download-artifact@v4' in deploy
+    assert 'git/ref/heads/main' in deploy and 'sha256sum -c SHA256SUMS' in deploy
+    assert 'LOFI_PREBUILT_IMAGE=' in deploy and 'bash ops/auto-deploy.sh < release.tar' in deploy
+    assert 'VPS_BOOTSTRAP_KEY' in deploy
+    assert 'docker compose' not in deploy  # Activation stays in the shared rollback-protected script.
+
+
+def test_full_deploy_preflight_exits_before_image_or_service_changes():
+    script=Path('ops/auto-deploy.sh').read_text()
+    gate=script[script.index("busy=$(sql <<'EOF'"):script.index('\ncurrent=')]
+    stub='''set -euo pipefail
+sql() { cat >/dev/null; echo 0; }
+say() { :; }
+fail() { exit "$2"; }
+'''
+    env={**os.environ,'LOFI_DEPLOY_PREFLIGHT':'1'}
+    result=subprocess.run(['bash','-c',stub+gate+'\nexit 99'],env=env,capture_output=True,text=True)
+    assert result.returncode==0

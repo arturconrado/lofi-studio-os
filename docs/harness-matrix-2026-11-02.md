@@ -153,3 +153,10 @@ Validação deste complemento: `tests/test_delivery.py` (10 testes com FFmpeg re
 | Orquestração | **Atualizado** | Novo agente `thumbnail_designer` e etapa no plano. |
 
 Limites declarados: o áudio gerado pelo Veo pode conter música ou fala apesar da direção, e só a escuta descarta isso (revisão obrigatória registrada). A ambiência gerada vem de um clipe de 4 a 8 s em loop, e a repetição precisa ser ouvida. O preço do vídeo com áudio vem do SKU publicado; nenhum valor é estimado.
+
+## Implantação da entrega editorial — build completo
+
+- Implementado: `deploy-full.yml` constrói a imagem completa do Dockerfile e guarda artifact antes da aprovação do ambiente protegido. O deploy verifica CI do commit, atualização da main, checksums, ocupação e espaço.
+- `ops/auto-deploy.sh` reaproveita backup, ativação, saúde e rollback para imagem previamente construída. Valida label/requirements; o caminho incremental segue bloqueando mudanças de dependência. Chave restrita e políticas de aprovação preservadas.
+- Validado: testes de gates e workflow em `tests/test_workshop_deploy.py`, actionlint, shellcheck e suíte do PR.
+- Implantado: aguarda a execução protegida; evidências e resultado no PR/Notion. Nenhuma geração paga é parte desta entrega.

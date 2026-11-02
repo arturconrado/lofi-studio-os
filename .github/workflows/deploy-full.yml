@@ -1,0 +1,141 @@
+name: Full production deploy
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Build and deploy the complete main image
+        type: choice
+        options: ['NO', BUILD_AND_DEPLOY]
+        default: 'NO'
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' && inputs.confirm == 'BUILD_AND_DEPLOY'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Require successful main checks for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/checks.yml/runs?head_sha=$COMMIT&event=push" \
+            --jq '.workflow_runs[0] | .head_sha + " " + .conclusion' > /tmp/check-result
+          test "$(cat /tmp/check-result)" = "$COMMIT success"
+          bash -n ops/auto-deploy.sh
+      - name: Build and verify complete image
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          image="lofi-studio-os:full-${sha:0:7}"
+          # Match the deployed requirements bytes expected by the incremental workflow.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('requirements.txt')
+          p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
+          PY
+          docker build --build-arg "SOURCE_SHA=$sha" -t "$image" .
+          docker run --rm "$image" python -m pip check
+          docker run --rm "$image" python -c 'import langid,studio.api,studio.exports,studio.creator_service,studio.youtube_publish'
+          docker image save "$image" | gzip -1 > release-image.tar.gz
+          bundle=$(mktemp -d)
+          git archive HEAD studio web | tar -x -C "$bundle"
+          cp requirements.txt "$bundle/requirements.txt"
+          tar -C "$bundle" -cf release.tar studio web requirements.txt
+          sha256sum release-image.tar.gz release.tar ops/auto-deploy.sh > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: full-production-release-${{ github.sha }}
+          retention-days: 3
+          path: |
+            release-image.tar.gz
+            release.tar
+            SHA256SUMS
+            ops/auto-deploy.sh
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production-bootstrap
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: full-production-release-${{ github.sha }}
+      - name: Reject an outdated release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$COMMIT"
+          sha256sum -c SHA256SUMS
+      - name: Configure protected deployment access
+        env:
+          KEY: ${{ secrets.VPS_BOOTSTRAP_KEY }}
+          KNOWN: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$KEY" && test -n "$KNOWN"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/full-deploy
+          chmod 600 ~/.ssh/full-deploy
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+      - name: Load verified image and deploy through existing gates
+        env:
+          HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          test -n "$HOST"
+          remote_dir=$(ssh -i ~/.ssh/full-deploy -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" \
+            'umask 077; mktemp -d /root/.lofi-full-deploy.XXXXXXXX')
+          [[ "$remote_dir" =~ ^/root/\.lofi-full-deploy\.[A-Za-z0-9]+$ ]]
+          ssh -i ~/.ssh/full-deploy -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" "mkdir '$remote_dir/ops'"
+          scp -i ~/.ssh/full-deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            ops/auto-deploy.sh "root@$HOST:$remote_dir/ops/"
+          required_bytes=$(( $(gzip -dc release-image.tar.gz | wc -c) + $(wc -c < release-image.tar.gz) + $(wc -c < release.tar) + 1073741824 ))
+          ssh -i ~/.ssh/full-deploy -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" \
+            "RELEASE_DIR='$remote_dir' RELEASE_SHA='$sha' REQUIRED_BYTES='$required_bytes' bash -s" <<'PREFLIGHT'
+          set -euo pipefail
+          [[ "$RELEASE_DIR" =~ ^/root/\.lofi-full-deploy\.[A-Za-z0-9]+$ ]]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ && "$REQUIRED_BYTES" =~ ^[0-9]+$ ]]
+          LOFI_DEPLOY_PREFLIGHT=1 SSH_ORIGINAL_COMMAND="deploy $RELEASE_SHA" bash "$RELEASE_DIR/ops/auto-deploy.sh"
+          docker_root=$(docker info --format '{{.DockerRootDir}}')
+          for path in /root "$docker_root"; do
+            available=$(df -PB1 "$path" | awk 'NR==2 {print $4}')
+            [ "$available" -ge "$REQUIRED_BYTES" ] || { echo 'Espaço insuficiente para imagem e recuperação; nenhuma troca realizada.'; exit 1; }
+          done
+          PREFLIGHT
+          scp -i ~/.ssh/full-deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            release-image.tar.gz release.tar SHA256SUMS "root@$HOST:$remote_dir/"
+          ssh -i ~/.ssh/full-deploy -o BatchMode=yes -o StrictHostKeyChecking=yes "root@$HOST" \
+            "RELEASE_DIR='$remote_dir' RELEASE_SHA='$sha' bash -s" <<'REMOTE'
+          set -euo pipefail
+          [[ "$RELEASE_DIR" =~ ^/root/\.lofi-full-deploy\.[A-Za-z0-9]+$ ]]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          cd "$RELEASE_DIR"
+          sha256sum -c SHA256SUMS
+          gzip -dc release-image.tar.gz | docker image load
+          export LOFI_PREBUILT_IMAGE="lofi-studio-os:full-${RELEASE_SHA:0:7}"
+          export SSH_ORIGINAL_COMMAND="deploy $RELEASE_SHA"
+          bash ops/auto-deploy.sh < release.tar
+          # The deploy record and rollback materials remain under the existing release root.
+          rm -f release-image.tar.gz release.tar SHA256SUMS ops/auto-deploy.sh
+          rmdir ops
+          cd /
+          rmdir "$RELEASE_DIR"
+          REMOTE
