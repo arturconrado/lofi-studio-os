@@ -1,0 +1,74 @@
+{
+  "name": "Piano e Natureza (pt-BR)",
+  "data": {
+    "version": 1,
+    "music": {
+      "style_id": "custom",
+      "bible": "Original solo and lightly layered ambient piano with soft field-recording textures (water, wind, distant birds) mixed far below the piano. Slow harmonic rhythm, open voicings, long sustain pedal, no drums.",
+      "bpm_range": [50, 66],
+      "instruments": ["felt piano", "soft string pad", "distant nature ambience"],
+      "moods": ["amanhecer na mata", "rio tranquilo", "chuva fina na serra"],
+      "keys": ["D major", "B minor", "G major"],
+      "avoid": ["hip-hop drums", "vinyl crackle", "jazz chords", "vocals"],
+      "crossfade_seconds": 3,
+      "ambient_bed": "none",
+      "ambient_gain_db": -26
+    },
+    "visual": {
+      "variant": "canonical_illustrated",
+      "reference_pilot_ids": [],
+      "reference_asset_sha256": [],
+      "allowed_scenarios": [],
+      "default_scenario": "greenhouse_rain_study",
+      "shirt_color": "green",
+      "weather": "scene_default",
+      "time_of_day": "scene_default",
+      "image_prompt_suffix": "Soft naturalistic painted landscape of Brazilian nature, 16:9, no people, no animals in focus, no text or watermark."
+    },
+    "cadence": {
+      "preset": "custom_markers",
+      "markers": [{"minute": 30, "sequence": "window_glance"}],
+      "occasional_variations": false,
+      "contextual_actions": []
+    },
+    "copy": {
+      "style_title": "Piano e Natureza",
+      "title_template": "{idea} | Piano e Natureza",
+      "description_template": "Piano ambiente original com sons suaves da natureza para relaxar, ler ou desacelerar.\n\n{idea}\n\n{hashtags}",
+      "live_title_template": "Piano e Natureza ao vivo · {scene_title}",
+      "alt_title_templates": [],
+      "hashtags": ["#pianorelaxante", "#natureza", "#musicaparaestudar"],
+      "keywords": ["piano relaxante", "sons da natureza"]
+    },
+    "cost": {"default_ceiling_usd_per_hour": 3},
+    "profile": {
+      "version": 1,
+      "niche": "Piano e Natureza",
+      "audience": "Pessoas no Brasil que querem desacelerar, ler ou estudar com som calmo e sem palavras",
+      "language": "pt-BR",
+      "consumption_intent": "Fundo sonoro longo para relaxar, ler e estudar",
+      "editorial_promise": "Piano ambiente original com paisagens brasileiras pintadas, sem personagens e sem interrupções",
+      "formats": ["long_form_16_9", "short_9_16"],
+      "audio": {
+        "genre_identity": "ambient piano",
+        "vocals": "forbidden",
+        "character": "slow contemplative",
+        "dynamics": "Keep a soft, even level with gradual swells only; no percussion hits or sudden changes.",
+        "loudness_target_lufs": -18
+      },
+      "visual": {
+        "cast": "no_characters",
+        "camera": "locked",
+        "pacing": "slow contemplative",
+        "style_language": "Soft naturalistic painted landscapes of Brazilian forests, rivers and coastline in gentle light."
+      },
+      "metadata": {"language": "pt-BR", "phrase_first": false, "description_min_chars": 300},
+      "quality": [
+        {"id": "no_percussion", "label": "Nenhuma percussão perceptível no programa final", "kind": "perceptual", "gate": "review", "source": "Promessa editorial do perfil"},
+        {"id": "loudness_target", "label": "Loudness integrado do programa final perto de -18 LUFS", "kind": "objective", "gate": "blocking", "source": "audio.loudness_target_lufs"},
+        {"id": "no_people_in_frame", "label": "Nenhuma pessoa ou personagem em quadro", "kind": "perceptual", "gate": "review", "source": "visual.cast"}
+      ],
+      "creativity_limits": ["Sem pessoas reais ou personagens", "Sem marcas, logotipos ou texto na imagem"]
+    }
+  }
+}

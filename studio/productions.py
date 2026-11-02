@@ -148,6 +148,7 @@ def plan_quote(c,body):
     from .recipes import for_channel,RecipeData,spec_from
     from .production_harness import compile_spec,production_spec_hash
     from .scene_profiles import SCENES
+    from .niche_profiles import legacy_lofi_only
     if body.hours not in (1,2,4,8):raise HTTPException(422,'Escolha 1, 2, 4 ou 8 horas')
     profile(c,body.channel_id)
     row=for_channel(c,body.channel_id,body.recipe_id)
@@ -174,11 +175,13 @@ def plan_quote(c,body):
             'remaining_usd':float(max(remaining,Decimal(0))),'paid_enabled':bool(runtime.settings(c)['enabled']),
             'copy':copy_for(data,scenario,body.hours,body.idea),'visual':visual,'generation_started':False,
             'whole_episode_export_available':body.hours==1,
-            'episode_export_blocker':None if body.hours==1 else 'O montador ainda não reúne os blocos em um único MP4 de 4h/8h para revisão.'},row,data,spec,reference
+            'episode_export_blocker':None if body.hours==1 else 'O montador ainda não reúne os blocos em um único MP4 de 4h/8h para revisão.',
+            'profile_blocker':legacy_lofi_only(row['data'])},row,data,spec,reference
 
 
 def generation_blockers(out):
     visual=out['visual'];blockers=[]
+    if out.get('profile_blocker'):blockers.append(out['profile_blocker']+' Nenhum custo foi reservado.')
     if not out['whole_episode_export_available']:blockers.append(out['episode_export_blocker']+' Nenhum custo foi reservado.')
     if not visual.get('renderer_ready'):blockers.append(visual.get('renderer_blocker','Compositor temporal indisponível.')+' Nenhum custo foi reservado.')
     if visual['planned'] and not visual['applied']:

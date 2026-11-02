@@ -1410,7 +1410,7 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
     ready()
     with db() as c:
         row=project(c,pid);draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
-        if draft.recipe_id: project_recipe(c,row,draft)
+        if draft.recipe_id: project_recipe(c,row,draft,True)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'Gere diretamente o vídeo da inserção')
         identity=identity_profile_for_channel(c,row['channel_id'])
@@ -1447,7 +1447,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 raise HTTPException(409,'Pedido já usado para outro trecho ou versão')
             return public_task(old)
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid)
-        if draft.recipe_id: project_recipe(c,row,draft)
+        if draft.recipe_id: project_recipe(c,row,draft,True)
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         if kind=='image' and clip.id!=draft.base.id: raise HTTPException(409,'A imagem inicial é aprovada uma vez na base; gere o vídeo da inserção')
         identity=identity_profile_for_channel(c,row['channel_id'])
@@ -1476,9 +1476,11 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
             return public_task(old)
         if row['revision']!=body.revision: raise HTTPException(409,'Salve e confira a versão atual')
         draft=Draft.model_validate(row['data']);clip=get_clip(draft,cid);media=assets(c,pid)
-        if draft.recipe_id: project_recipe(c,row,draft)
+        recipe_item=project_recipe(c,row,draft,True) if draft.recipe_id else None
         if not clip: raise HTTPException(404,'Trecho não encontrado')
         identity=identity_profile_for_channel(c,row['channel_id'])
+        from .orchestration import resolved_direction,remember
+        direction=resolved_direction(c,row,draft,recipe_item,identity);remember(c,row,direction)  # shared by every agent of this project
         identity_asset=None
         if identity:
             bind_identity_reference(c,pid,identity)
@@ -1591,11 +1593,12 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 'variant_key':group['key'] if group else None,'requested_variant_key':body.variant_key,
                 'occurrence_ids':group['event_ids'] if group else [],'batch_ids':[str(t) for t in tids],
                 'signature':signature(draft,effective,kind,image['sha256'] if kind=='video' else None),
-                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None,identity_prompt,{'research':editorial_evidence,'human_reviews':channel_reviews(c,row['channel_id'])} if kind=='video' else editorial_evidence),'seconds':clip.seconds,
+                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None,identity_prompt,{'research':editorial_evidence,'human_reviews':channel_reviews(c,row['channel_id'])} if kind=='video' else editorial_evidence,recipe_item['data'] if recipe_item else None),'seconds':clip.seconds,
                 'editorial_memory':editorial_memory,
                 'resolution':body.resolution,
                 'visual_signature':signature(draft,clip,'image'),'source_image_id':str(effective.image_id) if effective.image_id else None,
                 'identity_profile':identity['id'] if identity else None,
+                'direction_sha256':direction['sha256'],
                 'identity_reference_sha256':identity['sha256'] if identity and kind=='image' else None,
                 'identity_reference_sha256s':identity_reference_hashes(identity),
                 'reference_roles':([{'index':i,'role':'canonical_character_identity' if i==0 else 'channel_character_identity_reference',
@@ -1984,10 +1987,18 @@ def recipe_visual_direction(data):
     variant = data['visual']['variant']
     if variant in ('pixel_art_original','pixel_art_reviewed'):
         return 'Original pixel art with crisp pixel clusters, limited palette and consistent pixel scale. Preserve this channel’s own approved characters; no photorealistic or painterly conversion.'
+    profile = data.get('profile')
+    if profile:
+        # Profiled recipes describe their own visual language; no inherited cast or illustration style.
+        language = profile['visual'].get('style_language') or 'Original visual language defined by this channel.'
+        cast = {'no_characters':'No characters; keep people and animals out of frame.',
+                'channel_defined':'Preserve this channel’s own approved subjects.',
+                'canonical_characters':'Preserve this channel’s own approved characters.'}[profile['visual']['cast']]
+        return f'{language} {cast}'
     return 'Original illustrated scene, consistent illustration technique and palette. Preserve this channel’s own approved characters.'
 
 
-def project_recipe(c, row, draft):
+def project_recipe(c, row, draft, generating=False):
     """Resolve the immutable, channel-authorized recipe; never accept client recipe data."""
     from .recipes import ready as recipes_ready, usable
     recipes_ready()
@@ -2001,6 +2012,9 @@ def project_recipe(c, row, draft):
         raise HTTPException(409, 'Esta receita não está autorizada para o canal.')
     if recipe_visual_direction(item['data']) != draft.recipe_visual_direction:
         raise HTTPException(409, 'A direção visual não corresponde à receita registrada.')
+    if generating:
+        from .niche_profiles import require_generation_capabilities
+        require_generation_capabilities(item['data'])
     return item
 
 
@@ -2052,7 +2066,7 @@ def start_channel_project(cid: uuid.UUID, body: Starter):
 def music_template(c, row, draft):
     """Use a pinned recipe for new projects, or preserve the legacy style source."""
     if draft.recipe_id:
-        recipe=project_recipe(c,row,draft)
+        recipe=project_recipe(c,row,draft,True)
         plan={'recipe':recipe['data'],'title':draft.name,'theme':draft.theme,
               'creative_theme':draft.theme,'music_brief':draft.music_brief,
               'template_source':'channel_recipe','recipe_id':str(recipe['id']),

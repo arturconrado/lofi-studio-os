@@ -31,6 +31,74 @@ const TEMPLATE_VARS = ['scene_title', 'hours', 'hours_label', 'style_title', 'id
 const SCENE_TITLES: Record<string, string> = { city_sunset: 'City Sunset Window', mountain_stars: 'Mountain Stars Window', balcony_dawn: 'Balcony Dawn',
   snowy_night_studio: 'Snowy Night Studio', greenhouse_rain_study: 'Greenhouse Rain Study', autumn_bookshop: 'Autumn Bookshop' };
 
+const NEW_PROFILE = { version: 1, niche: '', audience: '', language: 'pt-BR', consumption_intent: '', editorial_promise: '', formats: ['long_form_16_9'],
+  audio: { genre_identity: '', vocals: 'forbidden', character: 'restrained', dynamics: 'Avoid sudden loudness changes or attention-grabbing effects.', loudness_target_lufs: null },
+  visual: { cast: 'channel_defined', camera: 'locked', pacing: 'calm', style_language: '' },
+  metadata: { language: 'pt-BR', phrase_first: false, description_min_chars: 0 }, quality: [], creativity_limits: [] };
+const FORMATS: [string, string][] = [['long_form_16_9', 'Vídeo longo 16:9'], ['short_9_16', 'Short 9:16'], ['square_1_1', 'Quadrado 1:1']];
+
+/* Niche profile stored inside the recipe revision; absent = historical LoFi Vibe Coding behaviour. */
+function NicheProfileEditor({ data, setData, report }: { data: any; setData: (f: (d: any) => any) => void; report?: any }) {
+  const p = data.profile;
+  const setP = (path: string[], value: unknown) => setData((d: any) => {
+    const next = structuredClone(d.profile); let at = next;
+    for (const k of path.slice(0, -1)) at = at[k];
+    at[path[path.length - 1]] = value;
+    if (path[0] === 'language') next.metadata.language = value;
+    return { ...d, profile: next };
+  });
+  const text = (label: string, path: string[], hint?: string, max = 300) => <Field label={label} hint={hint}>
+    <input class="input" maxLength={max} value={path.reduce((o: any, k) => o?.[k], p) ?? ''} onInput={e => setP(path, (e.target as HTMLInputElement).value)} /></Field>;
+  return <section class="card stack" aria-labelledby="niche-profile">
+    <h3 id="niche-profile">Perfil do canal (nicho)</h3>
+    <Check checked={!!p} onChange={x => setData((d: any) => ({ ...d, profile: x ? structuredClone(NEW_PROFILE) : null }))}>Definir um perfil de nicho próprio para esta receita</Check>
+    {!p && <p class="faint">Sem perfil, a receita mantém o comportamento histórico do LoFi Vibe Coding: lo-fi instrumental em inglês, elenco canônico (garota e gato), câmera travada e regras editoriais atuais. Use um perfil para qualquer outro nicho.</p>}
+    {p && <>
+      <div class="grid cols-2">
+        {text('Nicho', ['niche'], undefined, 120)}{text('Público', ['audience'])}
+        {text('Idioma (ex.: pt-BR, en)', ['language'], 'Também define o idioma dos metadados', 5)}{text('Intenção de consumo', ['consumption_intent'], undefined, 200)}
+      </div>
+      {text('Promessa editorial', ['editorial_promise'], undefined, 400)}
+      <Field label="Formatos"><div class="chips">{FORMATS.map(([id, label]) => <button type="button" class="chip" aria-pressed={p.formats.includes(id)}
+        onClick={() => setP(['formats'], p.formats.includes(id) ? p.formats.filter((x: string) => x !== id) : [...p.formats, id])}>{label}</button>)}</div></Field>
+      <h4>Áudio</h4>
+      <div class="grid cols-2">
+        {text('Identidade de gênero', ['audio', 'genre_identity'], 'Ex.: ambient piano, synthwave, MPB acústica', 120)}
+        <Field label="Voz"><select class="select" value={p.audio.vocals} onChange={e => setP(['audio', 'vocals'], (e.target as HTMLSelectElement).value)}>
+          <option value="forbidden">Sem voz</option><option value="allowed">Voz permitida</option><option value="narration">Narração (não disponível no estúdio)</option></select></Field>
+        {text('Caráter', ['audio', 'character'], 'Ex.: contemplativo, energético', 160)}
+        <Field label="Loudness alvo (LUFS, opcional)" hint="Registrado; o gate de mixagem final usa a partir da etapa 3"><input class="input" type="number" min={-30} max={-8} step={0.5} value={p.audio.loudness_target_lufs ?? ''} onInput={e => { const v = (e.target as HTMLInputElement).value; setP(['audio', 'loudness_target_lufs'], v === '' ? null : Number(v)); }} /></Field>
+      </div>
+      {text('Dinâmica', ['audio', 'dynamics'])}
+      <h4>Visual</h4>
+      <div class="grid cols-3">
+        <Field label="Elenco"><select class="select" value={p.visual.cast} onChange={e => setP(['visual', 'cast'], (e.target as HTMLSelectElement).value)}>
+          <option value="channel_defined">Definido pelo canal</option><option value="no_characters">Sem personagens</option><option value="canonical_characters">Elenco canônico LoFi</option></select></Field>
+        <Field label="Câmera"><select class="select" value={p.visual.camera} onChange={e => setP(['visual', 'camera'], (e.target as HTMLSelectElement).value)}>
+          <option value="locked">Travada</option><option value="free">Movimento permitido</option></select></Field>
+        {text('Ritmo', ['visual', 'pacing'], undefined, 120)}
+      </div>
+      {text('Linguagem visual', ['visual', 'style_language'], 'Substitui a ilustração padrão nos pedidos de imagem e vídeo')}
+      <h4>Metadados</h4>
+      {text('Tom editorial', ['metadata', 'tone'], 'Ex.: acolhedor, específico ao cenário e à rotina do público', 600)}
+      <Field label="Exemplos editoriais aprovados" hint="Preferências deste canal, não provas de desempenho"><ChipsInput value={p.metadata.approved_examples || []} onChange={x => setP(['metadata', 'approved_examples'], x)} /></Field>
+      <Field label="Exemplos editoriais rejeitados"><ChipsInput value={p.metadata.rejected_examples || []} onChange={x => setP(['metadata', 'rejected_examples'], x)} /></Field>
+      <Field label="Nomes próprios preservados no idioma original"><ChipsInput value={p.metadata.proper_names || []} onChange={x => setP(['metadata', 'proper_names'], x)} /></Field>
+      <p class="faint">O idioma deste perfil vale para títulos, descrições, capítulos e texto das miniaturas. O idioma da conversa não o altera. Confira nomes próprios e textos curtos na revisão humana.</p>
+      <div class="grid cols-2">
+        <Check checked={p.metadata.phrase_first} onChange={x => setP(['metadata', 'phrase_first'], x)}>Título começa pela frase principal</Check>
+        <Field label="Descrição mínima (caracteres)"><input class="input" type="number" min={0} max={5000} value={p.metadata.description_min_chars} onInput={e => setP(['metadata', 'description_min_chars'], Number((e.target as HTMLInputElement).value))} /></Field>
+      </div>
+      <Field label="Limites de criatividade"><ChipsInput value={p.creativity_limits} onChange={x => setP(['creativity_limits'], x)} placeholder="Ex.: sem pessoas reais" /></Field>
+    </>}
+    {report && <div class="stack" role="note">
+      <b>{report.source === 'recipe' ? 'Perfil próprio desta versão' : 'Perfil histórico LoFi Vibe Coding (padrão)'}</b>
+      {report.capability_blockers.map((b: any) => <div class={`notice ${b.blocks_generation ? 'bad' : 'warn'}`}>{b.blocks_generation ? 'Bloqueia geração: ' : 'Formato não executável ainda: '}{b.reason}</div>)}
+      <details><summary>Onde cada campo tem efeito</summary><ul>{Object.entries(report.enforcement).map(([k, v]) => <li><code class="mono">{k}</code> — {String(v)}</li>)}</ul></details>
+    </div>}
+  </section>;
+}
+
 function preview(template: string, data: any, idea = 'warm pixel snow') {
   const values: Record<string, string> = { scene_title: SCENE_TITLES[data.visual.default_scenario] || data.visual.default_scenario, hours: '1', hours_label: '1 Hour',
     style_title: data.copy.style_title, idea, mood: '', hashtags: (data.copy.hashtags || []).join(' ') };
@@ -88,6 +156,8 @@ export function RecipeEditor({ id }: { id?: string }) {
       </div>
       {error && <div class="notice bad">{error}</div>}
       <p class="faint" style={{ fontSize: '13px' }}>Versões são imutáveis: produções e aprovações ficam presas à versão usada. Salvar cria a próxima.</p>
+
+      <NicheProfileEditor data={data} setData={setData} report={(r as any)?.niche_profile} />
 
       <section class="card stack">
         <h3>Música</h3>

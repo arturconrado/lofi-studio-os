@@ -1,6 +1,7 @@
 """Build the exact, reproducible music-generation direction from an approved plan."""
 from .music_styles import requested_tempo
 from .production_harness import audio_prompt
+from .niche_profiles import music_identity_clause, music_theme_clause
 
 DEFAULT_MOODS = [
     'warm late-night calm', 'reflective rainy-window comfort',
@@ -23,7 +24,7 @@ def composition_request(plan_data, sequence):
     music = recipe.get('music') or {}
     brief = str(plan_data.get('music_brief') or '').strip()
     style = music.get('style_id', 'custom')
-    base = audio_prompt(style, brief, music or None)
+    base = audio_prompt(style, brief, music or None, recipe)
     low, high = music.get('bpm_range') or (66, 84)
     import re
     if music.get('bpm_range') and not re.search(r'\d{2,3}\s*bpm', brief, re.I):
@@ -43,27 +44,13 @@ def composition_request(plan_data, sequence):
     )
     if theme:
         direction.append('Production theme: ' + theme)
-        direction.append(
-            'Interpret the theme musically with a few recognizable, original instrumental colors and motifs '
-            'that fit its mood. Keep those elements as tasteful arrangement variations inside the channel’s '
-            'established lo-fi identity; do not turn the track into a different genre or use vocals, '
-            'samples, or copied melodies. If the user explicitly requests a sound effect, interpret it as '
-            'an original, quiet, sparse nonverbal texture; otherwise use no literal sound effects. '
-            'Adapt the instrumentation to each theme rather '
-            'than applying one fixed seasonal arrangement. When the theme is Halloween and the channel '
-            'style is jazz lo-fi, use a restrained gothic-organ motif. Christmas can use delicate bells, '
-            'Carnival can use restrained Brazilian percussion, and sports celebrations can use a subtle '
-            'brass or drumline motif. These are examples, not presets: infer fitting instrumentation from '
-            'the current theme, including when the theme is described in another language.'
-        )
+        direction.append(music_theme_clause(recipe))
     direction.extend([
         f'Composition title: {title}. Tempo: {bpm} BPM.',
         f'New original composition {sequence}, distinct from the previous radio batch: '
         f'create a new melody and progression in {keys[(sequence - 1) % len(keys)]}, '
         f'mood {moods[(sequence - 1) % len(moods)]}. Do not reuse an existing song. '
-        'Preserve the restrained cozy identity and the requested style. Balance recognizable '
-        'thematic returns with small harmonic surprises and gentle resolutions; never use '
-        'sudden loudness changes or attention-grabbing effects. These are musical design '
+        + music_identity_clause(recipe) + ' These are musical design '
         'intentions, not claims of neurological treatment. Complete around 120 seconds with '
         'a natural ending.'
     ])
