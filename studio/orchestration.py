@@ -63,8 +63,9 @@ def resolved_direction(c,row,draft,recipe=None,identity=None):
     from .episode_brief import latest_data,capability_blockers as brief_blockers
     episode=latest_data(c,row['id'])
     profile=resolve((recipe or {}).get('data'))
-    from .editorial import contract
-    editorial=contract((recipe or {}).get('data'))
+    from .editorial import for_channel as editorial_for_channel
+    # Production may retain its pinned recipe; public copy follows the current channel policy.
+    editorial=editorial_for_channel(c,row['channel_id'])
     brief={'theme':draft.theme,'scene':draft.scene,'scene_motion':draft.scene_motion,'music_brief':draft.music_brief,
            'characters':[{'name':ch.name,'description':ch.description} for ch in draft.characters],
            'actions':[{'name':cl.name,'motion':cl.motion,'action_goal':cl.action_goal} for cl in draft.clips]}

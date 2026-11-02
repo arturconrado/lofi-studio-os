@@ -47,6 +47,20 @@ def test_correct_ocr_of_wrong_language_cannot_pass_the_thumbnail_gate():
     assert english['needs_language_confirmation'] and not english['blocking_failures']
 
 
+def test_direction_records_the_current_editorial_policy_even_with_a_pinned_production(monkeypatch):
+    from studio import editorial
+    from studio.orchestration import resolved_direction
+    from test_visual_workshop import fixture
+    draft,_=fixture()
+    current=POLICY|{'tone':'A newer channel voice'}
+    monkeypatch.setattr(editorial,'for_channel',lambda c,cid:current)
+    class Store:
+        def execute(self,*args):return self
+        def fetchone(self):return {'t':None}
+    direction=resolved_direction(Store(),{'id':uuid.uuid4(),'channel_id':uuid.uuid4()},draft)
+    assert direction['editorial']==current
+
+
 from test_authentication import client
 
 
