@@ -24,3 +24,19 @@ O job copia apenas ops/auto-deploy.sh para o host, confirma o hash esperado do a
 ## Limites após o bootstrap
 
 Um handshake bem-sucedido prova apenas que a rotina de deploy protocol 2 está instalada e acessível pelo comando SSH forçado. Ele não publica a main, não prova restore/rollback (TEST-27), não resolve tarefas remotas UNCERTAIN, não valida a matriz de permissões em runtime, nem conclui WP-00. O deploy normal permanece em workflow separado, com gates próprios de CI e de produção ocupada.
+
+## Build completo e deploy de dependências novas
+
+O proprietário autorizou o build completo e deploy dos PRs #106/#107. O workflow **Full production deploy** (`deploy-full.yml`) constrói o Dockerfile completo da main, incluindo frontend e requirements, em um runner GitHub. Ele exige Checks aprovado para o commit exato e verifica dependências e importação dos módulos antes de guardar a imagem como artifact por três dias.
+
+A ativação depende do Environment **production-bootstrap**, com as proteções e o segredo root `VPS_BOOTSTRAP_KEY` já existentes. Este uso de implantação completa foi autorizado na sessão; não modifica a chave restrita de deploy, não instala outro comando forçado e não altera as regras de aprovação. O build fica pronto antes dessa aprovação. Nenhuma aprovação é concedida pelo workflow.
+
+Após a revisão do ambiente, o job recusa release desatualizada, verifica checksums, confere trabalhos ativos e espaço disponível, transfere/carrega a imagem e usa a mesma rotina `ops/auto-deploy.sh` para backup, ativação e rollback. Uma segunda verificação de ocupação ocorre antes da troca. O modo local `LOFI_PREBUILT_IMAGE` exige nome, label de revisão e requirements idênticos aos do pacote. O caminho incremental normal continua recusando dependências diferentes.
+
+Executar Actions → **Full production deploy** → Run workflow → branch `main` → confirmação `BUILD_AND_DEPLOY`. Primeiro conferir o build e depois aprovar o job protegido. Produção ocupada encerra sem troca (75); reagendar depois, sem contornar esse gate. Uma main que avance após o build exige uma execução nova.
+
+A imagem completa é criada no GitHub e não no servidor em uso. Não há geração paga nem publicação de mídia. São atualizados somente studio, creator, export-worker e youtube-publisher, como no deploy existente. Rádio e workers fora desse conjunto permanecem manuais.
+
+O registro de deploy preserva commit, modo full/incremental, imagem anterior, backup e comando de rollback. A saúde inclui a revisão de todos os serviços, readiness do publisher, HTTP /health e a triagem editorial real após o build completo. A falha da saúde restaura e verifica os serviços anteriores. Backups e imagens de recuperação não são apagados.
+
+Estado do código: implementado; validações e implantação são registradas no PR da entrega e no Notion. Um workflow verde de testes não substitui o resultado do job de implantação.

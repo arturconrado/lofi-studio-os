@@ -47,6 +47,7 @@ SELECT (SELECT count(*) FROM production_batches WHERE state IN ('queued','produc
 EOF
 )
 [ "${busy:-1}" = "0" ] || fail "produção ocupada ($busy itens em andamento); tente mais tarde" 75
+[ "${LOFI_DEPLOY_PREFLIGHT:-0}" != 1 ] || { say "produção livre para preparar a imagem"; exit 0; }
 
 current=$(docker inspect lofi-vibe-coding-studio-1 --format '{{.Config.Image}}')
 all_current=1
@@ -69,8 +70,16 @@ rm -rf "$R.tmp" && mkdir -p "$R.tmp" && tar -x -C "$R.tmp"
 [ -d "$R.tmp/studio" ] && [ -d "$R.tmp/web/app" ] || fail "pacote sem studio/ ou web/app"
 rm -rf "$R" && mv "$R.tmp" "$R"
 
-# 3. Dependencies changed: the incremental image would miss them. Manual deploy required.
-if ! docker run --rm --entrypoint cat "$current" /app/requirements.txt 2>/dev/null | cmp -s - "$R/requirements.txt"; then
+# 3. A protected full-build workflow may supply a verified image. The forced-command path stays incremental.
+full_image=${LOFI_PREBUILT_IMAGE:-}
+requirements_image=$current
+if [ -n "$full_image" ]; then
+  [ "$full_image" = "lofi-studio-os:full-$SHA" ] || fail "nome da imagem completa inválido" 3
+  candidate_revision=$(docker inspect "$full_image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+  [ "$candidate_revision" = "$FULL_SHA" ] || fail "revisão da imagem completa divergente" 3
+  requirements_image=$full_image
+fi
+if ! docker run --rm --entrypoint cat "$requirements_image" /app/requirements.txt 2>/dev/null | cmp -s - "$R/requirements.txt"; then
   fail "requirements.txt mudou; faça o deploy manual (imagem completa)" 3
 fi
 
@@ -92,8 +101,16 @@ listing="$dump.list"
 docker exec -i "$PG" pg_restore --list < "$dump" > "$listing" || fail "backup ilegível: pg_restore falhou"
 grep 'TABLE DATA' "$listing" > /dev/null || fail "backup sem dados de tabelas"
 say "backup listado e verificado: $dump"
-printf 'FROM %s\nLABEL org.opencontainers.image.revision="%s"\nUSER root\nCOPY studio /app/studio\nCOPY web /app/web\nUSER 10002\n' "$current" "$FULL_SHA" > "$R/Dockerfile.incremental"
-nice -n 10 docker build -q -f "$R/Dockerfile.incremental" -t "lofi-studio-os:production-$SHA" "$R" >/dev/null
+
+# 4b. Both paths use the same activation, health checks and rollback below.
+if [ -n "$full_image" ]; then
+  docker tag "$full_image" "lofi-studio-os:production-$SHA"
+else
+  printf 'FROM %s\nLABEL org.opencontainers.image.revision="%s"\nUSER root\nCOPY studio /app/studio\nCOPY web /app/web\nUSER 10002\n' "$current" "$FULL_SHA" > "$R/Dockerfile.incremental"
+  nice -n 10 docker build -q -f "$R/Dockerfile.incremental" -t "lofi-studio-os:production-$SHA" "$R" >/dev/null
+fi
+docker run --rm "lofi-studio-os:production-$SHA" python -m pip check \
+  || fail "dependências da imagem inconsistentes; nada foi trocado"
 docker run --rm "lofi-studio-os:production-$SHA" python -c 'import studio.api,studio.exports,studio.creator_service,studio.youtube_publish' \
   || fail "a imagem nova não importa os módulos; nada foi trocado"
 
@@ -134,10 +151,13 @@ fi
 
 healthy() {
   for s in "${SERVICES[@]}"; do
-    [ "$(docker inspect lofi-vibe-coding-$s-1 --format '{{.State.Running}}')" = "true" ] || return 1
-    [ "$(docker inspect lofi-vibe-coding-$s-1 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$FULL_SHA" ] || return 1
+    [ "$(docker inspect "lofi-vibe-coding-$s-1" --format '{{.State.Running}}')" = "true" ] || return 1
+    [ "$(docker inspect "lofi-vibe-coding-$s-1" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$FULL_SHA" ] || return 1
   done
   docker exec lofi-vibe-coding-youtube-publisher-1 python -c 'from studio.youtube_publish import deployment_ready; deployment_ready()' 2>/dev/null || return 1
+  if [ -n "$full_image" ]; then
+    docker exec lofi-vibe-coding-studio-1 python -c 'from studio import editorial as e; assert e.language_check("Encontre seu foco para programar e estudar nesta livraria.", "en")["state"] == "fail"; assert e.language_check("Settle into a cozy autumn bookshop for coding and studying.", "en")["state"] == "pass"' || return 1
+  fi
   docker exec lofi-vibe-coding-studio-1 python -c "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=5).status==200 else 1)" 2>/dev/null
 }
 ok=0
@@ -149,7 +169,8 @@ fi
 
 cat > "$R/DEPLOY-RECORD.txt" <<EOF
 deployed_at=$(date -u +%FT%TZ)
-commit=$FULL_SHA (automatic, after CI)
+commit=$FULL_SHA (after CI)
+build_mode=$([ -n "$full_image" ] && echo full || echo incremental)
 image=lofi-studio-os:production-$SHA
 services_updated=${SERVICES[*]}
 previous_image=$current
