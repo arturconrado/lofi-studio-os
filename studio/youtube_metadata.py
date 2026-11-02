@@ -25,7 +25,7 @@ def editorial_phrase(intent):
 def metadata_guidelines(intent, phrase):
     """Prompt contract shared by new-plan generation, the harness, and Growth packaging."""
     return (
-        'You write accurate YouTube metadata for the Lo-Fi Vibe Coding channel. '
+        'You write accurate YouTube metadata for the LoFi Vibe Coding channel. '
         'Write polished, natural English for viewers and proofread spelling, grammar, and punctuation. '
         'Return only the requested JSON fields. The title must be under 100 characters and begin with the exact primary phrase. '
         'After that phrase, add one concise, specific, source-supported scene or use case (aim for 2–6 words). '
@@ -45,6 +45,45 @@ def metadata_guidelines(intent, phrase):
     )
 
 
+def metadata_issues(title, description, phrase=None, *, min_description=450, max_description=5000, phrase_first=True):
+    """Every rule of the shared contract, in order; a missing phrase skips only the phrase rules.
+
+    phrase_first and min_description are editorial choices of a channel profile, not growth laws.
+    """
+    phrase = ' '.join(str(phrase or '').split())
+    title = ' '.join(str(title or '').split())
+    description = str(description or '').strip()
+    issues = []
+    if phrase and (len(phrase) < 2 or len(phrase) > 50):
+        issues.append(('phrase_length', 'Escolha uma frase principal curta e específica para este vídeo.'))
+    if not title or len(title) > 100:
+        issues.append(('title_length', 'O título precisa ter até 100 caracteres.'))
+    if sum(title.count(separator) for separator in ('|', '—', '–', ':')) > 1:
+        issues.append(('title_separators', 'O título deve apresentar uma única ideia, sem empilhar frases-chave ou separadores.'))
+    if phrase and phrase_first:
+        remainder = title[len(phrase):].strip()
+        remainder = remainder.lstrip(' |—–:·-').strip()
+        remainder_words = re.findall(r"[\w’'-]+", remainder, flags=re.UNICODE)
+        if not remainder_words:
+            issues.append(('title_complement_missing', 'Depois da frase principal, acrescente um cenário ou uso específico do vídeo.'))
+        if len(remainder_words) > 7:
+            issues.append(('title_complement_long', 'O complemento do título está longo ou empilha palavras-chave; use um cenário ou benefício em poucas palavras.'))
+    if len(description) < min_description or len(description) > max_description:
+        issues.append(('description_length', f'A descrição precisa ter entre {min_description} e {max_description} caracteres e contexto específico do vídeo.'))
+    paragraphs = [part.strip() for part in re.split(r'\n\s*\n', description) if part.strip()]
+    if min_description >= 450 and not 2 <= len(paragraphs) <= 3:
+        issues.append(('description_paragraphs', 'A descrição deve ter 2 ou 3 parágrafos curtos, com contexto específico do vídeo.'))
+    if '<' in title + description or '>' in title + description:
+        issues.append(('invalid_characters', 'Conteúdo inválido'))
+    if phrase:
+        if phrase_first and not title.casefold().startswith(phrase.casefold()):
+            issues.append(('title_phrase_start', f'O título deve começar com a frase principal “{phrase}”. Revise a frase ou gere o pacote novamente.'))
+        opening = re.split(r'[.!?](?:\s|$)', description, maxsplit=1)[0]
+        if phrase.casefold() not in opening.casefold():
+            issues.append(('description_phrase_opening', f'A primeira frase da descrição deve incluir “{phrase}” naturalmente. Revise o texto ou gere o pacote novamente.'))
+    return issues
+
+
 def validate_metadata(title, description, phrase, *, min_description=450, max_description=5000):
     """Normalize and enforce the same title/opening/description contract on every path."""
     phrase = ' '.join(str(phrase or '').split())
@@ -52,27 +91,7 @@ def validate_metadata(title, description, phrase, *, min_description=450, max_de
     description = str(description or '').strip()
     if len(phrase) < 2 or len(phrase) > 50:
         raise ValueError('Escolha uma frase principal curta e específica para este vídeo.')
-    if not title or len(title) > 100:
-        raise ValueError('O título precisa ter até 100 caracteres.')
-    if sum(title.count(separator) for separator in ('|', '—', '–', ':')) > 1:
-        raise ValueError('O título deve apresentar uma única ideia, sem empilhar frases-chave ou separadores.')
-    remainder = title[len(phrase):].strip()
-    remainder = remainder.lstrip(' |—–:·-').strip()
-    remainder_words = re.findall(r"[\w’'-]+", remainder, flags=re.UNICODE)
-    if not remainder_words:
-        raise ValueError('Depois da frase principal, acrescente um cenário ou uso específico do vídeo.')
-    if len(remainder_words) > 7:
-        raise ValueError('O complemento do título está longo ou empilha palavras-chave; use um cenário ou benefício em poucas palavras.')
-    if len(description) < min_description or len(description) > max_description:
-        raise ValueError(f'A descrição precisa ter entre {min_description} e {max_description} caracteres e contexto específico do vídeo.')
-    paragraphs = [part.strip() for part in re.split(r'\n\s*\n', description) if part.strip()]
-    if min_description >= 450 and not 2 <= len(paragraphs) <= 3:
-        raise ValueError('A descrição deve ter 2 ou 3 parágrafos curtos, com contexto específico do vídeo.')
-    if '<' in title + description or '>' in title + description:
-        raise ValueError('Conteúdo inválido')
-    if not title.casefold().startswith(phrase.casefold()):
-        raise ValueError(f'O título deve começar com a frase principal “{phrase}”. Revise a frase ou gere o pacote novamente.')
-    opening = re.split(r'[.!?](?:\s|$)', description, maxsplit=1)[0]
-    if phrase.casefold() not in opening.casefold():
-        raise ValueError(f'A primeira frase da descrição deve incluir “{phrase}” naturalmente. Revise o texto ou gere o pacote novamente.')
+    issues = metadata_issues(title, description, phrase, min_description=min_description, max_description=max_description)
+    if issues:
+        raise ValueError(issues[0][1])
     return {'title': title, 'description': description, 'primary_phrase': phrase}

@@ -301,7 +301,8 @@ def update_metadata(jid:uuid.UUID,body:MetadataUpdate):
         if not credential or not manage_allowed(json.loads(cipher().decrypt(credential['token_encrypted'].encode()))):
             raise HTTPException(409,'Reconecte o YouTube em Canais autorizando o gerenciamento de vídeos para editar pela plataforma.')
     with httpx.Client(timeout=30) as client:
-        try:token=access_token(client,row)
+        # Editing text needs management permission only; upload permission is not required.
+        try:token=access_token(client,row,allowed=manage_allowed)
         except ValueError as error:raise HTTPException(409,'Conexão do YouTube indisponível: '+str(error)) from None
         headers={'Authorization':'Bearer '+token}
         current=client.get('https://www.googleapis.com/youtube/v3/videos',params={'part':'snippet','id':row['video_id']},headers=headers)
@@ -354,12 +355,12 @@ def resume(jid:uuid.UUID):
         c.commit()
     return {'id':jid,'state':'queued'}
 
-def access_token(client,row):
+def access_token(client,row,allowed=None):
     with db() as c:
         credential=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s FOR UPDATE',(row['channel_id'],)).fetchone()
         if not credential or credential['youtube_channel_id']!=row['youtube_channel_id']:raise ValueError('Channel changed')
         tokens=json.loads(cipher().decrypt(credential['token_encrypted'].encode()))
-        if not upload_allowed(tokens):raise ValueError('Upload permission missing')
+        if not (allowed or upload_allowed)(tokens):raise ValueError('Upload permission missing' if allowed is None else 'Permission missing')
         if datetime.fromisoformat(tokens['expires_at'])<datetime.now(timezone.utc)+timedelta(minutes=2):
             if not tokens.get('refresh_token'):raise ValueError('Reconnect required')
             r=client.post('https://oauth2.googleapis.com/token',data={'client_id':os.environ['STUDIO_YOUTUBE_CLIENT_ID'],'client_secret':os.environ['STUDIO_YOUTUBE_CLIENT_SECRET'],'refresh_token':tokens['refresh_token'],'grant_type':'refresh_token'})

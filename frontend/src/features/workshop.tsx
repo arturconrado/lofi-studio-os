@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'preact/hooks';
+import { OrchestrationPanel } from './orchestration';
 import { api, post, put, uuid } from '../lib/api';
 import { useResource } from '../lib/resource';
 import { channel } from '../lib/store';
@@ -461,6 +462,7 @@ export function Workshop({ id }: { id?: string }) {
       </article>)}
       {!d.jobs.some(j=>['QUEUED','SUBMITTING','RUNNING','UNCERTAIN'].includes(j.status)) && <p>Nenhuma tarefa ativa registrada na última consulta. Use o próximo passo para continuar.</p>}
     </section>}
+    {id && d && <OrchestrationPanel projectId={id} version={d.revision} />}
     <section class="card stack" aria-label="Como continuar">
       <div class="row"><h2 class="grow">Próximo passo: {nextLabel}</h2><button class="btn primary" disabled={busy || !!activeRender || generatingNext || !channel.value} onClick={nextAction}>{nextLabel}</button></div>
       {!channel.value && <p role="status">Selecione um canal para criar ou continuar seu projeto.</p>}

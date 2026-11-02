@@ -15,6 +15,7 @@ from .music_styles import STYLES,MusicStyle
 from .scene_profiles import SCENES,LEGACY,Scenario
 from .action_states import SequenceName,ContextualAction
 from .harness_profiles import NichePolicy,enforce
+from .niche_profiles import NicheProfile
 
 router=APIRouter(prefix='/recipes')
 channel_router=APIRouter(prefix='/channels')
@@ -126,6 +127,7 @@ class RecipeData(BaseModel):
     copy_:Copy=Field(default_factory=Copy,alias='copy')
     policy:NichePolicy|None=None
     cost:Cost=Field(default_factory=Cost)
+    profile:NicheProfile|None=None
 
     @model_validator(mode='after')
     def renderable(self):
@@ -133,11 +135,18 @@ class RecipeData(BaseModel):
         if self.policy:
             failures=enforce(self.policy.model_dump(),spec_from(self,1,'',sha=''))
             if failures:raise ValueError('A receita viola a própria política: '+' · '.join(failures))
+        if self.profile:
+            if self.policy and self.policy.instrumentals_only and self.profile.audio.vocals!='forbidden':
+                raise ValueError('A política exige música instrumental, mas o perfil permite voz')
+            if self.profile.visual.cast!='canonical_characters' and self.visual.variant!='canonical_illustrated':
+                raise ValueError('Variantes pixel art dependem do elenco canônico; use a ilustração do próprio canal')
         return self
 
 
 def dump(data):
-    return data.model_dump(mode='json',by_alias=True)
+    out=data.model_dump(mode='json',by_alias=True)
+    if out.get('profile') is None:out.pop('profile',None)  # recipes without a profile keep their digest
+    return out
 
 
 def digest(data):
@@ -298,8 +307,10 @@ def usable(row):
 
 
 def public(row):
+    from .niche_profiles import report
     out={k:row[k] for k in ('id','slug','name','origin','state','current_revision','sha256','data','visual_review','updated_at') if k in row}
     out['usable']=usable(row);out['pending_reference_review']=not out['usable']
+    out['niche_profile']=report(row.get('data'))
     return out
 
 

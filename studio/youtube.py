@@ -40,11 +40,20 @@ def user_ref(request):
     if not identity:raise HTTPException(401,'Entre com uma sessão para conectar um canal.')
     return str(identity.get('user_id') or 'platform_admin')
 
+ANALYTICS_SCOPE='https://www.googleapis.com/auth/yt-analytics.readonly'
+
+def requested_scopes(upload=False,manage=False,analytics=False,edit=False):
+    """Only what the chosen action needs; channel audit edits use force-ssl without upload."""
+    scopes=SCOPES+(['https://www.googleapis.com/auth/youtube.upload'] if upload or manage else [])
+    scopes+=['https://www.googleapis.com/auth/youtube.force-ssl'] if manage or edit else []
+    scopes+=[ANALYTICS_SCOPE] if analytics else []
+    return list(dict.fromkeys(scopes))
+
 @router.get('/capabilities')
 def capabilities():return {'oauth_available':configured(),'publication_available':configured(),'live_api_available':False}
 
 @router.post('/channels/{cid}/connect')
-def connect(cid:uuid.UUID,request:Request,upload:bool=False,manage:bool=False):
+def connect(cid:uuid.UUID,request:Request,upload:bool=False,manage:bool=False,analytics:bool=False,edit:bool=False):
     if not configured():raise HTTPException(503,'Configure o aplicativo OAuth do YouTube antes de conectar.')
     identity=user_ref(request)
     state,verifier=secrets.token_urlsafe(32),secrets.token_urlsafe(64)
@@ -59,7 +68,7 @@ def connect(cid:uuid.UUID,request:Request,upload:bool=False,manage:bool=False):
           (hashlib.sha256(state.encode()).hexdigest(),cid,identity,cipher().encrypt(verifier.encode()).decode(),datetime.now(timezone.utc)+timedelta(minutes=10)))
         c.commit()
     params={'client_id':os.environ['STUDIO_YOUTUBE_CLIENT_ID'],'redirect_uri':callback_url(),
-      'response_type':'code','scope':' '.join(SCOPES+(['https://www.googleapis.com/auth/youtube.upload'] if upload or manage else [])+(['https://www.googleapis.com/auth/youtube.force-ssl'] if manage else [])),'access_type':'offline','prompt':'consent',
+      'response_type':'code','scope':' '.join(requested_scopes(upload,manage,analytics,edit)),'access_type':'offline','prompt':'consent',
       'state':state,'code_challenge':challenge,'code_challenge_method':'S256'}
     return {'authorization_url':'https://accounts.google.com/o/oauth2/v2/auth?'+urlencode(params)}
 
@@ -111,7 +120,8 @@ def connected():
     out=[]
     for r in rows:
         tokens=json.loads(cipher().decrypt(r['token_encrypted'].encode()))
-        out.append({**{k:r[k] for k in ('channel_id','youtube_channel_id','youtube_title','updated_at')},'upload_authorized':upload_allowed(tokens),'delete_authorized':delete_allowed(tokens)})
+        out.append({**{k:r[k] for k in ('channel_id','youtube_channel_id','youtube_title','updated_at')},'upload_authorized':upload_allowed(tokens),'delete_authorized':delete_allowed(tokens),
+                    'analytics_authorized':ANALYTICS_SCOPE in tokens.get('scope','').split()})
     return out
 
 

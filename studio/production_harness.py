@@ -267,15 +267,16 @@ def compile_spec(spec: ProductionSpec, music=None):
     return result
 
 
-def audio_prompt(style, brief, music=None):
-    """Without a recipe the prompt stays byte-identical to earlier batches."""
+def audio_prompt(style, brief, music=None, recipe=None):
+    """Without a recipe the prompt stays byte-identical to earlier batches; a niche profile sets the closing contract."""
+    from .niche_profiles import audio_tail
     direction=AUDIO[style]
     if music:
         direction=music.get('bible') or direction
         if music.get('instruments'):direction+='\nInstrumentation: '+', '.join(music['instruments'])+'.'
         if music.get('bpm_range'):direction+='\nTempo range: {}-{} BPM.'.format(*music['bpm_range'])
         if music.get('avoid'):direction+='\nAvoid: '+', '.join(music['avoid'])+'.'
-    return direction + '\nUser musical direction: ' + brief + '\nComplete original instrumental composition around 120 seconds, natural musical ending, no vocals, named artist imitation, copied melodies, silence padding or loud attention effects. Preserve long-listening dynamics; vary motifs and arrangements between tracks.'
+    return direction + '\nUser musical direction: ' + brief + '\n' + audio_tail(recipe)
 
 
 def assess_delivery(compiled, receipts):

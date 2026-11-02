@@ -75,9 +75,13 @@ def plan(body:PlanRequest):
   from .channels import profile
   channel=profile(c,body.channel_id)
   recipe=None
+  from .recipes import for_channel
   if body.recipe_id:
-   from .recipes import for_channel
    recipe=for_channel(c,body.channel_id,body.recipe_id)['data']
+  from .niche_profiles import legacy_lofi_only
+  try:guard=legacy_lofi_only(recipe or for_channel(c,body.channel_id)['data'])
+  except HTTPException:guard=None  # no default recipe: the legacy LoFi channel behaviour
+  if guard:raise HTTPException(409,guard+' Nenhum custo foi reservado.')
   observed=[];observed_options=[]
   try:
    rows=c.execute("SELECT video_url,observed_date,metrics FROM analytics_snapshots WHERE channel_id=%s AND intent=%s AND content_format='long_form' ORDER BY observed_date DESC LIMIT 1000",(body.channel_id,body.intent)).fetchall()
@@ -401,6 +405,8 @@ router.include_router(inbox_router)
 
 from .workshop_api import router as workshop_router
 router.include_router(workshop_router)
+from .orchestration import router as orchestration_router
+router.include_router(orchestration_router)
 
 
 @router.get('/pose-library')

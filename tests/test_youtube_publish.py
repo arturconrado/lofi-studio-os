@@ -214,7 +214,7 @@ def test_release_held_and_delete_uploaded_video(monkeypatch):
         def __enter__(self):return self
         def __exit__(self,*a):return False
         def delete(self,url,params,headers):calls.append(params['id']);return type('R',(),{'status_code':204})()
-    monkeypatch.setattr(ypub.httpx,'Client',Fake);monkeypatch.setattr(ypub,'access_token',lambda client,row:'token')
+    monkeypatch.setattr(ypub.httpx,'Client',Fake);monkeypatch.setattr(ypub,'access_token',lambda client,row,**kw:'token')
     assert client.post(f'/api/youtube/publications/{live}/delete',json={},headers=h).status_code==422
     done=client.post(f'/api/youtube/publications/{live}/delete',json={'confirm_delete':True},headers=h).json()
     assert done['state']=='deleted' and calls==['abcdefghijk']
