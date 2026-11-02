@@ -1,4 +1,5 @@
 import copy
+import os,json,uuid
 import pytest
 from fastapi import HTTPException
 from studio import editorial as e
@@ -76,3 +77,45 @@ def test_render_notes_and_unsupported_productivity_claims_are_not_publishable():
     for text in [TEXT+' Optimized productivity frequencies.',TEXT+' The scene has forward ambient animation and occasional blinks.']:
         with pytest.raises(HTTPException) as error:e.require({'description':text},EN,reviewed=True)
         assert error.value.status_code==422
+
+
+from test_authentication import client
+
+
+@pytest.mark.skipif(not os.getenv('LOFI_TEST_DATABASE_URL'),reason='Disposable PostgreSQL required')
+def test_existing_video_review_blocks_foreign_copy_and_stale_profile_before_youtube(client,monkeypatch):
+    from test_visual_workshop import fixture
+    from test_workshop_variants import seed_project
+    from studio.core import db
+    from studio.tenancy import WORKSPACE
+    from studio import channel_audit as ca
+    draft,assets=fixture();url,identity=seed_project(client,draft,assets)
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        ca.ready()
+        with db() as c:
+            cid=c.execute('SELECT channel_id FROM visual_projects WHERE id=%s',(url.rsplit('/',1)[-1],)).fetchone()['channel_id']
+            rid=uuid.uuid4();owner='UC'+'x'*22
+            c.execute("""INSERT INTO channel_audit_runs(id,channel_id,youtube_channel_id,channel_ref,brand,snapshot,snapshot_sha256,analytics,findings,diagnosis,provenance,created_by)
+                      VALUES(%s,%s,%s,%s,%s::jsonb,'{}','test','{}','[]','{}','{}','test')""",(rid,cid,owner,owner,json.dumps(ca.brand_rules())))
+            run={'id':rid,'channel_id':cid,'youtube_channel_id':owner}
+            change=lambda text:ca.insert_change(c,run,{'target_kind':'video','target_id':'vid00000001','field':'description','current_value':'Old description',
+                                   'suggested_value':text,'origin':'user'},'test')
+            wrong=change(PT);c.commit()
+    finally:WORKSPACE.reset(marker)
+    base=f'/api/growth/{cid}/channel-audit'
+    rejected=client.post(base+f'/changes/{wrong}/decision',json={'decision':'approve','suggested_sha256':ca.digest(PT)})
+    assert rejected.status_code==422
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            good=ca.insert_change(c,run,{'target_kind':'video','target_id':'vid00000002','field':'description','current_value':'Old description',
+                                        'suggested_value':TEXT,'origin':'user'},'test');c.commit()
+    finally:WORKSPACE.reset(marker)
+    assert client.post(base+f'/changes/{good}/decision',json={'decision':'approve','suggested_sha256':ca.digest(TEXT)}).status_code==200
+    monkeypatch.setattr(e,'for_channel',lambda *args:EN|{'tone':'A changed channel tone'})
+    monkeypatch.setattr(ca,'configured',lambda:True)
+    monkeypatch.setattr(ca,'credential',lambda *args:{'youtube_channel_id':owner,'edit_authorized':True})
+    monkeypatch.setattr(ca,'_client',lambda:pytest.fail('Stale approval must not reach YouTube'))
+    stale=client.post(base+f'/runs/{rid}/apply',json={'change_ids':[str(good)],'confirm_apply':True,'confirmed_count':1})
+    assert stale.status_code==409 and 'perfil editorial mudou' in stale.text

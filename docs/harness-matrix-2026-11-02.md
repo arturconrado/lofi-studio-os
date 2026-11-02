@@ -67,7 +67,7 @@ Pedido do proprietário: uma camada de orquestração entre os agentes e o harne
 - A inicialização de receitas pela consulta de canal usa a transação do chamador, evitando espera circular entre DDL e publicação no primeiro uso.
 - Migração aditiva: `channel_audit_changes.approved_editorial_sha256`, criada sob demanda. Propostas antigas precisam de nova aprovação editorial antes de aplicar. Nenhum texto publicado é traduzido em lote.
 - Casos de regressão em `tests/test_editorial.py`; fluxos existentes de auditoria/publicação, Growth e perfis incluídos na validação. Integração da escolha de mensagem, briefing e OCR fica no PR #107.
-- Estado: implementado localmente; contagens finais de validação serão registradas no PR após a suíte. Implantado: não; nenhuma chamada paga ou publicação real nesta implementação.
+- Estado: implementado localmente; suíte completa com 399 testes Python, 47 de interface, TypeScript e build aprovados; teste adicional da API de idioma/aprovação desatualizada também aprovado. Implantado: não; nenhuma chamada paga ou publicação real nesta implementação.
 
 - `tests/test_orchestration.py` (4) e `frontend/src/__tests__/orchestration.test.tsx` (1): plano, próximo passo, bloqueios e painel somente leitura.
 - `tests/test_niche_profiles.py`: 8 testes. Inclui um teste com PostgreSQL em que um canal com o perfil "Piano e Natureza" é bloqueado por capacidade ausente (narração) sem chamada nem reserva, e depois gera um pedido pago real (mock do provedor) contendo a linguagem do perfil e sem termos LoFi.
