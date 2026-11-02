@@ -33,7 +33,7 @@ AGENTS=[
     {'id':'final_review','label':'Revisão final humana','kind':'human','cost':'free','module':'studio/workshop_api.py (aprovação da montagem)',
      'produces':'Aprovação vinculada aos bytes do vídeo final'},
     {'id':'thumbnail_designer','label':'Miniatura','kind':'ai_agent','cost':'paid','module':'studio/thumbnails.py',
-     'produces':'Arte da miniatura gerada, texto aplicado pelo estúdio e aprovação em tamanho reduzido'},
+     'produces':'Miniatura completa gerada, texto conferido por leitura e aprovação em tamanho reduzido'},
     {'id':'metadata_packager','label':'Título e descrição','kind':'ai_agent','cost':'paid','module':'studio/growth.py (package-suggestion)',
      'produces':'Pacote de metadados revisado'},
     {'id':'publisher','label':'Publicação','kind':'harness','cost':'free','module':'studio/youtube_publish.py',
@@ -169,7 +169,7 @@ def plan_steps(detail,direction,draft,opening_required=False,thumbnail_state=Non
     elif thumb.get('approved'):thumb_step=('done','Miniatura aprovada em tamanho reduzido.')
     elif thumb.get('review'):thumb_step=('waiting_human','Revise a miniatura em 320×180 e 168×94 e aprove estes bytes.')
     elif image[0]!='done':thumb_step=('blocked','Depende da imagem-base aprovada.')
-    else:thumb_step=('ready','Gere a arte da miniatura (uma imagem paga, com cotação antes da confirmação).')
+    else:thumb_step=('ready','Gere a miniatura completa (imagem e conferência do texto, com cotação antes da confirmação).')
     steps.append(step('thumbnail_designer',*thumb_step,'Miniatura fiel ao vídeo, legível em tamanho pequeno.',action='thumbnail'))
     published=bool(detail.get('parent_videos'))
     after=('blocked','Depende da aprovação final.') if final[0]!='done' else None

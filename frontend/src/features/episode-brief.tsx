@@ -17,25 +17,27 @@ function ThumbnailPanel({ base, revision }: { base: string; revision: number }) 
   const [confirm, setConfirm] = useState(false);
   const [checked, setChecked] = useState(false);
   const [note, setNote] = useState('');
+  const [textOk, setTextOk] = useState(false);
   const latest = list.data?.thumbnails?.[0];
   const loadQuote = async () => setQuote(await attempt(() => api(`${base}/thumbnail/quote`)));
   const generate = async () => { if (await attempt(() => post(`${base}/thumbnail`, { request_id: crypto.randomUUID(), revision, confirm_cost: true, max_usd: quote.usd }), 'Miniatura gerada; revise em tamanho reduzido')) list.reload(); };
-  const review = async (approve: boolean) => { if (await attempt(() => post(`${base}/thumbnails/${latest.id}/review`, { sha256: latest.sha256, approve, confirm_small_size_checked: checked, note }), approve ? 'Miniatura aprovada para publicação' : 'Miniatura reprovada')) list.reload(); };
+  const review = async (approve: boolean) => { if (await attempt(() => post(`${base}/thumbnails/${latest.id}/review`, { sha256: latest.sha256, approve, confirm_small_size_checked: checked, confirm_text_matches: textOk, note }), approve ? 'Miniatura aprovada para publicação' : 'Miniatura reprovada')) list.reload(); };
   return <div class="card flat stack" aria-label="Miniatura do episódio">
     <h3>Miniatura do episódio</h3>
-    <p class="faint">O modelo de imagem gera a arte sem texto a partir da imagem-base aprovada; o texto decidido no briefing é aplicado pelo estúdio.</p>
+    <p class="faint">O modelo de imagem gera a miniatura completa, inclusive o texto decidido no briefing, a partir da imagem-base aprovada. O estúdio lê o texto de volta em tamanho normal e em 320×180: texto diferente reprova a miniatura. Até {list.data?.max_attempts_per_brief ?? 3} tentativas por versão do briefing.</p>
     {!quote ? <button class="btn secondary" style={{ alignSelf: 'flex-start' }} onClick={loadQuote}>Ver custo para gerar</button> : <>
-      <Check checked={confirm} onChange={setConfirm}>Gerar uma imagem por até US$ {Number(quote.usd).toFixed(2)} ({quote.model})</Check>
+      <Check checked={confirm} onChange={setConfirm}>Gerar a miniatura por até US$ {Number(quote.usd).toFixed(2)} (imagem US$ {Number(quote.image_usd).toFixed(2)} + conferência do texto US$ {Number(quote.text_check_usd).toFixed(4)})</Check>
       <button class="btn" style={{ alignSelf: 'flex-start' }} disabled={!confirm} onClick={generate}>Gerar miniatura</button></>}
     {latest && <div class="stack">
-      <div class="row"><Pill tone={latest.state === 'approved' ? 'ok' : latest.state === 'review_required' ? 'warn' : ''}>{({ approved: 'Aprovada', review_required: 'Aguardando revisão', rejected: 'Reprovada', failed: 'Falhou na verificação', generating: 'Gerando', uncertain: 'Envio incerto' } as any)[latest.state] || latest.state}</Pill></div>
+      <div class="row"><Pill tone={latest.state === 'approved' ? 'ok' : latest.state === 'review_required' ? 'warn' : ''}>{({ approved: 'Aprovada', review_required: 'Aguardando revisão', rejected: 'Reprovada', failed: 'Reprovada na conferência', generating: 'Gerando', checking_text: 'Conferindo o texto', uncertain: 'Envio incerto' } as any)[latest.state] || latest.state}</Pill></div>
       {latest.image_url && <div class="row" style={{ alignItems: 'flex-end' }}>
         <img src={latest.image_url} alt="Miniatura em tamanho normal" width={320} height={180} />
         {Object.entries(latest.small_urls || {}).map(([size, url]: any) => <figure style={{ margin: 0 }}><img src={url} alt={`Miniatura em ${size}`} /><figcaption class="faint">{size}</figcaption></figure>)}
       </div>}
-      {latest.evaluation && <ul>{latest.evaluation.checks.map((c: any) => <li><Pill tone={c.state === 'pass' ? 'ok' : c.state === 'fail' ? 'bad' : 'warn'}>{c.state === 'pass' ? 'Ok' : c.state === 'fail' ? 'Falhou' : c.state === 'pending' ? 'Revisão humana' : 'Conferir'}</Pill> {c.label}: {c.evidence}</li>)}</ul>}
+      {latest.evaluation && <ul>{latest.evaluation.checks.map((c: any) => <li><Pill tone={c.state === 'pass' ? 'ok' : c.state === 'fail' ? 'bad' : 'warn'}>{c.state === 'pass' ? 'Ok' : c.state === 'fail' ? 'Falhou' : c.state === 'pending' ? 'Revisão humana' : c.state === 'uncertain' ? 'Inconclusivo' : 'Conferir'}</Pill> {c.label}: {c.evidence}</li>)}</ul>}
       {latest.state === 'review_required' && <>
         <Check checked={checked} onChange={setChecked}>Conferi em 320×180 e 168×94, com o título e o vídeo</Check>
+        {latest.evaluation?.needs_text_confirmation && <Check checked={textOk} onChange={setTextOk}>A leitura automática foi inconclusiva: confirmo que o texto está exatamente como no briefing</Check>}
         <Field label="O que foi conferido"><textarea class="textarea" rows={2} value={note} onInput={e => setNote((e.target as HTMLTextAreaElement).value)} /></Field>
         <div class="row"><button class="btn primary" onClick={() => review(true)}>Aprovar miniatura</button><button class="btn ghost" onClick={() => review(false)}>Reprovar</button></div></>}
     </div>}
