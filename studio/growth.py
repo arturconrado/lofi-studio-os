@@ -510,6 +510,10 @@ def package_suggestion(cid:uuid.UUID,body:PackagingSuggestionRequest):
             stored_context.update({'theme':draft.theme,'scene':draft.scene,'music_brief':draft.music_brief})
             episode=latest_data(c,body.source_project_id)
             if episode:stored_context['episode_brief']=json.dumps(episode,ensure_ascii=False)
+            if c.execute("SELECT to_regclass('workshop_thumbnails') t").fetchone()['t']:
+                feedback=c.execute("SELECT id,spec,review FROM workshop_thumbnails WHERE channel_id=%s AND state IN ('approved','rejected') AND review IS NOT NULL ORDER BY updated_at DESC LIMIT 12",(cid,)).fetchall()
+                stored_context['thumbnail_editorial_feedback']=json.dumps([{'id':str(f['id']),'message':f['spec'].get('message'),
+                    'approved':f['review'].get('approved'),'note':f['review'].get('note'),'basis':'human_editorial_feedback_not_audience_results'} for f in feedback],ensure_ascii=False)
             c.commit()
         if body.publication_id:
             publication=c.execute('SELECT pilot_id,export_id FROM youtube_publications WHERE id=%s AND channel_id=%s',(body.publication_id,cid)).fetchone()

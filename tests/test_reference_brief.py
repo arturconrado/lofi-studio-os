@@ -135,5 +135,8 @@ def test_search_select_brief_request_and_opening_review(client,monkeypatch):
     assert client.post(review,json={'sha256':'f'*64,'approve':True,'confirm_watched_opening':True,'note':'Ouvi e assisti os 90 s'}).status_code==409
     assert client.post(review,json={'sha256':sha,'approve':True,'confirm_watched_opening':True,'note':'Ouvi e assisti os 90 s e a transição'}).json()['approved']
     assert ws(lambda c:require_opening_approval(c,pid,payload(),sha))['approved']
+    # Copy-only revision reuses the reviewed render and opening; it does not buy a new montage.
+    assert client.put(url+'/brief',json={'data':brief|{'presentation_description':'Find your flow for coding, studying, and getting things done.'}}).status_code==200
+    assert ws(lambda c:require_opening_approval(c,pid,payload(),sha))['approved']
     client.put(url+'/brief',json={'data':brief|{'original_concept':'Outro conceito de estufa'}})
     with pytest.raises(HTTPException,match='briefing mudou'):ws(lambda c:require_opening_approval(c,pid,payload(),sha))

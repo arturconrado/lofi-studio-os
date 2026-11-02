@@ -353,7 +353,9 @@ def review(pid:uuid.UUID,tid:uuid.UUID,body:Review,request:Request):
         if row['sha256']!=body.sha256:raise HTTPException(409,'Arquivo mudou')
         brief=latest_data(c,pid)
         if body.approve:
-            if not brief or brief['sha256']!=row['brief_sha256']:raise HTTPException(409,'O briefing mudou depois desta miniatura; gere outra para a decisão atual.')
+            from .episode_brief import same_direction,thumbnail_direction
+            if not brief or not same_direction(c,pid,row['brief_sha256'],brief,lambda data:thumbnail_direction(data,include_title=False)):
+                raise HTTPException(409,'A cena ou mensagem mudou depois desta miniatura; ajuste a arte para a decisão atual.')
             if not body.confirm_small_size_checked or len(body.note.strip())<12:
                 raise HTTPException(422,'Confira a miniatura em 320×180 e 168×94 e descreva o que verificou (mínimo 12 caracteres).')
             if (row['evaluation'] or {}).get('needs_text_confirmation') and not body.confirm_text_matches:
@@ -368,20 +370,29 @@ def review(pid:uuid.UUID,tid:uuid.UUID,body:Review,request:Request):
                 'note':body.note.strip(),'text_confirmed_by_person':body.confirm_text_matches,
                 'editorial_review':result if body.approve else None}
         if body.approve:c.execute("UPDATE workshop_thumbnails SET state='rejected',updated_at=now() WHERE project_id=%s AND state='approved' AND id<>%s",(pid,tid))
-        c.execute('UPDATE workshop_thumbnails SET state=%s,review=%s::jsonb,updated_at=now() WHERE id=%s',('approved' if body.approve else 'rejected',json.dumps(review),tid))
+        c.execute('UPDATE workshop_thumbnails SET state=%s,review=%s::jsonb,brief_sha256=%s,updated_at=now() WHERE id=%s',
+                  ('approved' if body.approve else 'rejected',json.dumps(review),brief['sha256'] if body.approve else row['brief_sha256'],tid))
         audit(c,'THUMBNAIL_REVIEWED',str(tid),json.dumps({'approved':body.approve,'sha256':body.sha256}));c.commit()
     return {'approved':body.approve}
 
 
 def approved_for_project(c,project_id):
-    if not c.execute("SELECT to_regclass('workshop_thumbnails') t").fetchone()['t']:return None
-    row=c.execute("SELECT * FROM workshop_thumbnails WHERE project_id=%s AND state='approved' ORDER BY updated_at DESC LIMIT 1",(project_id,)).fetchone()
     from .episode_brief import latest_data
     brief=latest_data(c,project_id)
+    exists=c.execute("SELECT to_regclass('workshop_thumbnails') t").fetchone()['t']
+    row=c.execute("SELECT * FROM workshop_thumbnails WHERE project_id=%s AND state='approved' ORDER BY updated_at DESC LIMIT 1",(project_id,)).fetchone() if exists else None
     if not row:
         if brief and brief.get('thumbnail'):raise HTTPException(409,'A miniatura decidida no briefing ainda não foi aprovada. Não será substituída silenciosamente por uma capa padrão.')
         return None
-    if not brief or brief['sha256']!=row['brief_sha256']:raise HTTPException(409,'O briefing mudou depois da aprovação da miniatura. Revise a apresentação antes de publicar.')
+    from .episode_brief import same_direction,thumbnail_direction
+    if not brief or not same_direction(c,project_id,row['brief_sha256'],brief,thumbnail_direction):
+        raise HTTPException(409,'O briefing de apresentação mudou depois da aprovação da miniatura. Revise antes de publicar.')
+    from .workshop_api import project
+    from .visual_workshop import Draft
+    draft=Draft.model_validate(project(c,project_id)['data'])
+    base=c.execute('SELECT data FROM visual_media WHERE id=%s AND project_id=%s',(draft.base.image_id,project_id)).fetchone() if draft.base.image_id else None
+    if not base or not base['data'].get('approved') or base['data'].get('sha256')!=row['base_image_sha256']:
+        raise HTTPException(409,'A arte-base mudou ou perdeu aprovação depois desta miniatura. Revise a identidade visual.')
     from .editorial import for_channel,require
     policy=for_channel(c,row['channel_id'])
     prior=(row.get('review') or {}).get('editorial_review')

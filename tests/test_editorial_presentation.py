@@ -81,6 +81,11 @@ def test_project_presentation_uses_existing_generator_and_stays_a_reviewable_pro
                        'presentation_rationale':proposal['presentation_rationale'],'thumbnail':proposal['thumbnail']}})
     assert saved.status_code==200,saved.text
     assert saved.json()['generation_started'] is False
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with db() as c:
+            with pytest.raises(HTTPException,match='ainda não foi aprovada'):thumbnails.approved_for_project(c,pid)
+    finally:WORKSPACE.reset(marker)
     wrong=client.put(url+'/brief',json={'data':{'audience_intent':'Developers working at night','original_concept':'Rainy Bookshop',
                                               'thumbnail':proposal['thumbnail']|{'language':'pt-BR'}}})
     assert wrong.status_code==422

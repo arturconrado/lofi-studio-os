@@ -131,6 +131,18 @@ Validação deste complemento: `tests/test_delivery.py` (10 testes com FFmpeg re
 
 ## Pendências finais incorporadas ao desenvolvimento (PR #107)
 
+### Complemento nativo: apresentação, idioma e revisão editorial
+
+- A tela de briefing reaproveita `growth.package_suggestion` para propor título, descrição, mensagem exata da thumb, hierarquia, relação com o título e justificativa. A proposta usa o projeto do próprio canal, perfil, referências/memória e feedback humano de thumbs aprovadas/rejeitadas. Não salva o briefing nem gera imagem automaticamente.
+- A sugestão exige a confirmação de até US$ 0,10, permissão de gasto e reserva do gerador existente. `project_id` e `direction_sha256` acompanham a tarefa; a reserva também respeita o teto do projeto sob lock. Repetir um ID não dispara nova cobrança. Nenhuma chamada paga foi executada nesta implementação.
+- `Thumbnail.text_policy` começa sem decisão, e a interface exige escolher texto/sem texto. O idioma vazio herda o perfil; um conflito explícito ou texto claramente fora do idioma é recusado antes do custo. Não há inglês nem slogan universal imposto a outros perfis.
+- O texto efetivamente lido da imagem passa pela triagem linguística local, além da fidelidade OCR e leitura reduzida já existentes. Idioma incorreto bloqueia; texto curto, nome próprio ou resultado incerto requer confirmação humana específica do idioma na imagem. Legibilidade não aprova automaticamente a pertinência da mensagem.
+- Aprovação de thumb guarda recibo do texto e da política. A publicação/reentrada confere briefing, perfil e arte-base atuais **antes** de iniciar o upload. Se o briefing exige thumb e não há uma aprovada, não usa silenciosamente a capa padrão.
+- Revisão editorial não é resultado de audiência. O feedback é isolado por canal; exemplos de slogans anteriores não são vencedores. Duração e capítulos não são inventados na proposta anterior à montagem; o gate de mídia continua a conciliar a publicação final.
+- Mudança só da descrição preserva a aprovação da imagem e a revisão da abertura; mudança só do título exige nova revisão de coerência, podendo reaproveitar os mesmos bytes. Mudança da direção de produção continua a invalidar a abertura. Não é necessário refazer áudio/vídeo por uma revisão textual.
+- Testes de backend: proposta nativa, consentimento/canal/direção, capítulos/duração fictícios, OCR fiel em idioma errado, herança/conflito de idioma, falta de thumb aprovada, alteração de perfil e reuso de mídia em edição textual. Teste de interface: consentimento e prévia antes de salvar/gerar imagem. Resultados finais registrados no PR.
+- Estado: implementado; validação final em execução na sessão. Implantado: não. Revisão com provedores pagos e aplicação no YouTube real permanecem sem execução nesta implementação. Testes A/B do YouTube Studio continuam manuais; esta alteração não cria nem exclui experimentos externos.
+
 | Pendência | Estado | Evidência |
 |---|---|---|
 | Diagnóstico de crescimento por gargalo (etapa 5) | **Implementado e testado** | `studio/growth_diagnostics.py`, `GET /api/growth/{canal}/diagnostics`: gargalos de CTR, retenção após o clique, alcance, alinhamento com a busca e retorno, contra quartis de vídeos próprios do mesmo formato e janela (mínimo de 3). Cada diagnóstico tem alvo, evidência ou hipótese, ação, confiança com motivo, esforço e critério de avaliação; métricas ausentes geram "evidência insuficiente", sem quartis inventados. Tela: Análises → Visão geral. |
