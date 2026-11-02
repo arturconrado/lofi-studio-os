@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef } from 'preact/hooks';
 import { OrchestrationPanel } from './orchestration';
+import { EpisodeBriefPanel } from './episode-brief';
+import { ImpactPreview } from './edit-impact';
 import { api, post, put, uuid } from '../lib/api';
 import { useResource } from '../lib/resource';
 import { channel } from '../lib/store';
@@ -454,6 +456,7 @@ export function Workshop({ id }: { id?: string }) {
         <a href={href('/receitas')}>Consultar receitas do estúdio</a>
       </details>
       {dirty && <p class="notice warn">Salve as alterações para retomar a atualização automática do andamento.</p>}
+      {dirty && id && <ImpactPreview projectId={id} data={draft} />}
       {resource.error && <p class="notice bad" role="alert">Não foi possível atualizar. Os dados abaixo são da última consulta; não inicie outra geração por esse motivo.</p>}
       {d.jobs.filter(j=>['QUEUED','SUBMITTING','RUNNING','UNCERTAIN'].includes(j.status)).map(j=><article class="notice" key={j.id}>
         <b>{j.operation==='semantic_review' ? 'Avaliação visual' : j.operation==='image' ? 'Imagem' : j.operation==='video' ? 'Animação' : j.operation==='short_render' ? 'Short' : j.operation==='preview' ? 'Prévia' : 'Montagem'} · {jobLabel(j.status)}</b>
@@ -463,6 +466,7 @@ export function Workshop({ id }: { id?: string }) {
       {!d.jobs.some(j=>['QUEUED','SUBMITTING','RUNNING','UNCERTAIN'].includes(j.status)) && <p>Nenhuma tarefa ativa registrada na última consulta. Use o próximo passo para continuar.</p>}
     </section>}
     {id && d && <OrchestrationPanel projectId={id} version={d.revision} />}
+    {id && d && channel.value && <EpisodeBriefPanel projectId={id} channelId={channel.value.id} renders={d.jobs} />}
     <section class="card stack" aria-label="Como continuar">
       <div class="row"><h2 class="grow">Próximo passo: {nextLabel}</h2><button class="btn primary" disabled={busy || !!activeRender || generatingNext || !channel.value} onClick={nextAction}>{nextLabel}</button></div>
       {!channel.value && <p role="status">Selecione um canal para criar ou continuar seu projeto.</p>}

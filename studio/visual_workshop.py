@@ -415,7 +415,7 @@ def assemble(draft, assets, preview=False, preview_range=None):
     return segments
 
 
-def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None, editorial_evidence=None, recipe=None):
+def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None, editorial_evidence=None, recipe=None, brief=None):
     # The channel's owner-approved identity pack is authoritative. Generic or stale
     # project cast fields must not contradict the known canonical girl and cat.
     from .niche_profiles import visual_terms
@@ -437,6 +437,9 @@ def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None, editor
                    + ('Show the entire action from its beginning; never start with the hand already on the cat or the cup already lifted. '
                       if terms['cast']=='canonical_characters' else 'Show the entire action from its beginning; never start mid-action. ')
                    + 'Finish in the first pose of the base loop so it resumes naturally.'))))
+    if brief:
+        from .episode_brief import visual_clauses
+        result += visual_clauses(brief, kind == 'image' and clip.id == draft.base.id)
     if draft.recipe_visual_direction:
         result += (' Recipe visual language: ' + draft.recipe_visual_direction +
                    ' Invent original theme-specific scenery and actions inside this language. '

@@ -297,6 +297,13 @@ def update_metadata(jid:uuid.UUID,body:MetadataUpdate):
         if row['state']!='uploaded' or not row['video_id']:raise HTTPException(409,'Só um vídeo já recebido pelo YouTube pode ser editado.')
         if body.primary_phrase:
             validate_growth_packaging(body.title or row['title'],body.description,body.primary_phrase)
+        from .delivery import reconcile_metadata
+        measured=(row.get('publication_metadata') or {}).get('seconds')
+        if measured is None and row.get('export_id'):
+            job=c.execute('SELECT seconds FROM export_jobs WHERE id=%s',(row['export_id'],)).fetchone()
+            measured=float(job['seconds']) if job and job.get('seconds') else None
+        check=reconcile_metadata(body.title or row['title'],body.description,measured)
+        if check['issues']:raise HTTPException(422,'O texto não corresponde ao vídeo publicado: '+' '.join(check['issues']))
         credential=c.execute('SELECT token_encrypted FROM channel_credentials WHERE channel_id=%s',(row['channel_id'],)).fetchone()
         if not credential or not manage_allowed(json.loads(cipher().decrypt(credential['token_encrypted'].encode()))):
             raise HTTPException(409,'Reconecte o YouTube em Canais autorizando o gerenciamento de vídeos para editar pela plataforma.')
@@ -608,7 +615,10 @@ def prepare_pilot(pid:uuid.UUID,body:PreparePilot):
             c.commit();return existing
         key=p['report'].get('delivery_assets',{}).get('description')
         from .copywriting import organic
-        description='One hour of warm lofi jazz for coding, studying and quiet focus.\n\nWhat are you working on today? Tell us in the comments.\nIf these sessions help you, subscribe. New places to focus are on the way.'
+        # The fallback only states a duration that the measured file supports.
+        from .delivery import hours_phrase
+        lead=hours_phrase(p['report'].get('duration_seconds'))
+        description=((lead+' of warm lofi jazz' if lead else 'Warm lofi jazz')+' for coding, studying and quiet focus.\n\nWhat are you working on today? Tell us in the comments.\nIf these sessions help you, subscribe. New places to focus are on the way.')
         if key:
             obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=key)
             try:description=organic(obj['Body'].read(20000).decode('utf-8'),p['title'])[:5000] or description
@@ -652,6 +662,9 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
         pilot_intent=(p.get('plan') or {}).get('intent','coding_focus')
         if body.intent!=pilot_intent:raise HTTPException(409,'A intenção deste vídeo mudou. Atualize a intenção e gere novamente a sugestão antes de publicar.')
         if not ready_pilot(p):raise HTTPException(409,'Vídeo completo de uma hora ainda não validado tecnicamente.')
+        from .delivery import reconcile_metadata
+        check=reconcile_metadata(body.title,body.description,p['report'].get('duration_seconds'),(p['report'].get('tracklist') or {}).get('entries'))
+        if check['issues']:raise HTTPException(422,'O texto não corresponde ao vídeo entregue: '+' '.join(check['issues']))
         from .provenance import publication_gate
         publication_gate(c,pilot=p)
         old=c.execute('SELECT '+FIELDS+' FROM youtube_publications WHERE request_id=%s OR pilot_id=%s',(body.request_id,pid)).fetchone()
@@ -662,8 +675,13 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
         cred=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s FOR UPDATE',(body.channel_id,)).fetchone()
         if not cred or not upload_allowed(json.loads(cipher().decrypt(cred['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio pelo Google no menu Canais.')
         jid=uuid.uuid4()
+        # Carry the direction and brief that produced the approved render, when it came from the Workshop.
+        trace={'metadata_check':check}
+        if p['report'].get('workshop_render_id'):
+            source=c.execute('SELECT payload FROM factory_tasks WHERE id::text=%s',(str(p['report']['workshop_render_id']),)).fetchone()
+            if source:trace.update({k:source['payload'].get(k) for k in ('direction_sha256','episode_brief_sha256')})
         c.execute('''INSERT INTO youtube_publications(id,request_id,channel_id,pilot_id,youtube_channel_id,title,description,intent,primary_phrase,privacy,made_for_kids,pilot_sha256,publication_metadata)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)''',(jid,body.request_id,body.channel_id,pid,cred['youtube_channel_id'],body.title.strip(),body.description,body.intent,primary_phrase,body.privacy,body.made_for_kids,p['report']['artifact_sha256']['video'],json.dumps(body.publication_metadata)))
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)''',(jid,body.request_id,body.channel_id,pid,cred['youtube_channel_id'],body.title.strip(),body.description,body.intent,primary_phrase,body.privacy,body.made_for_kids,p['report']['artifact_sha256']['video'],json.dumps((body.publication_metadata or {})|{'trace':trace},default=str)))
         audit(c,'PILOT_PUBLICATION_AUTHORIZED',str(jid),json.dumps({'pilot_id':str(pid),'primary_phrase':primary_phrase,'growth_metadata':growth_receipt}));c.commit()
     return {'id':jid,'state':'queued','pilot_id':pid}
 

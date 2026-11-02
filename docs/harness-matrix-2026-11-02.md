@@ -75,3 +75,45 @@ Nenhuma migração de banco. O perfil vive no JSON das revisões de receita (`re
 5. Diagnósticos de crescimento por gargalo com confiança, esforço e critério de avaliação. Retorno dos resultados à memória.
 
 Impedimentos externos: aceite com geração paga e publicação real dependem de autorização explícita. Narração/voz e formatos 9:16 nativos por perfil não existem no estúdio e aparecem como impedimento, não como suporte.
+
+## Complementos: motores, ambiência, abertura e apresentação (branch `claude/motores-entrega-verificada`)
+
+Fontes: "Melhorias dos motores" (prompt integral), adendo de ambiência/abertura/apresentação e Prompt V2. Os scripts do anexo **não** foram copiados: os problemas que eles evidenciam viraram regressões.
+
+| Requisito | Estado | Evidência |
+|---|---|---|
+| Crossfades descontados, cobertura medida pelo PCM, insuficiência bloqueada | **Existente → testado** | `audio_mix.mix/coverage`. `tests/test_delivery.py` prova que acrescentar segundos ao alvo não cria cobertura. |
+| Arquivo final verificado, não só o código de saída do FFmpeg | **Implementado e testado** | `delivery.verify_delivery`: streams esperados, codecs, fps, sample rate, canais, início dos streams, diferença áudio×vídeo e silêncio final. Aplicado em `workshop_worker.render_segments` (montagem e prévias) e na entrega só de áudio. Um vídeo com áudio mais curto ou sem áudio é rejeitado. |
+| Análise de programa separada da análise de faixa | **Implementado e testado** | `delivery.program_audio`: loudness, true peak, LRA e silêncio inicial/final sem o limite de 600 s do `quality_gate`. Não normaliza e compara com a política de masterização existente. Aplicado na trilha do Workshop e da entrega só de áudio. |
+| Ambiência aplicada em todos os caminhos suportados | **Parcial → implementado no Workshop e no áudio** | Antes só o Criador legado (`creator_service.apply_ambience`) aplicava `ambient_bed`. Agora `workshop_worker.apply_recipe_ambience` aplica a camada, preserva e envia a mixagem só com música e registra o relatório. |
+| Ganho aplicado × relação medida com a música | **Implementado e testado** | `ambient_audio.layer` registra `applied_gain_db` e `measured_relation_lu` (LUFS da camada no ganho aplicado menos LUFS da música). |
+| Proveniência por camada (fonte, autorização, hash, nível, fades, posição, relação com a cena) | **Implementado** | Relatório da camada: `source`, `authorization`, `bed_sha256`, `placement`, `fade_*`, `scene_relation_review=required`. Os fades de entrada e saída ainda são fixos em 0, e configurá-los fica pendente com a decisão de abertura. |
+| Café e digitação | **Ausente (declarado)** | `ambient_audio.CATALOG`: sem fonte própria ou licenciada. Aparecem desabilitados com o motivo na tela de receitas, e a receita não aceita salvá-los. |
+| Efeitos pontuais sincronizados com ações | **Ausente** | Não há fonte nem ligação com os eventos da timeline. |
+| Tracklist pelos offsets reais e capítulos só quando válidos | **Implementado e testado** | `delivery.tracklist/chapters`, gravados no relatório da montagem e da entrega só de áudio. Defeito corrigido: `ambient_api.tracklist` somava durações nominais e ignorava os crossfades; agora usa os offsets do manifesto. |
+| Revisão da abertura (15/30/60/90 s e primeira transição) | **Parcial → medição implementada e testada** | `delivery.opening_review` mede, na mídia entregue, silêncio, saltos de nível em 1 s e true peak, e grava `opening_review` (status `review_required`). **Pendente:** a decisão de abertura no briefing (faixa inicial, entrada da ambiência, vinheta, imagem inicial) e uma aprovação específica vinculada a ela. |
+| Apresentação do canal (nome, promessa, idioma, avatar, banner, playlists, trailer, destaque) | **Implementado** | `channel_audit.presentation_checklist` mostra o que a API lê e o que vira tarefa manual no Studio. Trailer e vinheta são opcionais e nunca produzidos automaticamente. |
+| Metadados conciliados com a mídia final | **Parcial** | Tracklist, capítulos e duração medida estão no relatório da montagem. Falta usá-los no pacote do Growth e na publicação. |
+| Miniatura com decisão explícita (texto, idioma, hierarquia) | **Ausente** | Pendente na etapa 4. |
+| Impacto de edição; corrigir só o áudio preservando o visual | **Parcial** | Reedição sem nova música (#100) e retomada da trilha sem nova chamada paga existem. Falta um relatório de impacto antes de editar. |
+| Regressões dos exemplos do anexo | **Implementado e testado** | Teste estático: rótulos de filtergraph `[1:a]`, `eq` com `t` exige `eval=frame`, nenhuma janela fixa de 300 quadros e nenhum `-shortest` nos motores de arquivo. O `-shortest` permanece só na transmissão RTMP ao vivo (`program_radio`), onde o vídeo é infinito e o fim do programa encerra a transmissão. |
+| Garantias algorítmicas do anexo (3601 s, ruído, hashes, Content ID) | **Não incorporadas por decisão** | Nenhuma regra ou mensagem do produto promete desbloqueio por ruído, hash ou duração. |
+
+Validação deste complemento: `tests/test_delivery.py` (10 testes com FFmpeg real) e a extensão de `tests/test_channel_audit.py`, além das suítes completas. Implantado: não.
+
+## Pendências atacadas nesta rodada (mesma branch)
+
+| Pendência | Estado | Evidência |
+|---|---|---|
+| Busca de referências pela API do YouTube | **Implementado e testado** | `studio/reference_research.py`: `POST /api/growth/{canal}/reference-search` com confirmação de cota (`search.list`: 1 unidade do balde de buscas, até 100 por dia segundo a documentação consultada em 2026-11-02). Buscas iguais em 7 dias reutilizam o resultado salvo sem nova chamada. Resultados registram só metadados públicos, e vídeos do próprio canal não viram referência externa. Tela: Análises → Referências. |
+| Tipo de observação de cada referência | **Implementado e testado** | `reference_observations` ganhou `source`, `observation_type`, `fit_reason`, `observed_features`, `observed_timestamp`, `search_result_id` e `reference_role` (colunas novas com padrão compatível). Observação perceptiva exige descrição do que foi ouvido ou visto. A memória do canal já lê essa tabela. |
+| Briefing versionado (referência → princípio → escolha própria → critério) | **Implementado e testado** | `studio/episode_brief.py`: `PUT/GET /workshop/projects/{id}/brief`, uma versão por mudança, só com referências do mesmo canal. Critério perceptivo citando referência só de metadados é recusado. Tela: painel "Briefing do episódio" no projeto. |
+| O briefing chega aos pedidos reais | **Implementado e testado** | Música: `composition_request` inclui o conceito, a direção temporária, a experiência da faixa de abertura (só na primeira) e os princípios transformados. Imagem e vídeo: `visual_workshop.prompt` inclui conceito, direção, imagem e movimento iniciais (só na base) e princípios. A tarefa paga grava `episode_brief_sha256`. Sem briefing, os prompts são idênticos aos da `main` (comparação byte a byte). |
+| Decisão de abertura → motores e revisão | **Implementado e testado** | A entrada e o fade da ambiência seguem o briefing (`ambient_audio.layer` com atraso e fade; `none` dispensa a camada do canal neste episódio). A montagem grava a versão do briefing. `POST .../renders/{id}/opening-review` registra a revisão humana presa aos bytes e à versão do briefing, e a aprovação final passa a exigi-la quando o briefing decide a abertura. |
+| Vinheta | **Ausente (bloqueio declarado)** | Pedir vinheta bloqueia a montagem antes de reservar custo, porque não existe gerador de vinheta. |
+| Decisão de miniatura | **Parcial** | A decisão fica registrada no briefing: texto ou não, mensagem, idioma, hierarquia e relação com o título; a arte da cena nunca leva texto. Ainda não há geração nem avaliação reduzida da miniatura. |
+| Relatório de impacto antes de editar | **Implementado e testado** | `studio/edit_impact.py`: `POST /workshop/projects/{id}/impact` usa o mesmo `status()` do Workshop no rascunho atual e no proposto. Mostra o que se mantém, as aprovações perdidas, o que regenerar com cotação, a trilha (nova ou reaproveitável) e a aprovação final perdida. Mudar só a música preserva todo o visual; mudar uma ação invalida só aquele trecho; editar só o texto não refaz nada. Tela: "Ver impacto antes de salvar". |
+| Metadados conciliados com a mídia entregue | **Implementado e testado** | `delivery.reconcile_metadata`: afirmações de duração (inglês e português) e carimbos de capítulo são conferidos contra a duração medida e a tracklist real. Aplicado ao criar a publicação, ao editar metadados de vídeo publicado e na auditoria do catálogo (`duration_claim_mismatch`). O rascunho padrão deixou de afirmar "One hour" sem medição. |
+| Rastreio da direção até a publicação | **Implementado** | `direction_sha256` na geração, na revisão visual e na montagem. A publicação de vídeo vindo do Workshop registra direção, briefing e a conciliação em `publication_metadata.trace`. |
+| Efeitos pontuais, café e digitação | **Ausente** | Continuam sem fonte e aparecem como indisponíveis. |
+| Diagnóstico de crescimento por gargalo (etapa 5) | **Pendente** | Não iniciado nesta rodada. |

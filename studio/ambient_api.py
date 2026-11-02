@@ -3,7 +3,7 @@ import uuid,json,os
 from fastapi import APIRouter,HTTPException,Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
-from .core import db,audit
+from .core import db,audit,storage
 router=APIRouter(prefix='/api/ambient')
 def init(c):
  c.execute("""CREATE TABLE IF NOT EXISTS ambient_pilots(id UUID PRIMARY KEY,channel_id UUID NOT NULL,title TEXT NOT NULL,video_key TEXT NOT NULL,silent_key TEXT NOT NULL,report JSONB NOT NULL,plan JSONB NOT NULL,status TEXT NOT NULL DEFAULT 'review',approved_at TIMESTAMPTZ,created_at TIMESTAMPTZ DEFAULT now())""")
@@ -29,17 +29,31 @@ def approve(pid:uuid.UUID,body:Approval):
   if not c.execute('SELECT id FROM ambient_pilots WHERE id=%s FOR UPDATE',(pid,)).fetchone():raise HTTPException(404,'Piloto não encontrado')
   c.execute("UPDATE ambient_pilots SET status='approved',approved_at=now(),report=report||%s::jsonb WHERE id=%s",(json.dumps({'human_visual_review':'approved',**({'human_audio_review':'approved'} if body.confirm_audio else {})}),pid));audit(c,'AMBIENT_PILOT_APPROVED',str(pid),'Human visual approval; no replacement or broadcast');c.commit()
  return {'ok':True,'broadcast_started':False,'existing_videos_replaced':False}
+def legacy_tracklist_lines(rows,manifest):
+ """Measured offsets from the packaged mix (after crossfades); nominal sums only when no manifest exists."""
+ from .delivery import stamp
+ starts={str(t.get('asset_id')):float(t['start_seconds']) for t in (manifest or {}).get('tracks',[]) if t.get('start_seconds') is not None}
+ delivered=float((manifest or {}).get('duration_seconds') or 0) or None
+ elapsed=0;lines=[]
+ for r in rows:
+  start=starts.get(str(r.get('asset_id')),elapsed if not starts else None)
+  if start is None:continue
+  if delivered is not None and start>=delivered-1:continue
+  lines.append(stamp(start)+' '+r['title']);elapsed+=float(r['duration_seconds'])
+ return lines
+
 @router.get('/programs/{bid}/tracklist')
 def tracklist(bid:str):
  from .miniobs import program_tracks
  with db() as c:
-  if not c.execute('SELECT id FROM production_batches WHERE id=%s',(bid,)).fetchone():raise HTTPException(404,'Programa não encontrado')
+  batch=c.execute('SELECT id,manifest_key FROM production_batches WHERE id=%s',(bid,)).fetchone()
+  if not batch:raise HTTPException(404,'Programa não encontrado')
   rows=program_tracks(c,bid)
- elapsed=0;lines=[]
- for r in rows:
-  n=int(elapsed);stamp=f'{n//3600}:{n%3600//60:02}:{n%60:02}' if n>=3600 else f'{n//60}:{n%60:02}'
-  lines.append(stamp+' '+r['title']);elapsed+=float(r['duration_seconds'])
- return PlainTextResponse('\n'.join(lines),headers={'Content-Disposition':'attachment; filename="tracklist.txt"'})
+ manifest=None
+ if batch.get('manifest_key'):
+  try:manifest=json.loads(storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=batch['manifest_key'])['Body'].read())
+  except Exception:manifest=None  # missing manifest: fall back to nominal durations
+ return PlainTextResponse('\n'.join(legacy_tracklist_lines(rows,manifest)),headers={'Content-Disposition':'attachment; filename="tracklist.txt"'})
 
 @router.get('/pilots/{pid}/hour-plan')
 def hour_plan(pid:uuid.UUID):

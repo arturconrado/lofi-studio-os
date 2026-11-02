@@ -18,9 +18,9 @@ VERSION=1
 AGENTS=[
     {'id':'channel_profile','label':'Perfil do canal','kind':'human','cost':'free','module':'studio/recipes.py + studio/niche_profiles.py',
      'produces':'Receita versionada com perfil de nicho'},
-    {'id':'reference_research','label':'Pesquisa de referências','kind':'ai_agent','cost':'quota','module':None,
+    {'id':'reference_research','label':'Pesquisa de referências','kind':'ai_agent','cost':'quota','module':'studio/reference_research.py',
      'produces':'Referências com fonte, motivo e tipo de observação'},
-    {'id':'creative_brief','label':'Briefing criativo','kind':'human','cost':'free','module':'studio/visual_workshop.py (tema, cena, ações)',
+    {'id':'creative_brief','label':'Briefing criativo','kind':'human','cost':'free','module':'studio/episode_brief.py + studio/visual_workshop.py',
      'produces':'Tema, cena e ações originais do episódio'},
     {'id':'identity','label':'Identidade visual do canal','kind':'harness','cost':'free','module':'studio/workshop_api.py (identity_profile_for_channel)',
      'produces':'Referências aprovadas vinculadas ao projeto'},
@@ -58,6 +58,8 @@ def digest(value):
 def resolved_direction(c,row,draft,recipe=None,identity=None):
     """Single direction every agent of this project works from; changes produce a new hash."""
     from .niche_profiles import resolve,capability_blockers
+    from .episode_brief import latest_data,capability_blockers as brief_blockers
+    episode=latest_data(c,row['id'])
     profile=resolve((recipe or {}).get('data'))
     brief={'theme':draft.theme,'scene':draft.scene,'scene_motion':draft.scene_motion,'music_brief':draft.music_brief,
            'characters':[{'name':ch.name,'description':ch.description} for ch in draft.characters],
@@ -72,7 +74,10 @@ def resolved_direction(c,row,draft,recipe=None,identity=None):
                'profile':{'source':profile['source'],'sha256':profile['sha256'],'niche':profile['profile']['niche'],
                           'language':profile['profile']['language'],'blockers':capability_blockers(profile)},
                'identity':{'profile_id':(identity or {}).get('id'),'reference_sha256s':sorted({r['sha256'] for r in refs if r.get('sha256')})},
-               'brief_sha256':digest(brief),'references':{'selected':[],'status':'reference_research_not_available'},
+               'brief_sha256':digest(brief),
+               'episode_brief':{'sha256':(episode or {}).get('sha256'),'revision':(episode or {}).get('revision'),'blockers':brief_blockers(episode)},
+               'references':{'selected':sorted({str(t['reference_id']) for t in (episode or {}).get('transformations') or []}),
+                             'status':'cited_in_brief' if (episode or {}).get('transformations') else 'none_cited'},
                'project_budget_usd':budget}
     return direction|{'sha256':digest(direction)}
 
@@ -90,7 +95,7 @@ def step(agent,status,reason,expected,cost=None,action=None):
             'expected_result':expected,'cost_usd':cost,'action':action}
 
 
-def plan_steps(detail,direction,draft):
+def plan_steps(detail,direction,draft,opening_required=False):
     """Ordered steps from the project's real state. Statuses: done, ready, waiting_human, running, blocked, recommended, not_available."""
     states=detail['states'];media=detail['media'];jobs=detail['jobs'];identity=detail['identity']
     automatic=draft.automatic_motion
@@ -99,13 +104,17 @@ def plan_steps(detail,direction,draft):
     steps.append(step('channel_profile','blocked' if blocking else 'done',
         ' '.join(blocking) if blocking else (f"Perfil “{direction['profile']['niche']}” ({'receita' if direction['profile']['source']=='recipe' else 'padrão histórico LoFi'})."),
         'Direção de nicho aplicada aos pedidos de música, imagem, vídeo e revisão.'))
-    steps.append(step('reference_research','not_available','A busca de referências com fonte e motivo entra na etapa 2; hoje só há referências registradas manualmente no Growth.',
+    cited=direction['references']['selected']
+    steps.append(step('reference_research','done' if cited else 'recommended',
+        f'{len(cited)} referência(s) citada(s) no briefing.' if cited else 'Pesquise em Análises e cite referências no briefing; a busca usa a cota diária do YouTube e reaproveita buscas salvas.',
         'Referências comparáveis e diversas, com o que foi realmente observado.'))
     brief_ok=bool(draft.scene.strip()) and not detail['planning_errors']  # the Workshop requires a scene; theme is optional
-    ok_reason='Tema e cena definidos.' if draft.theme.strip() else 'Cena definida; tema vazio (opcional, ajuda música e metadados).'
-    steps.append(step('creative_brief','done' if brief_ok else 'waiting_human',
-        ok_reason if brief_ok else ('; '.join(detail['planning_errors']) or 'Defina a cena do episódio.'),
-        'Conceito original do episódio dentro da identidade do canal.'))
+    episode=direction['episode_brief']
+    if not brief_ok:brief_state=('waiting_human','; '.join(detail['planning_errors']) or 'Defina a cena do episódio.')
+    elif episode['blockers']:brief_state=('blocked',' '.join(b['reason'] for b in episode['blockers']))
+    elif episode['sha256']:brief_state=('done',f"Briefing v{episode['revision']} salvo e aplicado aos pedidos.")
+    else:brief_state=('recommended','Cena definida. Registre o briefing (conceito original, abertura e miniatura) para que ele oriente música, imagem e montagem.')
+    steps.append(step('creative_brief',*brief_state,'Conceito original do episódio dentro da identidade do canal.'))
     if identity['configured']:
         steps.append(step('identity','done' if identity['bound'] else 'waiting_human',
             'Referências aprovadas do canal vinculadas.' if identity['bound'] else 'Salve uma versão do projeto para vincular a identidade aprovada do canal.',
@@ -149,7 +158,9 @@ def plan_steps(detail,direction,draft):
     steps.append(step('music_assembler',*render,'Programa completo com música do perfil e duração medida.',action='render'))
     approved=any(j['current'] and j['status']=='COMPLETED' and j['approved'] for j in renders)
     if render[0]!='done':final=('blocked','Depende da montagem atual.')
-    else:final=('done','Montagem aprovada.') if approved else ('waiting_human','Assista e aprove o vídeo final; a aprovação vale para estes bytes.')
+    elif approved:final=('done','Montagem aprovada.')
+    elif opening_required:final=('waiting_human','Revise a abertura (15/30/60/90 s e primeira transição) e depois aprove o vídeo final; as aprovações valem para estes bytes.')
+    else:final=('waiting_human','Assista e aprove o vídeo final; a aprovação vale para estes bytes.')
     steps.append(step('final_review',*final,'Aprovação humana vinculada à mídia entregue.'))
     published=bool(detail.get('parent_videos'))
     after=('blocked','Depende da aprovação final.') if final[0]!='done' else None
@@ -181,7 +192,10 @@ def orchestration(pid:uuid.UUID):
         remember(c,row,direction)
         history=c.execute('SELECT sha256,created_at FROM orchestration_directions WHERE project_id=%s ORDER BY created_at DESC LIMIT 20',(pid,)).fetchall()
         c.commit()
-    steps=plan_steps(view,direction,draft)
+    with db() as c:
+        from .episode_brief import latest_data
+        episode=latest_data(c,pid)
+    steps=plan_steps(view,direction,draft,bool((episode or {}).get('opening')))
     with db() as c:
         used=c.execute("""SELECT payload->>'direction_sha256' sha,payload->>'operation' operation,count(*) n FROM factory_tasks
                           WHERE payload->>'project_id'=%s AND payload ? 'direction_sha256' GROUP BY 1,2""",(str(pid),)).fetchall()

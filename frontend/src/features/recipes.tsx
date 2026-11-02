@@ -179,7 +179,8 @@ export function RecipeEditor({ id }: { id?: string }) {
         </div>
         <div class="grid cols-3">
           <Field label="Crossfade entre faixas (s)"><input class="input" type="number" min={0} max={5} step={0.5} value={m.crossfade_seconds} onInput={e => set('music', 'crossfade_seconds', Number((e.target as HTMLInputElement).value))} /></Field>
-          <Field label="Ambiência"><select class="select" value={m.ambient_bed} onChange={e => set('music', 'ambient_bed', (e.target as HTMLSelectElement).value)}><option value="none">Nenhuma</option><option value="rain">Chuva</option><option value="fireplace">Lareira</option></select></Field>
+          <Field label="Ambiência" hint={((catalog.data as any)?.ambience || []).filter((a: any) => !a.available).map((a: any) => `${a.label}: ${a.reason}`).join(' ')}><select class="select" value={m.ambient_bed} onChange={e => set('music', 'ambient_bed', (e.target as HTMLSelectElement).value)}><option value="none">Nenhuma</option>
+            {(((catalog.data as any)?.ambience as any[]) || [{ id: 'rain', label: 'Chuva', available: true }, { id: 'fireplace', label: 'Lareira', available: true }]).map((a: any) => <option value={a.id} disabled={!a.available}>{a.label}{a.available ? '' : ' (indisponível)'}</option>)}</select></Field>
           <Field label="Volume da ambiência (dB)"><input class="input" type="number" min={-40} max={-12} value={m.ambient_gain_db} onInput={e => set('music', 'ambient_gain_db', Number((e.target as HTMLInputElement).value))} /></Field>
         </div>
       </section>

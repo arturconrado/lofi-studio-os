@@ -1328,9 +1328,11 @@ def semantic_review(pid:uuid.UUID,cid:uuid.UUID,body:SemanticReviewRequest):
         if c.execute("SELECT to_regclass('visual_project_budgets') t").fetchone()['t']:
             budget=c.execute('SELECT limit_usd FROM visual_project_budgets WHERE project_id=%s',(pid,)).fetchone()
             if budget and project_generation_usage(c,pid)+cost>budget['limit_usd']:raise HTTPException(409,'O teto do projeto não cobre a avaliação visual.')
+        from .orchestration import resolved_direction, remember
+        direction=resolved_direction(c,row,draft,project_recipe(c,row,draft) if draft.recipe_id else None,identity);remember(c,row,direction)
         payload={'project_id':str(pid),'channel_id':str(row['channel_id']),'clip_id':str(cid),'operation':'semantic_review',
                  'variant_key':body.variant_key,'semantic_context':context,'human_reviews':channel_reviews(c,row['channel_id']),
-                 'semantic_version':VERSION}
+                 'semantic_version':VERSION,'direction_sha256':direction['sha256']}
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'QUEUED','Avaliação visual obrigatória: identidade, objetos, contato e ação')",
                   (body.request_id,KIND,MODEL,json.dumps(payload),cost));audit(c,'VISUAL_SEMANTIC_REVIEW_QUEUED',str(body.request_id),context['binding']);c.commit()
         return public_task(c.execute('SELECT * FROM factory_tasks WHERE id=%s',(body.request_id,)).fetchone())
@@ -1593,7 +1595,8 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 'variant_key':group['key'] if group else None,'requested_variant_key':body.variant_key,
                 'occurrence_ids':group['event_ids'] if group else [],'batch_ids':[str(t) for t in tids],
                 'signature':signature(draft,effective,kind,image['sha256'] if kind=='video' else None),
-                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None,identity_prompt,{'research':editorial_evidence,'human_reviews':channel_reviews(c,row['channel_id'])} if kind=='video' else editorial_evidence,recipe_item['data'] if recipe_item else None),'seconds':clip.seconds,
+                'prompt':prompt(draft,clip,kind,group.get('preceding_motion') if group else None,identity_prompt,{'research':editorial_evidence,'human_reviews':channel_reviews(c,row['channel_id'])} if kind=='video' else editorial_evidence,recipe_item['data'] if recipe_item else None,episode_brief_for(c,row)),
+                'episode_brief_sha256':(episode_brief_for(c,row) or {}).get('sha256'),'seconds':clip.seconds,
                 'editorial_memory':editorial_memory,
                 'resolution':body.resolution,
                 'visual_signature':signature(draft,clip,'image'),'source_image_id':str(effective.image_id) if effective.image_id else None,
@@ -2063,6 +2066,12 @@ def start_channel_project(cid: uuid.UUID, body: Starter):
     return {'id':str(body.request_id)}
 
 
+def episode_brief_for(c, row):
+    if not row.get('id'):return None  # no saved project, no episode brief
+    from .episode_brief import latest_data
+    return latest_data(c, row['id'])
+
+
 def music_template(c, row, draft):
     """Use a pinned recipe for new projects, or preserve the legacy style source."""
     if draft.recipe_id:
@@ -2071,6 +2080,8 @@ def music_template(c, row, draft):
               'creative_theme':draft.theme,'music_brief':draft.music_brief,
               'template_source':'channel_recipe','recipe_id':str(recipe['id']),
               'recipe_sha256':recipe['sha256']}
+        brief=episode_brief_for(c,row)
+        if brief:plan['episode_brief']=brief
         return {'program_id':None,'plan':plan,'snapshot_sha256':digest(plan)}
     query = '''SELECT b.id,p.data,pm.music_description,pm.title
       FROM production_batches b
@@ -2098,6 +2109,8 @@ def music_template(c, row, draft):
                 music_description=description, music_brief=draft.music_brief,
                 theme=draft.theme, creative_theme=draft.theme)
     plan['template_program_id'] = source['id']
+    brief = episode_brief_for(c, row)
+    if brief: plan['episode_brief'] = brief  # temporary episode decisions; the template identity hash stays the same
     template_hash = digest({'recipe': recipe, 'music_description': description,
                             'title': plan['title']})
     return {'program_id': source['id'], 'plan': plan, 'snapshot_sha256': template_hash}
@@ -2390,6 +2403,9 @@ def render(pid: uuid.UUID, body: Render):
         except ValueError as e: raise HTTPException(409, str(e)) from None
         if not worker_online(c): raise HTTPException(503, 'O montador está offline. Ative o worker de exportação antes de montar.')
         semantic_receipts=require_semantic_segments(row,draft,media,identity,segments)
+        from .episode_brief import capability_blockers as brief_blockers
+        gaps=brief_blockers(episode_brief_for(c,row))
+        if gaps: raise HTTPException(409,'O briefing pede algo que o estúdio não executa: '+' '.join(g['reason'] for g in gaps)+' Nada foi reservado.')
         template = music_template(c, row, draft)
         quote = soundtrack_quote(int(segments[-1]['end'] + .999))
         if not body.confirm_cost:
@@ -2407,7 +2423,10 @@ def render(pid: uuid.UUID, body: Render):
         director = contract(row['channel_id'], draft, identity, {'research':editorial_evidence,'human_reviews':channel_reviews(c,row['channel_id'])})
         draft_sha=digest(row['data'])
         identity_hashes=identity_reference_hashes(identity)
+        from .orchestration import resolved_direction, remember
+        direction = resolved_direction(c, row, draft, project_recipe(c, row, draft) if draft.recipe_id else None, identity); remember(c, row, direction)
         payload = {'project_id': str(pid), 'operation': 'render', 'draft_sha256': digest(row['data']),
+                   'direction_sha256': direction['sha256'], 'episode_brief_sha256': (template['plan'].get('episode_brief') or {}).get('sha256'),
                    'output_resolution': body.output_resolution,
                    'seconds': segments[-1]['end'], 'segments': segments,
                    'director_contract': director, 'editorial_memory': editorial_meta,
@@ -2648,6 +2667,8 @@ def review_render(pid: uuid.UUID, tid: uuid.UUID, body: Review):
             if not body.confirm_identity or not body.confirm_motion_and_return: raise HTTPException(422, 'Confira todos os movimentos e o retorno à base')
             try: assemble(Draft.model_validate(row['data']), assets(c, pid))
             except ValueError as e: raise HTTPException(409, str(e)) from None
+            from .episode_brief import require_opening_approval
+            require_opening_approval(c, pid, p, body.sha256)
         p.update(approved=body.approve, review_sha256=body.sha256, review_note=body.note)
         c.execute('UPDATE factory_tasks SET payload=%s WHERE id=%s', (json.dumps(p), tid)); c.commit()
     return {'approved': body.approve}
