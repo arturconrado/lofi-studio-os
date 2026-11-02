@@ -8,14 +8,14 @@ import { channel } from '../lib/store';
 import { href, navigate } from '../lib/router';
 import { Field, Empty, Skeleton, Pill, Dialog } from '../ds/ui';
 
-type Clip = { action_goal?: string | null; continues_from?: string | null; id: string; name: string; motion: string; seconds: number; references: string[]; image_id: string | null; video_id: string | null };
+type Clip = { sound_effect?: string; sound_effect_gain_db?: number; action_goal?: string | null; continues_from?: string | null; id: string; name: string; motion: string; seconds: number; references: string[]; image_id: string | null; video_id: string | null };
 type Character = { name: string; description: string; references: string[] };
 type AttemptReasonRequest =
   | { mode: 'scope'; message: string; revision: number }
   | { mode: 'correction'; clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string; revision: number; resolution: '720p' | '1080p' };
 type PaidApproval = { clip: Clip; kind: 'image' | 'video'; variantKey?: string; quote: any; history: string; reason?: string; revision: number; resolution: '720p' | '1080p' };
 type Draft = { recipe_id?: string | null; recipe_sha256?: string | null; recipe_visual_direction?: string; automatic_motion?: boolean; identity_profile?: string | null; name: string; minutes: number; theme: string; scene: string; scene_motion: string; scene_references: string[];
-  characters: Character[]; base: Clip; clips: Clip[]; insertions: { id: string; clip_id: string; minute: number }[]; music_program_id: string | null; music_brief?: string };
+  characters: Character[]; base: Clip; clips: Clip[]; insertions: { id: string; clip_id: string; minute: number }[]; music_program_id: string | null; music_brief?: string; generated_ambience?: string; generated_ambience_gain_db?: number };
 type SemanticReceipt = { state: 'passed' | 'blocked'; findings: Record<string,{verdict:string; evidence:string; correction:string; frames:number[]}> };
 type Media = { semantic_review?: SemanticReceipt; semantic_current?: boolean; id: string; url: string; sha256: string; kind: string; approved: boolean; clip_id?: string; resolution?: '720p' | '1080p' };
 type Variant = { key: string; minutes: number[]; event_ids: string[]; image_id: string | null; video_id: string | null; image_approved: boolean; video_ready: boolean; video_approved: boolean; seams_approved: boolean; source_ready: boolean };
@@ -316,6 +316,10 @@ export function Workshop({ id }: { id?: string }) {
       <div class="row"><h3 class="grow">{base ? '2. Vídeo-base que se repete' : clip.name}</h3><Pill tone={!dirty && (automatic ? state?.video_ready : state?.video_approved) ? 'ok' : 'warn'}>{!dirty && (automatic ? state?.video_ready : state?.video_approved) ? automatic ? 'Pronto para montagem' : state?.seams_approved === false ? 'Revisar emendas' : 'Aprovado' : 'Em preparação'}</Pill></div>
       <Field label="Nome do trecho"><input class="input" value={clip.name} onInput={e => editClip({ ...clip, name: e.currentTarget.value })} /></Field>
       <Field label={base ? 'Movimentos da base e pose inicial/final' : 'Movimentos desta inserção e retorno à pose-base'}><textarea class="textarea" value={clip.motion} onInput={e => editClip({ ...clip, motion: e.currentTarget.value })} /></Field>
+      {!base && <div class="grid cols-2">
+        <Field label="Efeito sonoro gerado com este trecho (opcional)" hint="Ex.: digitação suave. O vídeo é gerado com áudio (preço do vídeo com som) e o efeito entra em cada horário desta ação; exige escuta."><input class="input" maxLength={200} value={clip.sound_effect || ''} onInput={e => editClip({ ...clip, sound_effect: e.currentTarget.value })} /></Field>
+        {clip.sound_effect && <Field label="Volume do efeito (dB)"><input class="input" type="number" min={-30} max={-6} value={clip.sound_effect_gain_db ?? -18} onInput={e => editClip({ ...clip, sound_effect_gain_db: Number(e.currentTarget.value) })} /></Field>}
+      </div>}
       <Field label="Duração deste trecho (segundos)"><select class="select" value={clip.seconds} disabled={!capabilities.data?.durations} onChange={e => editClip({ ...clip, seconds: Number(e.currentTarget.value) })}>
         {!capabilities.data?.durations?.includes(clip.seconds) && <option value={clip.seconds}>{clip.seconds}s — configuração anterior, consulte opções</option>}
         {capabilities.data?.durations?.map(n => <option value={n}>{n} segundos</option>)}</select><small>Durações consultadas no modelo. Alterar a duração preserva sua imagem; o vídeo precisa de nova revisão.</small>
@@ -466,7 +470,7 @@ export function Workshop({ id }: { id?: string }) {
       {!d.jobs.some(j=>['QUEUED','SUBMITTING','RUNNING','UNCERTAIN'].includes(j.status)) && <p>Nenhuma tarefa ativa registrada na última consulta. Use o próximo passo para continuar.</p>}
     </section>}
     {id && d && <OrchestrationPanel projectId={id} version={d.revision} />}
-    {id && d && channel.value && <EpisodeBriefPanel projectId={id} channelId={channel.value.id} renders={d.jobs} />}
+    {id && d && channel.value && <EpisodeBriefPanel projectId={id} channelId={channel.value.id} renders={d.jobs} revision={d.revision} />}
     <section class="card stack" aria-label="Como continuar">
       <div class="row"><h2 class="grow">Próximo passo: {nextLabel}</h2><button class="btn primary" disabled={busy || !!activeRender || generatingNext || !channel.value} onClick={nextAction}>{nextLabel}</button></div>
       {!channel.value && <p role="status">Selecione um canal para criar ou continuar seu projeto.</p>}
@@ -575,6 +579,10 @@ export function Workshop({ id }: { id?: string }) {
       {draft.base.video_id && d?.media[draft.base.video_id]?.resolution === '720p' && <p class="notice warn">A base selecionada foi gerada em 720p. {outputResolution === 'auto' ? 'A montagem automática usará 720p se algum trecho tiver resolução inferior a Full HD.' : 'O vídeo final terá 1080p, com esta base ampliada.'} Selecionar 1080p para novas gerações não altera a base existente.</p>}
       {draft.recipe_id && <p class="notice">Receita versionada vinculada a este projeto. A primeira trilha será composta a partir dela, sem exigir áudio anterior. O tema e a direção abaixo orientam as variações criativas.</p>}
       <Field label="Referência de estilo musical"><select disabled={!!draft.recipe_id} class="select" value={draft.music_program_id || ''} onChange={e => field('music_program_id', e.currentTarget.value || null)}><option value="">{draft.recipe_id ? 'Receita versionada deste projeto' : 'Padrão: estilo da produção mais recente do canal'}</option>{d?.music.map(m => <option value={m.id}>{m.id} · {Math.floor(m.seconds / 60)} min de referência</option>)}</select><small>O áudio dessa produção não será reutilizado. O Harness cria uma trilha inédita para o tema atual e remove os arquivos temporários ao concluir o vídeo.</small></Field>
+      <div class="grid cols-2">
+        <Field label="Ambiência gerada com o vídeo-base (opcional)" hint="Ex.: café distante com xícaras. Gerada pelo modelo de vídeo junto com a base, emendada em loop sob a música; substitui a ambiência da receita neste projeto e exige escuta."><input class="input" maxLength={200} value={draft.generated_ambience || ''} onInput={e => field('generated_ambience', e.currentTarget.value)} /></Field>
+        {draft.generated_ambience && <Field label="Volume da ambiência (dB)"><input class="input" type="number" min={-40} max={-12} value={draft.generated_ambience_gain_db ?? -26} onInput={e => field('generated_ambience_gain_db', Number(e.currentTarget.value))} /></Field>}
+      </div>
       <Field label="Direção musical desta produção"><textarea class="textarea" maxLength={2000} value={draft.music_brief || ''} onInput={e => field('music_brief', e.currentTarget.value)} placeholder="Gênero, instrumentos e detalhes sonoros desejados para este vídeo" /><small>Descreva variações para este vídeo; o estilo do canal continua como referência. Salvar não inicia geração.</small></Field>
       <p class="faint">Ao clicar em montar, você autoriza um teto de até {soundtrackTrackCap} composições, US$ {soundtrackCostCap.toFixed(2)}. Esse valor aparece antes do início e o servidor bloqueia a tarefa se o limite global ou o deste projeto não comportar a reserva. Se a duração medida das composições não cobrir o vídeo, a montagem para sem completar o arquivo ou fazer chamadas pagas extras automaticamente.</p>
       {!semanticReady && <p role="status">Avalie identidade, objetos e ação de cada animação selecionada antes da montagem final. Avaliações ausentes, incertas ou desatualizadas bloqueiam a produção.</p>}

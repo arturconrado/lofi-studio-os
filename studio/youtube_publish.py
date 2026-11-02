@@ -695,16 +695,28 @@ def verify_pilot_media(row):
     finally:obj['Body'].close()
     if h.hexdigest()!=expected:raise ValueError('Pilot integrity changed')
 
+def approved_workshop_thumbnail(row):
+    """The approved thumbnail of the Workshop project that produced this pilot, if any."""
+    render=(row.get('pilot_report') or {}).get('workshop_render_id')
+    if not render:return None
+    from .thumbnails import approved_for_project
+    with db() as c:
+        task=c.execute('SELECT payload FROM factory_tasks WHERE id::text=%s',(str(render),)).fetchone()
+        return approved_for_project(c,task['payload']['project_id']) if task else None
+
+
 def set_pilot_thumbnail(client,row,video_id):
     try:
-        key=row['pilot_report']['delivery_assets']['thumbnail1']
+        approved=approved_workshop_thumbnail(row)
+        key=approved['key'] if approved else row['pilot_report']['delivery_assets']['thumbnail1']
+        content_type='image/jpeg' if approved else 'image/png'
         obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=key)
         try:
             if obj['ContentLength']>50*1024*1024:raise ValueError('Thumbnail too large')
             data=obj['Body'].read()
         finally:obj['Body'].close()
-        r=client.post('https://www.googleapis.com/upload/youtube/v3/thumbnails/set',params={'videoId':video_id},headers={'Authorization':'Bearer '+access_token(client,row),'Content-Type':'image/png'},content=data)
-        r.raise_for_status();progress(row['id'],thumbnail_detail='Capa do episódio enviada ao YouTube.')
+        r=client.post('https://www.googleapis.com/upload/youtube/v3/thumbnails/set',params={'videoId':video_id},headers={'Authorization':'Bearer '+access_token(client,row),'Content-Type':content_type},content=data)
+        r.raise_for_status();progress(row['id'],thumbnail_detail='Miniatura aprovada do episódio enviada ao YouTube.' if approved else 'Capa do episódio enviada ao YouTube.')
     except Exception:progress(row['id'],thumbnail_detail='Vídeo recebido, mas a capa personalizada não foi confirmada. Confira a permissão de thumbnails do canal.')
 
 if __name__=='__main__':main()

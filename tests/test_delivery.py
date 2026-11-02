@@ -123,9 +123,10 @@ def test_ambience_catalog_only_offers_sources_the_studio_can_render():
     from studio.ambient_audio import catalog
     items={a['id']:a for a in catalog()}
     assert items['rain']['available'] and items['fireplace']['available']
-    assert not items['cafe']['available'] and not items['typing']['available'] and items['typing']['component']=='point_effect'
+    assert items['cafe']['source']=='generated_with_base_video' and items['typing']['source']=='generated_with_action_video'
+    assert items['typing']['component']=='point_effect' and not items['cafe']['recipe_selectable']
     from studio.recipes import MusicBible
-    with pytest.raises(ValueError):MusicBible(ambient_bed='cafe')  # an unavailable layer cannot be saved as if it worked
+    with pytest.raises(ValueError):MusicBible(ambient_bed='cafe')  # not a procedural recipe bed: it is generated per project
 
 
 def test_metadata_claims_are_reconciled_with_the_delivered_media():

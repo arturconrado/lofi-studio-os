@@ -1425,7 +1425,9 @@ def quote(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], varian
         if identity and kind=='video':
             validate_video_identity_source(identity,draft,clip,media,groups)
         attempt=attempt_decision(c,draft,clip,kind,resolution,groups,media,pid,row['channel_id'])
-    q=(provider_quote(kind,clip.seconds,resolution) if resolution!='720p' else provider_quote(kind,clip.seconds)) if groups else {'usd':0,'seconds':clip.seconds}
+    from .visual_workshop import sound_request
+    extra = {'audio':True} if kind=='video' and sound_request(draft,clip) else {}
+    q=(provider_quote(kind,clip.seconds,resolution,**extra) if resolution!='720p' else provider_quote(kind,clip.seconds,**extra)) if groups else {'usd':0,'seconds':clip.seconds}
     return {**q,'unit_usd':q['usd'],'usd':round(q['usd']*len(groups),6),'new_clips':len(groups),
             'attempt':{key:attempt[key] for key in ('allowed','stage','requires_reason','attempts_used','message','history','alternatives','delivery_scope','scope_review_required') if key in attempt},
             'reused_occurrences':sum(len(g['event_ids']) for g in variant_plan(draft,clip,media) if _status(draft,occurrence_clip(draft,clip,g,media),media,g)['video_ready']) if clip.id!=draft.base.id else 0,
@@ -1466,7 +1468,10 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
         if identity:
             from .visual_identity import channel_identity_prompt
             identity_prompt = channel_identity_prompt(identity['id']) or 'Use the first input reference as this channel\'s canonical character still. Preserve the exact same subject identity, face, hair, clothing, proportions and illustration style; ignore the reference background, season, lighting and props.'
-    q=provider_quote(kind,clip.seconds,body.resolution) if body.resolution!='720p' else provider_quote(kind,clip.seconds)
+    from .visual_workshop import sound_request
+    audio_needed = kind=='video' and bool(sound_request(draft,clip))
+    extra = {'audio':True} if audio_needed else {}
+    q=provider_quote(kind,clip.seconds,body.resolution,**extra) if body.resolution!='720p' else provider_quote(kind,clip.seconds,**extra)
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
         row=project(c,pid,True)
@@ -1602,6 +1607,7 @@ def generate(pid: uuid.UUID, cid: uuid.UUID, kind: Literal['image','video'], bod
                 'visual_signature':signature(draft,clip,'image'),'source_image_id':str(effective.image_id) if effective.image_id else None,
                 'identity_profile':identity['id'] if identity else None,
                 'direction_sha256':direction['sha256'],
+                'generate_audio':kind=='video' and bool(sound_request(draft,effective)),'audio_request':sound_request(draft,effective) if kind=='video' else '',
                 'identity_reference_sha256':identity['sha256'] if identity and kind=='image' else None,
                 'identity_reference_sha256s':identity_reference_hashes(identity),
                 'reference_roles':([{'index':i,'role':'canonical_character_identity' if i==0 else 'channel_character_identity_reference',
@@ -2404,6 +2410,10 @@ def render(pid: uuid.UUID, body: Render):
         if not worker_online(c): raise HTTPException(503, 'O montador está offline. Ative o worker de exportação antes de montar.')
         semantic_receipts=require_semantic_segments(row,draft,media,identity,segments)
         from .episode_brief import capability_blockers as brief_blockers
+        from .sound_design import plan_for as sound_plan, missing_audio
+        sound_design=sound_plan(draft,episode_brief_for(c,row))
+        silent=missing_audio(sound_design,segments,media)
+        if silent: raise HTTPException(409,'Estes trechos precisam ser gerados com o som planejado (o vídeo atual não tem áudio): '+', '.join(silent)+'. Nada foi reservado.')
         gaps=brief_blockers(episode_brief_for(c,row))
         if gaps: raise HTTPException(409,'O briefing pede algo que o estúdio não executa: '+' '.join(g['reason'] for g in gaps)+' Nada foi reservado.')
         template = music_template(c, row, draft)
@@ -2427,6 +2437,7 @@ def render(pid: uuid.UUID, body: Render):
         direction = resolved_direction(c, row, draft, project_recipe(c, row, draft) if draft.recipe_id else None, identity); remember(c, row, direction)
         payload = {'project_id': str(pid), 'operation': 'render', 'draft_sha256': digest(row['data']),
                    'direction_sha256': direction['sha256'], 'episode_brief_sha256': (template['plan'].get('episode_brief') or {}).get('sha256'),
+                   'sound_design': sound_design,
                    'output_resolution': body.output_resolution,
                    'seconds': segments[-1]['end'], 'segments': segments,
                    'director_contract': director, 'editorial_memory': editorial_meta,
@@ -2440,7 +2451,7 @@ def render(pid: uuid.UUID, body: Render):
                                                                   'seconds':get_clip(draft,event.clip_id).seconds}
                                                                  for event in sorted(draft.insertions,key=lambda item:item.minute)],
                                          'target_seconds':segments[-1]['end']},
-           'audio_plan': {'mode':'new_ephemeral_theme_track',
+           'audio_plan': {'mode':'new_ephemeral_theme_track','generated_ambience':bool(sound_design and sound_design.get('ambience')),
                           'template_program_id':template['program_id'],
                           'template_source':template['plan'].get('template_source','channel_production'),
                           'recipe_id':template['plan'].get('recipe_id'),

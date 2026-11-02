@@ -411,6 +411,8 @@ from .episode_brief import router as episode_brief_router
 router.include_router(episode_brief_router)
 from .edit_impact import router as edit_impact_router
 router.include_router(edit_impact_router)
+from .thumbnails import router as thumbnails_router
+router.include_router(thumbnails_router)
 
 
 @router.get('/pose-library')

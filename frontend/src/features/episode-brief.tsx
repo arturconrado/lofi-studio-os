@@ -11,7 +11,38 @@ const OPENING = { first_track_experience: '', ambience_entry: 'with_music', ambi
 const THUMB = { text_policy: 'no_text', message: '', language: '', hierarchy: '', title_relation: '' };
 const OBS: Record<string, string> = { metadata: 'metadados', image: 'imagem', human_listening: 'ouvida', human_viewing: 'assistida', media_analysis: 'análise de mídia' };
 
-export function EpisodeBriefPanel({ projectId, channelId, renders }: { projectId: string; channelId: string; renders: any[] }) {
+function ThumbnailPanel({ base, revision }: { base: string; revision: number }) {
+  const list = useResource<any>(`${base}/thumbnails`, [], [base]);
+  const [quote, setQuote] = useState<any>(null);
+  const [confirm, setConfirm] = useState(false);
+  const [checked, setChecked] = useState(false);
+  const [note, setNote] = useState('');
+  const latest = list.data?.thumbnails?.[0];
+  const loadQuote = async () => setQuote(await attempt(() => api(`${base}/thumbnail/quote`)));
+  const generate = async () => { if (await attempt(() => post(`${base}/thumbnail`, { request_id: crypto.randomUUID(), revision, confirm_cost: true, max_usd: quote.usd }), 'Miniatura gerada; revise em tamanho reduzido')) list.reload(); };
+  const review = async (approve: boolean) => { if (await attempt(() => post(`${base}/thumbnails/${latest.id}/review`, { sha256: latest.sha256, approve, confirm_small_size_checked: checked, note }), approve ? 'Miniatura aprovada para publicação' : 'Miniatura reprovada')) list.reload(); };
+  return <div class="card flat stack" aria-label="Miniatura do episódio">
+    <h3>Miniatura do episódio</h3>
+    <p class="faint">O modelo de imagem gera a arte sem texto a partir da imagem-base aprovada; o texto decidido no briefing é aplicado pelo estúdio.</p>
+    {!quote ? <button class="btn secondary" style={{ alignSelf: 'flex-start' }} onClick={loadQuote}>Ver custo para gerar</button> : <>
+      <Check checked={confirm} onChange={setConfirm}>Gerar uma imagem por até US$ {Number(quote.usd).toFixed(2)} ({quote.model})</Check>
+      <button class="btn" style={{ alignSelf: 'flex-start' }} disabled={!confirm} onClick={generate}>Gerar miniatura</button></>}
+    {latest && <div class="stack">
+      <div class="row"><Pill tone={latest.state === 'approved' ? 'ok' : latest.state === 'review_required' ? 'warn' : ''}>{({ approved: 'Aprovada', review_required: 'Aguardando revisão', rejected: 'Reprovada', failed: 'Falhou na verificação', generating: 'Gerando', uncertain: 'Envio incerto' } as any)[latest.state] || latest.state}</Pill></div>
+      {latest.image_url && <div class="row" style={{ alignItems: 'flex-end' }}>
+        <img src={latest.image_url} alt="Miniatura em tamanho normal" width={320} height={180} />
+        {Object.entries(latest.small_urls || {}).map(([size, url]: any) => <figure style={{ margin: 0 }}><img src={url} alt={`Miniatura em ${size}`} /><figcaption class="faint">{size}</figcaption></figure>)}
+      </div>}
+      {latest.evaluation && <ul>{latest.evaluation.checks.map((c: any) => <li><Pill tone={c.state === 'pass' ? 'ok' : c.state === 'fail' ? 'bad' : 'warn'}>{c.state === 'pass' ? 'Ok' : c.state === 'fail' ? 'Falhou' : c.state === 'pending' ? 'Revisão humana' : 'Conferir'}</Pill> {c.label}: {c.evidence}</li>)}</ul>}
+      {latest.state === 'review_required' && <>
+        <Check checked={checked} onChange={setChecked}>Conferi em 320×180 e 168×94, com o título e o vídeo</Check>
+        <Field label="O que foi conferido"><textarea class="textarea" rows={2} value={note} onInput={e => setNote((e.target as HTMLTextAreaElement).value)} /></Field>
+        <div class="row"><button class="btn primary" onClick={() => review(true)}>Aprovar miniatura</button><button class="btn ghost" onClick={() => review(false)}>Reprovar</button></div></>}
+    </div>}
+  </div>;
+}
+
+export function EpisodeBriefPanel({ projectId, channelId, renders, revision = 1 }: { projectId: string; channelId: string; renders: any[]; revision?: number }) {
   const base = `/api/creator/workshop/projects/${projectId}`;
   const saved = useResource<any>(`${base}/brief`, [], [projectId]);
   const refs = useResource<any>(`/api/growth/${channelId}/references/selected`, [], [channelId]);
@@ -67,6 +98,7 @@ export function EpisodeBriefPanel({ projectId, channelId, renders }: { projectId
       <Field label="Relação com o título"><input class="input" value={data.thumbnail.title_relation} onInput={e => setIn('thumbnail', 'title_relation', (e.target as HTMLInputElement).value)} /></Field>
     </div>}
     <button class="btn primary" style={{ alignSelf: 'flex-start' }} onClick={save}>Salvar briefing</button>
+    {saved.data?.brief?.data?.thumbnail && <ThumbnailPanel base={base} revision={revision} />}
     {render && saved.data?.brief?.data?.opening && <div class="card flat stack" aria-label="Revisão da abertura">
       <h3>Revisão da abertura do vídeo montado</h3>
       {opening?.windows ? <ul>{opening.windows.map((w: any) => <li>Primeiros {w.seconds} s: {w.silent_seconds} s de silêncio, maior variação em 1 s {w.max_one_second_change_lu} LU{w.review_cues.length ? ` — conferir: ${w.review_cues.join(', ')}` : ''}</li>)}

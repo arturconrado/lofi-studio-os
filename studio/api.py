@@ -443,6 +443,8 @@ from .channel_audit import router as channel_audit_router
 app.include_router(channel_audit_router)
 from .reference_research import router as reference_research_router
 app.include_router(reference_research_router)
+from .growth_diagnostics import router as growth_diagnostics_router
+app.include_router(growth_diagnostics_router)
 app.include_router(monetization_router)
 
 from .episode_api import router as episode_router

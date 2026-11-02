@@ -135,6 +135,8 @@ def apply_recipe_ambience(plan, mixed, folder, prefix, bucket):
     kind = music.get('ambient_bed', 'none')
     if kind == 'none' or opening.get('ambience_entry') == 'none':  # the episode may leave the channel's bed out
         return None
+    if plan.get('generated_ambience'):  # the generator's ambience replaces the procedural bed for this episode
+        return None
     from .ambient_audio import layer
     from .timeline_compositor import file_hash
     music_only = folder / 'audio-music-only.mp3'
@@ -346,6 +348,7 @@ def tick():
             sha = segment['asset_sha256']
             if sha in sources: continue
             path = folder / (sha + '.mp4'); fetch(segment['asset_key'], path, sha, 64 * 1024**2); sources[sha] = path
+        originals = dict(sources)  # continuity preparation may replace sources with silent processed copies
         prepared_plan = None
         if p.get('director_contract'):
             from .audiovisual_director import prepare, ContinuityRejected
@@ -384,6 +387,10 @@ def tick():
             # Preserve compatibility with render tasks queued before this hotfix.
             audio_info = p['audio']; audio_plan = {}
             fetch(audio_info['key'], audio, audio_info['sha256'], 1024**3)
+        sound_report = None
+        if p.get('sound_design') and not p.get('reedit_source'):
+            from .sound_design import apply as apply_sound_design
+            audio, sound_report = apply_sound_design(audio, p, originals, folder)
         final = folder / 'final.mp4'
         if p.get('director_proof'):
             from .audiovisual_director import proof_windows
@@ -406,6 +413,8 @@ def tick():
             kwargs={'prepared_plan':prepared_plan} if prepared_plan else {}
             if p.get('output_resolution','auto')=='1080p_upscaled':kwargs['output_resolution']='1080p_upscaled'
             report=render_segments(p['segments'],sources,audio,final,p['seconds'],p.get('preview_range'),**kwargs)
+        if sound_report:
+            report['sound_design']=sound_report
         if p.get('reedit_source'):
             report['audio_reuse']={'parent_task_id':p['reedit_source']['task_id'],
                                   'parent_sha256':p['reedit_source']['sha256'],'paid_calls':0}

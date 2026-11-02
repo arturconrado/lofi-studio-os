@@ -29,6 +29,9 @@ class Clip(Strict):
     continues_from: uuid.UUID | None = None
     image_id: uuid.UUID | None = None
     video_id: uuid.UUID | None = None
+    # Point effect generated with this action's video (empty = silent clip, the historical behaviour).
+    sound_effect: str = Field(default='', max_length=200)
+    sound_effect_gain_db: float = Field(default=-18, ge=-30, le=-6)
 
 
 class Insertion(Strict):
@@ -58,6 +61,9 @@ class Draft(Strict):
     insertions: list[Insertion] = Field(default_factory=list, max_length=500)
     music_program_id: str | None = Field(default=None, max_length=40)
     music_brief: str = Field(default='', max_length=2000)
+    # Continuous ambience generated with the base loop's video (empty = none from the generator).
+    generated_ambience: str = Field(default='', max_length=200)
+    generated_ambience_gain_db: float = Field(default=-26, ge=-40, le=-12)
 
     @model_validator(mode='after')
     def schedule(self):
@@ -207,10 +213,19 @@ def visual_context(draft):
     return result
 
 
+def sound_request(draft, clip):
+    """What the video generator must also sound like for this clip; '' keeps the clip silent."""
+    if clip.id == draft.base.id:
+        return ' '.join(draft.generated_ambience.split())
+    return ' '.join(clip.sound_effect.split())
+
+
 def signature(draft, clip, kind, image_sha=None):
     if kind == 'video':
         original = legacy_signature(draft, clip, kind, image_sha)
         if clip.action_goal: original=digest({'video':original,'action_goal':clip.action_goal})
+        audio = sound_request(draft, clip)
+        if audio: original=digest({'video':original,'generated_audio':audio})  # silent clips keep their signature
         following = sorted(str(c.id) for c in draft.clips if c.continues_from == clip.id and (not any(i.clip_id == clip.id for i in draft.insertions) or any(i.clip_id == c.id for i in draft.insertions)))
         if clip.continues_from or following:
             return digest({'video': original, 'previous': clip.continues_from, 'following': following})
@@ -420,6 +435,7 @@ def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None, editor
     # project cast fields must not contradict the known canonical girl and cat.
     from .niche_profiles import visual_terms
     terms = visual_terms(recipe)
+    audio = sound_request(draft, clip) if kind == 'video' else ''
     cast = ('Use only the exact canonical characters described by the channel identity lock below.'
             if identity_prompt else '\n'.join(c.name + ': ' + c.description for c in draft.characters))
     result = (f'{terms["camera"]} Theme: {draft.theme}. Scene: {draft.scene}. '
@@ -428,7 +444,10 @@ def prompt(draft, clip, kind, previous_motion=None, identity_prompt=None, editor
             f'Action: {clip.motion}. '
             + (f'Complete action goal, shared across continuous parts: {clip.action_goal}. ' if clip.action_goal and kind=='video' else '')
             + ('Create one starting still image for human approval, no text or watermark.' if kind == 'image' else
-               f'Animate for {clip.seconds} seconds. No sound, speech, camera cut, or extra characters. Never introduce captions, character name labels, subtitles, watermarks or new text. Preserve only the existing approved branding in the reference. '
+               f'Animate for {clip.seconds} seconds. '
+               + (f'Audio: generate only {audio}, quiet and natural, synchronized with what is visible; no music, no speech, no voices, no singing. No camera cut or extra characters. '
+                  if audio else 'No sound, speech, camera cut, or extra characters. ')
+               + 'Never introduce captions, character name labels, subtitles, watermarks or new text. Preserve only the existing approved branding in the reference. '
                + ('Cyclic motion contract: preserve position, lighting, camera and motion direction across the last and first one-second windows. Complete the motion cycle without pausing, resetting or freezing the configured characters or environmental motion. End in the starting pose and velocity; the compositor will apply the cyclic overlap policy.' if clip.id == draft.base.id else
                   ('This is an intermediate part: end at the final action pose, the next part continues from that frame.' if any(c.continues_from == clip.id and any(i.clip_id == c.id for i in draft.insertions) for c in draft.clips) else
                    'Continue naturally from the supplied final frame of the previous part. End in the base pose.' if clip.continues_from else

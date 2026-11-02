@@ -18,16 +18,19 @@ SOURCES = {
 # Music, continuous ambience and point effects are distinct components. Only sources that the
 # studio can actually render are available; the rest are listed with the reason, never faked.
 CATALOG = {
-    'rain': {'label':'Chuva no vidro','component':'continuous_ambience','available':True,
+    'rain': {'label':'Chuva no vidro','component':'continuous_ambience','available':True,'recipe_selectable':True,
              'source':'procedural_ffmpeg_noise','authorization':'Gerado localmente pelo estúdio; sem amostras de terceiros.',
              'scene_relation':'Chuva visível ou sugerida na cena.'},
-    'fireplace': {'label':'Lareira','component':'continuous_ambience','available':True,
+    'fireplace': {'label':'Lareira','component':'continuous_ambience','available':True,'recipe_selectable':True,
                   'source':'procedural_ffmpeg_noise','authorization':'Gerado localmente pelo estúdio; sem amostras de terceiros.',
                   'scene_relation':'Lareira visível na cena.'},
-    'cafe': {'label':'Ambiente de café','component':'continuous_ambience','available':False,
-             'reason':'Não há fonte própria, procedural validada ou licenciada de ambiente de café; ruído genérico não representaria um café.'},
-    'typing': {'label':'Digitação suave','component':'point_effect','available':False,
-               'reason':'Efeitos pontuais ainda não existem: não há amostras próprias nem ligação com os eventos de ação da timeline.'},
+    # Generated with the video (Veo native audio); chosen in the project, not as a recipe bed.
+    'cafe': {'label':'Ambiente de café','component':'continuous_ambience','available':True,'recipe_selectable':False,
+             'source':'generated_with_base_video','how':'No projeto: “Ambiência gerada com o vídeo-base”.',
+             'reason':'Gerado junto com o vídeo-base (custo do vídeo com áudio), emendado em loop e sujeito a escuta.'},
+    'typing': {'label':'Digitação suave','component':'point_effect','available':True,'recipe_selectable':False,
+               'source':'generated_with_action_video','how':'No projeto: “Efeito sonoro” do trecho de digitação.',
+               'reason':'Gerado junto com o vídeo da ação e posicionado em cada horário em que ela aparece; sujeito a escuta.'},
 }
 
 

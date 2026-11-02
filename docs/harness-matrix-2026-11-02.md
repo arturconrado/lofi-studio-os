@@ -117,3 +117,16 @@ Validação deste complemento: `tests/test_delivery.py` (10 testes com FFmpeg re
 | Rastreio da direção até a publicação | **Implementado** | `direction_sha256` na geração, na revisão visual e na montagem. A publicação de vídeo vindo do Workshop registra direção, briefing e a conciliação em `publication_metadata.trace`. |
 | Efeitos pontuais, café e digitação | **Ausente** | Continuam sem fonte e aparecem como indisponíveis. |
 | Diagnóstico de crescimento por gargalo (etapa 5) | **Pendente** | Não iniciado nesta rodada. |
+
+## Pendências finais incorporadas ao desenvolvimento (PR #107)
+
+| Pendência | Estado | Evidência |
+|---|---|---|
+| Diagnóstico de crescimento por gargalo (etapa 5) | **Implementado e testado** | `studio/growth_diagnostics.py`, `GET /api/growth/{canal}/diagnostics`: gargalos de CTR, retenção após o clique, alcance, alinhamento com a busca e retorno, contra quartis de vídeos próprios do mesmo formato e janela (mínimo de 3). Cada diagnóstico tem alvo, evidência ou hipótese, ação, confiança com motivo, esforço e critério de avaliação; métricas ausentes geram "evidência insuficiente", sem quartis inventados. Tela: Análises → Visão geral. |
+| Efeitos pontuais gerados com a ação (ex.: digitação) | **Implementado e testado** | Campo `sound_effect` no trecho. O vídeo daquele trecho passa a ser pedido ao Veo com `generate_audio` e uma direção sonora restrita (sem música e sem voz). A assinatura muda só quando há efeito, então clipes antigos ficam intactos e a prévia de impacto acusa a regeneração necessária. A cotação usa o SKU com áudio publicado pelo OpenRouter; se ele não existir, a geração é recusada. A montagem bloqueia trechos cujo vídeo veio sem áudio e `sound_design.apply` posiciona o efeito em cada horário real da ação. |
+| Ambiência gerada (ex.: café) | **Implementado e testado** | Campo `generated_ambience` no projeto. O vídeo-base é gerado com áudio; a montagem extrai o som, emenda em loop com crossfade, aplica volume, entrada e fade da abertura, mede a relação com a música e mistura. Neste projeto, ela substitui a cama procedural da receita. |
+| Café e digitação no catálogo | **Implementado** | Disponíveis via gerador (`generated_with_base_video` / `generated_with_action_video`), com fonte, custo e escuta declarados. Não são selecionáveis como cama procedural da receita. |
+| Miniatura gerada e avaliada | **Implementado e testado** | `studio/thumbnails.py`. O modelo de imagem gera a arte sem texto a partir da imagem-base aprovada e das referências de identidade, seguindo a decisão do briefing. O texto, quando decidido, é aplicado pelo estúdio com tipografia própria. Verificações: 1280×720, até 2 MB, contraste, tamanho do texto em 168×94 e comprimento, com prévias em 320×180 e 168×94. A aprovação humana fica presa ao SHA e à versão do briefing, e a publicação usa a miniatura aprovada. Envio único e reserva idempotente. |
+| Orquestração | **Atualizado** | Novo agente `thumbnail_designer` e etapa no plano. |
+
+Limites declarados: o áudio gerado pelo Veo pode conter música ou fala apesar da direção, e só a escuta descarta isso (revisão obrigatória registrada). A ambiência gerada vem de um clipe de 4 a 8 s em loop, e a repetição precisa ser ouvida. O preço do vídeo com áudio vem do SKU publicado; nenhum valor é estimado.

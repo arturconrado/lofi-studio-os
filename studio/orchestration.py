@@ -32,6 +32,8 @@ AGENTS=[
      'produces':'Trilha original e vídeo longo montado'},
     {'id':'final_review','label':'Revisão final humana','kind':'human','cost':'free','module':'studio/workshop_api.py (aprovação da montagem)',
      'produces':'Aprovação vinculada aos bytes do vídeo final'},
+    {'id':'thumbnail_designer','label':'Miniatura','kind':'ai_agent','cost':'paid','module':'studio/thumbnails.py',
+     'produces':'Arte da miniatura gerada, texto aplicado pelo estúdio e aprovação em tamanho reduzido'},
     {'id':'metadata_packager','label':'Título e descrição','kind':'ai_agent','cost':'paid','module':'studio/growth.py (package-suggestion)',
      'produces':'Pacote de metadados revisado'},
     {'id':'publisher','label':'Publicação','kind':'harness','cost':'free','module':'studio/youtube_publish.py',
@@ -95,7 +97,7 @@ def step(agent,status,reason,expected,cost=None,action=None):
             'expected_result':expected,'cost_usd':cost,'action':action}
 
 
-def plan_steps(detail,direction,draft,opening_required=False):
+def plan_steps(detail,direction,draft,opening_required=False,thumbnail_state=None):
     """Ordered steps from the project's real state. Statuses: done, ready, waiting_human, running, blocked, recommended, not_available."""
     states=detail['states'];media=detail['media'];jobs=detail['jobs'];identity=detail['identity']
     automatic=draft.automatic_motion
@@ -162,6 +164,13 @@ def plan_steps(detail,direction,draft,opening_required=False):
     elif opening_required:final=('waiting_human','Revise a abertura (15/30/60/90 s e primeira transição) e depois aprove o vídeo final; as aprovações valem para estes bytes.')
     else:final=('waiting_human','Assista e aprove o vídeo final; a aprovação vale para estes bytes.')
     steps.append(step('final_review',*final,'Aprovação humana vinculada à mídia entregue.'))
+    thumb=thumbnail_state or {}
+    if not thumb.get('decided'):thumb_step=('recommended','Decida no briefing se a miniatura terá texto, a mensagem e a hierarquia.')
+    elif thumb.get('approved'):thumb_step=('done','Miniatura aprovada em tamanho reduzido.')
+    elif thumb.get('review'):thumb_step=('waiting_human','Revise a miniatura em 320×180 e 168×94 e aprove estes bytes.')
+    elif image[0]!='done':thumb_step=('blocked','Depende da imagem-base aprovada.')
+    else:thumb_step=('ready','Gere a arte da miniatura (uma imagem paga, com cotação antes da confirmação).')
+    steps.append(step('thumbnail_designer',*thumb_step,'Miniatura fiel ao vídeo, legível em tamanho pequeno.',action='thumbnail'))
     published=bool(detail.get('parent_videos'))
     after=('blocked','Depende da aprovação final.') if final[0]!='done' else None
     steps.append(step('metadata_packager',*(after or (('done','Publicado com metadados revisados.') if published else ('ready','Gere e revise título e descrição no Growth a partir da mídia aprovada.'))),
@@ -195,7 +204,11 @@ def orchestration(pid:uuid.UUID):
     with db() as c:
         from .episode_brief import latest_data
         episode=latest_data(c,pid)
-    steps=plan_steps(view,direction,draft,bool((episode or {}).get('opening')))
+        states=set()
+        if c.execute("SELECT to_regclass('workshop_thumbnails') t").fetchone()['t']:
+            states={r['state'] for r in c.execute('SELECT state FROM workshop_thumbnails WHERE project_id=%s',(pid,)).fetchall()}
+    thumbnail_state={'decided':bool((episode or {}).get('thumbnail')),'approved':'approved' in states,'review':'review_required' in states}
+    steps=plan_steps(view,direction,draft,bool((episode or {}).get('opening')),thumbnail_state)
     with db() as c:
         used=c.execute("""SELECT payload->>'direction_sha256' sha,payload->>'operation' operation,count(*) n FROM factory_tasks
                           WHERE payload->>'project_id'=%s AND payload ? 'direction_sha256' GROUP BY 1,2""",(str(pid),)).fetchall()
