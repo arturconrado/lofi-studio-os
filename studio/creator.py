@@ -421,6 +421,8 @@ from .edit_impact import router as edit_impact_router
 router.include_router(edit_impact_router)
 from .thumbnails import router as thumbnails_router
 router.include_router(thumbnails_router)
+from .sound_planner import router as sound_planner_router
+router.include_router(sound_planner_router)
 
 
 @router.get('/pose-library')

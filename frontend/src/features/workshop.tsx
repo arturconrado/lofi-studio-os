@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'preact/hooks';
 import { OrchestrationPanel } from './orchestration';
 import { EpisodeBriefPanel } from './episode-brief';
 import { ImpactPreview } from './edit-impact';
+import { SoundPlanPanel } from './sound-plan';
 import { api, post, put, uuid } from '../lib/api';
 import { useResource } from '../lib/resource';
 import { channel } from '../lib/store';
@@ -470,6 +471,7 @@ export function Workshop({ id }: { id?: string }) {
       {!d.jobs.some(j=>['QUEUED','SUBMITTING','RUNNING','UNCERTAIN'].includes(j.status)) && <p>Nenhuma tarefa ativa registrada na última consulta. Use o próximo passo para continuar.</p>}
     </section>}
     {id && d && <OrchestrationPanel projectId={id} version={d.revision} />}
+    {id && d && <SoundPlanPanel projectId={id} revision={d.revision} media={d.media} onApplied={resource.reload} />}
     {id && d && channel.value && <EpisodeBriefPanel projectId={id} channelId={channel.value.id} renders={d.jobs} revision={d.revision} />}
     <section class="card stack" aria-label="Como continuar">
       <div class="row"><h2 class="grow">Próximo passo: {nextLabel}</h2><button class="btn primary" disabled={busy || !!activeRender || generatingNext || !channel.value} onClick={nextAction}>{nextLabel}</button></div>

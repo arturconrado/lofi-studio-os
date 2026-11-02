@@ -160,3 +160,12 @@ Limites declarados: o áudio gerado pelo Veo pode conter música ou fala apesar 
 - `ops/auto-deploy.sh` reaproveita backup, ativação, saúde e rollback para imagem previamente construída. Valida label/requirements; o caminho incremental segue bloqueando mudanças de dependência. Chave restrita e políticas de aprovação preservadas.
 - Validado: testes de gates e workflow em `tests/test_workshop_deploy.py`, actionlint, shellcheck e suíte do PR.
 - Implantado: aguarda a execução protegida; evidências e resultado no PR/Notion. Nenhuma geração paga é parte desta entrega.
+
+## Som planejado por vídeo a partir do ambiente (PR seguinte ao #107)
+
+| Requisito | Estado | Evidência |
+|---|---|---|
+| O harness entende o ambiente de cada vídeo antes de pedir o som | **Implementado e testado** | `studio/sound_planner.py`, `POST /workshop/projects/{id}/sound-plan`. A leitura determinística e gratuita de cena, movimento do cenário, tema, briefing e ações de cada trecho cita a palavra que justifica cada som. A leitura da imagem-base aprovada pelo avaliador visual (`gemini-2.5-flash-lite`) é opcional, paga em centavos e confirmada. Ações inventadas pelo modelo são descartadas. |
+| Plano aceito por uma pessoa vira a direção sonora do vídeo | **Implementado e testado** | `POST .../sound-plan/{id}/apply` com controle de versão. Os itens aceitos viram `generated_ambience` e o `sound_effect` de cada trecho, e o relatório de impacto mostra o que precisa ser gerado de novo com som. Um plano feito para outra versão do projeto é recusado. |
+| Conferência do som gerado | **Implementado e testado** | `POST .../media/{id}/audio-check`: o avaliador ouve o áudio do clipe (entrada de áudio, confirmada no catálogo do OpenRouter) e aponta música, fala ou canto, ou som diferente do pedido. Um clipe sinalizado bloqueia a montagem até uma pessoa ouvir e aceitar aqueles bytes. |
+| Orquestração | **Atualizado** | Agente `sound_designer` com etapa própria no plano do projeto. |

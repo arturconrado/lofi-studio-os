@@ -2414,6 +2414,9 @@ def render(pid: uuid.UUID, body: Render):
         sound_design=sound_plan(draft,episode_brief_for(c,row))
         silent=missing_audio(sound_design,segments,media)
         if silent: raise HTTPException(409,'Estes trechos precisam ser gerados com o som planejado (o vídeo atual não tem áudio): '+', '.join(silent)+'. Nada foi reservado.')
+        from .sound_planner import flagged_audio
+        flagged=flagged_audio(sound_design,segments,media)
+        if flagged: raise HTTPException(409,'A conferência do áudio gerado apontou música, fala ou som diferente do pedido em: '+', '.join(flagged)+'. Ouça e aceite, ou gere de novo. Nada foi reservado.')
         gaps=brief_blockers(episode_brief_for(c,row))
         if gaps: raise HTTPException(409,'O briefing pede algo que o estúdio não executa: '+' '.join(g['reason'] for g in gaps)+' Nada foi reservado.')
         template = music_template(c, row, draft)
