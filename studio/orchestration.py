@@ -24,6 +24,8 @@ AGENTS=[
      'produces':'Tema, cena e ações originais do episódio'},
     {'id':'identity','label':'Identidade visual do canal','kind':'harness','cost':'free','module':'studio/workshop_api.py (identity_profile_for_channel)',
      'produces':'Referências aprovadas vinculadas ao projeto'},
+    {'id':'sound_designer','label':'Plano de som do vídeo','kind':'ai_agent','cost':'free','module':'studio/sound_planner.py',
+     'produces':'Ambiência e efeitos com evidência da cena, aceitos por uma pessoa e gerados com o vídeo'},
     {'id':'visual_generator','label':'Gerador visual','kind':'ai_agent','cost':'paid','module':'studio/workshop_provider.py',
      'produces':'Imagem inicial, vídeo-base e clipes de ação'},
     {'id':'semantic_reviewer','label':'Revisor visual','kind':'ai_agent','cost':'paid','module':'studio/semantic_review.py',
@@ -97,7 +99,7 @@ def step(agent,status,reason,expected,cost=None,action=None):
             'expected_result':expected,'cost_usd':cost,'action':action}
 
 
-def plan_steps(detail,direction,draft,opening_required=False,thumbnail_state=None):
+def plan_steps(detail,direction,draft,opening_required=False,thumbnail_state=None,sound_state=None):
     """Ordered steps from the project's real state. Statuses: done, ready, waiting_human, running, blocked, recommended, not_available."""
     states=detail['states'];media=detail['media'];jobs=detail['jobs'];identity=detail['identity']
     automatic=draft.automatic_motion
@@ -129,6 +131,11 @@ def plan_steps(detail,direction,draft,opening_required=False,thumbnail_state=Non
         elif identity.get('candidates'):identity_state=('waiting_human','Escolha um still aprovado deste canal como identidade.')
         else:identity_state=('ready','Canal sem identidade: a primeira imagem-base aprovada inicia a identidade.')
         steps.append(step('identity',*identity_state,'Identidade própria do canal fixada por decisão humana.'))
+    sound=sound_state or {}
+    if sound.get('applied'):sound_step=('done','Plano de som aceito e aplicado a este vídeo.')
+    elif sound.get('proposed'):sound_step=('waiting_human','Revise o plano de som (ambiência e efeitos com evidência) e aceite o que fizer sentido.')
+    else:sound_step=('recommended','Gere o plano de som: o estúdio lê a cena e as ações para propor ambiência e efeitos deste vídeo.')
+    steps.append(step('sound_designer',*sound_step,'Som coerente com o ambiente e as ações deste episódio.',action='sound_plan'))
     base=states.get(str(draft.base.id),{})
     if base.get('image_approved'):image=('done','Imagem inicial aprovada.')
     elif base.get('image') or media.get(str(draft.base.image_id)):image=('waiting_human','Revise e aprove a imagem inicial.')
@@ -207,8 +214,12 @@ def orchestration(pid:uuid.UUID):
         states=set()
         if c.execute("SELECT to_regclass('workshop_thumbnails') t").fetchone()['t']:
             states={r['state'] for r in c.execute('SELECT state FROM workshop_thumbnails WHERE project_id=%s',(pid,)).fetchall()}
+        sound_states=set()
+        if c.execute("SELECT to_regclass('sound_plans') t").fetchone()['t']:
+            sound_states={r['state'] for r in c.execute('SELECT state FROM sound_plans WHERE project_id=%s',(pid,)).fetchall()}
     thumbnail_state={'decided':bool((episode or {}).get('thumbnail')),'approved':'approved' in states,'review':'review_required' in states}
-    steps=plan_steps(view,direction,draft,bool((episode or {}).get('opening')),thumbnail_state)
+    sound_state={'applied':'applied' in sound_states,'proposed':'proposed' in sound_states}
+    steps=plan_steps(view,direction,draft,bool((episode or {}).get('opening')),thumbnail_state,sound_state)
     with db() as c:
         used=c.execute("""SELECT payload->>'direction_sha256' sha,payload->>'operation' operation,count(*) n FROM factory_tasks
                           WHERE payload->>'project_id'=%s AND payload ? 'direction_sha256' GROUP BY 1,2""",(str(pid),)).fetchall()
