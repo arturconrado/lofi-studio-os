@@ -80,6 +80,11 @@ function NicheProfileEditor({ data, setData, report }: { data: any; setData: (f:
       </div>
       {text('Linguagem visual', ['visual', 'style_language'], 'Substitui a ilustração padrão nos pedidos de imagem e vídeo')}
       <h4>Metadados</h4>
+      {text('Tom editorial', ['metadata', 'tone'], 'Ex.: acolhedor, específico ao cenário e à rotina do público', 600)}
+      <Field label="Exemplos editoriais aprovados" hint="Preferências deste canal, não provas de desempenho"><ChipsInput value={p.metadata.approved_examples || []} onChange={x => setP(['metadata', 'approved_examples'], x)} /></Field>
+      <Field label="Exemplos editoriais rejeitados"><ChipsInput value={p.metadata.rejected_examples || []} onChange={x => setP(['metadata', 'rejected_examples'], x)} /></Field>
+      <Field label="Nomes próprios preservados no idioma original"><ChipsInput value={p.metadata.proper_names || []} onChange={x => setP(['metadata', 'proper_names'], x)} /></Field>
+      <p class="faint">O idioma deste perfil vale para títulos, descrições, capítulos e texto das miniaturas. O idioma da conversa não o altera. Confira nomes próprios e textos curtos na revisão humana.</p>
       <div class="grid cols-2">
         <Check checked={p.metadata.phrase_first} onChange={x => setP(['metadata', 'phrase_first'], x)}>Título começa pela frase principal</Check>
         <Field label="Descrição mínima (caracteres)"><input class="input" type="number" min={0} max={5000} value={p.metadata.description_min_chars} onInput={e => setP(['metadata', 'description_min_chars'], Number((e.target as HTMLInputElement).value))} /></Field>

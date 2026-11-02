@@ -59,6 +59,8 @@ def resolved_direction(c,row,draft,recipe=None,identity=None):
     """Single direction every agent of this project works from; changes produce a new hash."""
     from .niche_profiles import resolve,capability_blockers
     profile=resolve((recipe or {}).get('data'))
+    from .editorial import contract
+    editorial=contract((recipe or {}).get('data'))
     brief={'theme':draft.theme,'scene':draft.scene,'scene_motion':draft.scene_motion,'music_brief':draft.music_brief,
            'characters':[{'name':ch.name,'description':ch.description} for ch in draft.characters],
            'actions':[{'name':cl.name,'motion':cl.motion,'action_goal':cl.action_goal} for cl in draft.clips]}
@@ -73,7 +75,7 @@ def resolved_direction(c,row,draft,recipe=None,identity=None):
                           'language':profile['profile']['language'],'blockers':capability_blockers(profile)},
                'identity':{'profile_id':(identity or {}).get('id'),'reference_sha256s':sorted({r['sha256'] for r in refs if r.get('sha256')})},
                'brief_sha256':digest(brief),'references':{'selected':[],'status':'reference_research_not_available'},
-               'project_budget_usd':budget}
+               'project_budget_usd':budget,'editorial':editorial}
     return direction|{'sha256':digest(direction)}
 
 
