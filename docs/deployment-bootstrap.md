@@ -24,3 +24,7 @@ O job copia apenas ops/auto-deploy.sh para o host, confirma o hash esperado do a
 ## Limites após o bootstrap
 
 Um handshake bem-sucedido prova apenas que a rotina de deploy protocol 2 está instalada e acessível pelo comando SSH forçado. Ele não publica a main, não prova restore/rollback (TEST-27), não resolve tarefas remotas UNCERTAIN, não valida a matriz de permissões em runtime, nem conclui WP-00. O deploy normal permanece em workflow separado, com gates próprios de CI e de produção ocupada.
+
+## Build completo para a entrega editorial
+
+O proprietário autorizou build completo e deploy dos PRs #106/#107 em produção. O deploy incremental recusa corretamente a nova dependência langid. Esta entrega prepara o fluxo manual protegido, preservando os gates e a reversão existentes. Estado inicial: em implementação, sem nova implantação.
