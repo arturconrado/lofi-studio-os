@@ -29,6 +29,7 @@ def metadata_guidelines(intent, phrase, policy=None):
         return (prompt(policy)+' Return only requested JSON fields. Title under 100 characters. '
                 'Use the supplied primary phrase naturally, with the supported distinctive episode setting. '
                 'The description opens with an inviting, scene-specific hook and explains the real listening experience. '
+                'The complete description must have at least '+str(policy['description_min_chars'])+' characters and at most 5000, as required by this channel profile. '
                 'Keep the editorial body concise; chapters, a contextual question, subscription CTA and relevant hashtags are separate blocks. '
                 'Only use supplied facts. Preserve the actual chapter offsets; never invent a tracklist or duration. '
                 'Proofread the complete title and description in the channel publication language. ')
