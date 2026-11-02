@@ -96,7 +96,7 @@ def test_complete_thumbnail_is_verified_bounded_and_approved_before_publication(
     thumbs=client.get(url+'/thumbnails').json()['thumbnails']
     good=next(t for t in thumbs if t['id']==first['id'])
     failed=next(t for t in thumbs if t['state']=='failed')
-    review=lambda t,**kw:client.post(url+f"/thumbnails/{t['id']}/review",json={'sha256':t['sha256'],'approve':True,'confirm_small_size_checked':True,'note':'Conferi em 320x180 e 168x94'}|kw)
+    review=lambda t,**kw:client.post(url+f"/thumbnails/{t['id']}/review",json={'sha256':t['sha256'],'approve':True,'confirm_small_size_checked':True,'confirm_language_checked':True,'note':'Conferi em 320x180 e 168x94 e no idioma do canal'}|kw)
     assert review(failed).status_code==409
     assert review(good).json()['approved']
     marker=WORKSPACE.set(identity['workspace_id'])

@@ -129,6 +129,13 @@ def bounded_json_call(request_id,channel_id,kind,meta,system,user,transform,resu
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
         if c.execute('SELECT 1 FROM factory_tasks WHERE id=%s',(request_id,)).fetchone():raise HTTPException(409,'Pedido já registrado')
+        if meta.get('project_id'):
+            from .workshop_api import project,project_generation_usage
+            project(c,uuid.UUID(meta['project_id']),True)
+            if c.execute("SELECT to_regclass('visual_project_budgets') t").fetchone()['t']:
+                budget=c.execute('SELECT limit_usd FROM visual_project_budgets WHERE project_id=%s',(meta['project_id'],)).fetchone()
+                if budget and project_generation_usage(c,meta['project_id'])+reservation>budget['limit_usd']:
+                    raise HTTPException(409,'O teto deste projeto não cobre a apresentação. Nenhum pedido foi enviado.')
         check_available(c,reservation)
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'RUNNING',%s)",(request_id,kind,MODEL,json.dumps({'channel_id':str(channel_id),**meta}),reservation,label+'; nenhuma produção autorizada'));c.commit()
     try:

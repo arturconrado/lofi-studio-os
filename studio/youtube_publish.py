@@ -67,8 +67,10 @@ def validate_publication_editorial(row):
     from .editorial import require_channel
     prior=(row.get('publication_metadata') or {}).get('editorial_review')
     with db() as c:
-        return require_channel(c,row['channel_id'],row['title'],row['description'],
+        result=require_channel(c,row['channel_id'],row['title'],row['description'],
                                reviewed=bool(prior and prior.get('human_reviewed')),previous=prior)
+        if row.get('pilot_id'):approved_pilot_thumbnail(c,row.get('pilot_report') or {})
+        return result
 
 def validate_growth_receipt(c,channel_id,publication_metadata):
     native=(publication_metadata or {}).get('native_growth') or {}
@@ -231,6 +233,7 @@ def authorize_ready(jid:uuid.UUID,body:ReadyAuthorization):
         body.publication_metadata['editorial_review']=editorial_receipt(c,row['channel_id'],body.title,body.description,body.confirm_review)
         pilot=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(row['pilot_id'],row['channel_id'])).fetchone()
         if not pilot or pilot['status']!='approved' or not ready_pilot(pilot):raise HTTPException(409,'Revise e aprove o vídeo completo antes de publicar.')
+        approved_pilot_thumbnail(c,pilot['report'])
         if pilot['report']['artifact_sha256']['video']!=row['pilot_sha256']:raise HTTPException(409,'O vídeo mudou desde a preparação da publicação.')
         phrase=channel_packaging(c,row['channel_id'],body.title,body.description,body.primary_phrase)
         pilot_intent=(pilot.get('plan') or {}).get('intent','coding_focus')
@@ -681,6 +684,7 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
         p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(pid,body.channel_id)).fetchone()
         if not p:raise HTTPException(404,'Vídeo inexistente neste canal.')
         if p['status']!='approved':raise HTTPException(409,'Aprove o vídeo na revisão antes de publicar.')
+        approved_pilot_thumbnail(c,p['report'])
         growth_receipt=validate_growth_receipt(c,body.channel_id,body.publication_metadata)
         primary_phrase=channel_packaging(c,body.channel_id,body.title,body.description,body.primary_phrase)
         pilot_intent=(p.get('plan') or {}).get('intent','coding_focus')
@@ -719,14 +723,20 @@ def verify_pilot_media(row):
     finally:obj['Body'].close()
     if h.hexdigest()!=expected:raise ValueError('Pilot integrity changed')
 
-def approved_workshop_thumbnail(row):
-    """The approved thumbnail of the Workshop project that produced this pilot, if any."""
-    render=(row.get('pilot_report') or {}).get('workshop_render_id')
+def approved_pilot_thumbnail(c,report):
+    """Check the current brief/policy before any video upload, never only afterwards."""
+    render=report.get('workshop_render_id')
     if not render:return None
     from .thumbnails import approved_for_project
+    task=c.execute('SELECT payload FROM factory_tasks WHERE id::text=%s',(str(render),)).fetchone()
+    if not task:raise HTTPException(409,'Não foi possível recuperar o projeto da miniatura. Revise antes de publicar.')
+    return approved_for_project(c,task['payload']['project_id'])
+
+
+def approved_workshop_thumbnail(row):
+    """The approved thumbnail of the Workshop project that produced this pilot, if any."""
     with db() as c:
-        task=c.execute('SELECT payload FROM factory_tasks WHERE id::text=%s',(str(render),)).fetchone()
-        return approved_for_project(c,task['payload']['project_id']) if task else None
+        return approved_pilot_thumbnail(c,row.get('pilot_report') or {})
 
 
 def set_pilot_thumbnail(client,row,video_id):

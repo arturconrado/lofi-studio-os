@@ -57,7 +57,7 @@ class Opening(BaseModel):
 
 class Thumbnail(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    text_policy:Literal['no_text','short_text']='no_text'
+    text_policy:Literal['no_text','short_text']|None=None
     message:str=text(120)
     language:str=Field(default='',max_length=5)
     hierarchy:str=text(300)
@@ -79,6 +79,9 @@ class EpisodeBrief(BaseModel):
     music_direction:str=text(800)
     visual_direction:str=text(800)
     presentation:str=text(600)
+    presentation_title:str=text(100)
+    presentation_description:str=text(5000)
+    presentation_rationale:str=text(1000)
     transformations:list[Transformation]=Field(default_factory=list,max_length=8)
     opening:Opening|None=None
     thumbnail:Thumbnail|None=None
@@ -92,6 +95,20 @@ class EpisodeBrief(BaseModel):
 
 
 def digest(data):return hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+
+
+def thumbnail_decision(data,policy):
+    """Resolve the channel language before cost, without replacing an undecided text policy."""
+    spec=Thumbnail.model_validate(data).model_dump(mode='json')
+    if spec['text_policy'] is None:raise HTTPException(422,'Decida explicitamente se a miniatura terá texto antes de salvar/gerar.')
+    if spec['language'] and spec['language']!=policy['language']:raise HTTPException(422,'O idioma da miniatura deve seguir o perfil do canal: '+policy['language'])
+    spec['language']=policy['language']
+    if spec['text_policy']=='short_text':
+        if not spec['message']:raise HTTPException(422,'Defina a mensagem da miniatura.')
+        from .editorial import assess
+        if assess({'thumbnail':spec['message']},policy)['failures']:raise HTTPException(422,'A mensagem da miniatura está fora do idioma do canal.')
+    elif spec['message']:raise HTTPException(422,'A decisão sem texto não pode carregar uma mensagem ignorada.')
+    return spec
 
 
 def validate_references(c,channel_id,brief):
@@ -165,7 +182,9 @@ def get_brief(pid:uuid.UUID):
         project(c,pid)
         history=c.execute('SELECT revision,sha256,created_by,created_at FROM episode_briefs WHERE project_id=%s ORDER BY revision DESC LIMIT 30',(pid,)).fetchall()
         row=latest(c,pid)
-    return {'brief':row,'history':history,'capability_blockers':capability_blockers(row['data']) if row else []}
+        from .editorial import for_channel
+        policy=for_channel(c,project(c,pid)['channel_id'])
+    return {'brief':row,'history':history,'editorial_contract':policy,'capability_blockers':capability_blockers(row['data']) if row else []}
 
 
 @router.put('/projects/{pid}/brief')
@@ -173,10 +192,16 @@ def save_brief(pid:uuid.UUID,body:BriefBody,request:Request):
     """A new revision per change; saving never starts generation or spends."""
     from .workshop_api import project
     ready()
-    data=body.data.model_dump(mode='json');sha=digest(data)
+    data=body.data.model_dump(mode='json')
     identity=getattr(request.state,'identity',None) or {}
     with db() as c:
         row=project(c,pid,True)
+        from .editorial import for_channel,assess
+        policy=for_channel(c,row['channel_id'])
+        if data.get('thumbnail'):data['thumbnail']=thumbnail_decision(data['thumbnail'],policy)
+        if assess({'title':data['presentation_title'],'description':data['presentation_description']},policy)['failures']:
+            raise HTTPException(422,'Revise o idioma e as afirmações da apresentação antes de salvar.')
+        sha=digest(data)
         validate_references(c,row['channel_id'],body.data)
         prior=c.execute('SELECT revision,sha256,data FROM episode_briefs WHERE project_id=%s AND sha256=%s',(pid,sha)).fetchone()
         current=latest(c,pid)
