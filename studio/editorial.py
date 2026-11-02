@@ -35,6 +35,9 @@ def contract(recipe=None):
 
 def for_channel(c,cid):
     from .recipes import for_channel as recipe_for_channel
+    # A read-only lookup must not create recipe tables while other lazy modules
+    # initialize on separate connections in this same request.
+    if not c.execute("SELECT to_regclass('channel_recipes') t").fetchone()['t']:return contract()
     try:recipe=recipe_for_channel(c,cid)
     except HTTPException as error:
         # A channel with no selected recipe keeps the documented historical profile.
