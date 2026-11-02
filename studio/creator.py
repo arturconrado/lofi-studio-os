@@ -384,7 +384,7 @@ def creative_catalog():
  return {'styles':STYLES,'scenes':scenes,'shirt_colors':COLORS,'cadences':sorted(PRESETS)+['custom_markers'],
          'sequences':[{'id':k,'requires':sorted(v.get('requires',[]))} for k,v in SEQUENCES.items()],
          'contextual_actions':['lamp_on_with_gesture','lamp_glow_auto','fireplace_glow_rises'],'hours':{'min':1,'max':8},
-         'canonical_identity':REGISTRY.get('canonical_identity')}
+         'canonical_identity':REGISTRY.get('canonical_identity'),'ambience':__import__('studio.ambient_audio',fromlist=['catalog']).catalog()}
 
 from .motion_validation import router as motion_validation_router
 router.include_router(motion_validation_router)
@@ -415,6 +415,12 @@ from .workshop_api import router as workshop_router
 router.include_router(workshop_router)
 from .orchestration import router as orchestration_router
 router.include_router(orchestration_router)
+from .episode_brief import router as episode_brief_router
+router.include_router(episode_brief_router)
+from .edit_impact import router as edit_impact_router
+router.include_router(edit_impact_router)
+from .thumbnails import router as thumbnails_router
+router.include_router(thumbnails_router)
 
 
 @router.get('/pose-library')

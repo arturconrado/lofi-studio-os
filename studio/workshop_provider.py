@@ -30,7 +30,7 @@ def provider_usage_cost(usage):
     return value
 
 
-def quote(kind, seconds, resolution='720p'):
+def quote(kind, seconds, resolution='720p', audio=False):
     last_frame = False
     try:
         with httpx.Client(timeout=25) as client:
@@ -53,14 +53,17 @@ def quote(kind, seconds, resolution='720p'):
                 last_frame = 'last_frame' in entry.get('supported_frame_images', [])
                 skus = entry['pricing_skus']
                 if not skus or any(not k.startswith('duration_seconds_') for k in skus): raise ValueError('Unknown units')
-                sku = 'duration_seconds_without_audio_720p' if resolution=='720p' else 'duration_seconds_without_audio'
+                sku = ('duration_seconds_with_audio' if audio else 'duration_seconds_without_audio')+('_720p' if resolution=='720p' else '')
+                if sku not in skus:
+                    # Never estimate a price the provider does not publish.
+                    raise HTTPException(409, 'O modelo de vídeo não publica preço com áudio nesta resolução; o som planejado não pode ser gerado. Nenhum envio pago foi feito.')
                 cap = Decimal(str(skus[sku])) * seconds; model = VIDEO_MODEL
         if not cap.is_finite() or not 0 < cap <= 12: raise ValueError('Invalid quote')
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(409, 'Cotação ou configuração indisponível. Consulte as durações disponíveis; nenhum envio pago foi feito.') from None
-    return {'model': model, 'usd': float(cap), 'seconds': seconds, 'last_frame_supported': last_frame}
+    return {'model': model, 'usd': float(cap), 'seconds': seconds, 'last_frame_supported': last_frame, 'audio': bool(audio and kind == 'video')}
 
 
 def reference_data(a):
@@ -88,7 +91,8 @@ def complete(c, task, raw, mime, seconds=None):
                           'identity_profile': p.get('identity_profile'),
                           'identity_reference_sha256': p.get('identity_reference_sha256'),
                           'identity_reference_sha256s':identity_reference_sha256s,
-                          'continuity_review_version': 1 if p['operation'] == 'video' else None})
+                          'continuity_review_version': 1 if p['operation'] == 'video' else None,
+                          **(audio_evidence(raw, p) if p['operation'] == 'video' else {})})
     # A slow generation must not replace a newer edit or carry an approval forward.
     attached = False
     identity_current=True
@@ -122,6 +126,23 @@ def complete(c, task, raw, mime, seconds=None):
               (json.dumps(p), detail, task['id']))
 
 
+def audio_evidence(raw, payload):
+    """Whether the delivered video really carries an audio stream; requested audio is not assumed."""
+    if not payload.get('generate_audio'):
+        return {}
+    import subprocess
+    with tempfile.NamedTemporaryFile(suffix='.mp4') as handle:
+        handle.write(raw); handle.flush()
+        try:
+            out = subprocess.run(['ffprobe','-v','error','-select_streams','a','-show_entries','stream=codec_name,duration',
+                                  '-of','json',handle.name],capture_output=True,text=True,timeout=30)
+            streams = json.loads(out.stdout or '{}').get('streams', []) if out.returncode == 0 else []
+        except (subprocess.TimeoutExpired, ValueError):
+            streams = []
+    return {'generate_audio': True, 'audio_request': payload.get('audio_request'), 'audio_stream': bool(streams),
+            'audio_review_required': True}
+
+
 def video_body(payload, references, callback_url=None):
     if payload.get('resolution', '720p') not in ('720p', '1080p'):
         raise ValueError('Unsupported video resolution')
@@ -130,7 +151,7 @@ def video_body(payload, references, callback_url=None):
         if len(references) < 2: raise ValueError('Return frame missing')
         frames.append({'type': 'image_url', 'image_url': {'url': references[1]}, 'frame_type': 'last_frame'})
     body={'model': VIDEO_MODEL, 'prompt': payload['prompt'], 'duration': payload['seconds'],
-            'resolution': payload.get('resolution', '720p'), 'aspect_ratio': '16:9', 'generate_audio': False,
+            'resolution': payload.get('resolution', '720p'), 'aspect_ratio': '16:9', 'generate_audio': bool(payload.get('generate_audio')),
             'frame_images': frames, 'provider': {'allow_fallbacks': False}}
     if callback_url:body['callback_url']=callback_url
     return body
@@ -157,7 +178,7 @@ def submit(tid):
         headers = {'Authorization': 'Bearer ' + token, 'X-Title': 'Lo-Fi visual workshop'}
         refs = [reference_data(a) for a in p['references']]
         with httpx.Client(timeout=180, follow_redirects=False) as client:
-            if p['operation'] == 'image':
+            if p['operation'] in ('image', 'thumbnail'):
                 body = {'model': IMAGE_MODEL, 'prompt': p['prompt'], 'resolution': '2K', 'aspect_ratio': '16:9', 'n': 1,
                         'provider': {'only': ['seed'], 'allow_fallbacks': False}}
                 if refs: body['input_references'] = [{'type': 'image_url', 'image_url': {'url': r}} for r in refs]
@@ -166,7 +187,16 @@ def submit(tid):
                 result = r.json(); encoded = result['data'][0]['b64_json']
                 if len(encoded) > 28 * 1024**2: raise ValueError('Image too large')
                 raw = image_bytes(base64.b64decode(encoded, validate=True))
-                with db() as c: complete(c, t, raw, 'image/png'); c.commit()
+                with db() as c:
+                    if p['operation'] == 'thumbnail':
+                        from .thumbnails import complete_thumbnail
+                        complete_thumbnail(c, t, raw)
+                        reported = provider_usage_cost(result.get('usage'))
+                        if reported is not None:
+                            c.execute('UPDATE factory_tasks SET actual_cost=%s WHERE id=%s', (reported, tid))
+                    else:
+                        complete(c, t, raw, 'image/png')
+                    c.commit()
             else:
                 body = video_body(p, refs, callback_url(p))
                 r = client.post(BASE + '/videos', headers=headers, json=body); r.raise_for_status()

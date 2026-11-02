@@ -45,6 +45,8 @@ def composition_request(plan_data, sequence):
     if theme:
         direction.append('Production theme: ' + theme)
         direction.append(music_theme_clause(recipe))
+    from .episode_brief import music_clauses
+    direction.extend(music_clauses(plan_data.get('episode_brief'), sequence))
     direction.extend([
         f'Composition title: {title}. Tempo: {bpm} BPM.',
         f'New original composition {sequence}, distinct from the previous radio batch: '

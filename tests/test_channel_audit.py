@@ -31,6 +31,13 @@ def test_brand_variants_are_flagged_but_handles_and_urls_are_left_alone():
     assert ca.brand_issues('LoFi Vibe Coding',BRAND)==[]
 
 
+def test_duration_promises_in_existing_titles_are_checked_against_the_video_length():
+    videos=[{'id':'vid00000003','title':'Deep Focus | Rainy Night (2 Hours)','description':'x'*300,'privacy':'public','duration':'PT1H0M1S'},
+            {'id':'vid00000004','title':'Deep Focus | Rainy Night (1 Hour)','description':'x'*300,'privacy':'public','duration':'PT1H0M1S'}]
+    found={(f['target_id'],f['kind']) for f in ca.analyze_videos(videos,BRAND)}
+    assert ('vid00000003','duration_claim_mismatch') in found and ('vid00000004','duration_claim_mismatch') not in found
+
+
 def test_findings_separate_observed_facts_from_hypotheses():
     videos=[{'id':'vid00000001','title':'Lo-Fi Vibe Coding | Coding Music | Coding','description':'short','privacy':'public'},
             {'id':'vid00000002','title':'Rainy rooftop','description':'','privacy':'public'}]
@@ -226,6 +233,8 @@ def test_audit_review_apply_and_reread_against_postgres(monkeypatch):
     kinds={f['kind'] for f in run['run']['findings']}
     assert {'channel_name_mismatch','brand_inconsistency','impressions_ctr_unavailable'}<=kinds
     assert run['run']['diagnosis']['status']=='insufficient_data' and run['run']['provenance']['third_party_tools']==[]
+    presentation={i['id']:i['state'] for i in run['presentation']['items']}
+    assert presentation['name']=='attention' and presentation['featured']=='manual' and presentation['trailer']=='decision_needed'
     videos={v['id']:v for v in run['videos']}
     assert videos['vid00000001']['origin']=='external' and videos['vid00000002']['origin']=='studio'
     observed=videos['vid00000001']['observations'][0]

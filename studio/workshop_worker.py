@@ -104,10 +104,21 @@ def generate_ephemeral_soundtrack(task_id, payload, folder):
 
     mixed = folder / 'audio.mp3'
     report = mix(source_paths, mixed, float(plan['fade_seconds']), float(plan['target_duration_seconds']))
-    key = f'workshop-ephemeral/{payload["project_id"]}/{task_id}/mix-{report["sha256"]}.mp3'
+    ambience = apply_recipe_ambience(plan, mixed, folder, f'workshop-ephemeral/{payload["project_id"]}/{task_id}', bucket)
+    final_sha = file_hash(mixed) if ambience else report['sha256']
+    key = f'workshop-ephemeral/{payload["project_id"]}/{task_id}/mix-{final_sha}.mp3'
     storage().upload_file(str(mixed), bucket, key, ExtraArgs={'ContentType':'audio/mpeg'})
-    plan.update(mix_key=key,mix_sha256=report['sha256'],mix_seconds=report['duration_seconds'],
-                mix_report=report, track_provenance=[{k:v for k,v in item.items() if k!='key'} for item in tracks])
+    from .delivery import program_audio
+    try:program = program_audio(mixed)
+    except (ValueError, KeyError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        # Evidence only: the final delivery check still reads the produced file and can reject it.
+        program = {'status':'error','reasons':['PROGRAM_ANALYSIS_FAILED'],'listening_review_required':True}
+    titles = {item['sha256']:item.get('title') for item in tracks}
+    plan.update(mix_key=key,mix_sha256=final_sha,mix_seconds=report['duration_seconds'],
+                mix_report=report, track_provenance=[{k:v for k,v in item.items() if k!='key'} for item in tracks],
+                ambience=ambience, program_audio=program,
+                timeline_tracks=[{'start_seconds':t['start_seconds'],'duration_seconds':t['duration_seconds'],'sha256':t['sha256'],
+                                  'title':titles.get(t['sha256'])} for t in report.get('tracks',[])])
     # A failed provider request may still have been charged. Keep the full
     # reservation until every such attempt has been reconciled separately.
     exact = not plan.get('failed_attempts') and all(item.get('cost_exact') for item in tracks)
@@ -115,6 +126,29 @@ def generate_ephemeral_soundtrack(task_id, payload, folder):
     _save_task_audio_plan(task_id, plan, actual_cost)
     return {'key':key,'sha256':report['sha256'],'program_id':plan['template_program_id'],
             'snapshot':plan['template_snapshot_sha256'],'source_type':'new_ephemeral_original'}, plan
+
+
+def apply_recipe_ambience(plan, mixed, folder, prefix, bucket):
+    """Recipe ambience as its own layer: the music-only mix is kept and uploaded, the result is measured."""
+    music = ((plan.get('template_plan') or {}).get('recipe') or {}).get('music') or {}
+    opening = (((plan.get('template_plan') or {}).get('episode_brief') or {}).get('opening') or {})
+    kind = music.get('ambient_bed', 'none')
+    if kind == 'none' or opening.get('ambience_entry') == 'none':  # the episode may leave the channel's bed out
+        return None
+    if plan.get('generated_ambience'):  # the generator's ambience replaces the procedural bed for this episode
+        return None
+    from .ambient_audio import layer
+    from .timeline_compositor import file_hash
+    music_only = folder / 'audio-music-only.mp3'
+    mixed.replace(music_only)
+    ambience = layer(music_only, kind, float(music.get('ambient_gain_db', -26)), mixed, folder,
+                     delay_seconds=float(opening.get('ambience_delay_seconds', 0)) if opening.get('ambience_entry') == 'delayed' else 0,
+                     fade_in_seconds=float(opening.get('ambience_fade_in_seconds', 0)))
+    ambience['episode_brief_sha256'] = ((plan.get('template_plan') or {}).get('episode_brief') or {}).get('sha256')
+    ambience['music_only_sha256'] = file_hash(music_only)
+    ambience['music_only_key'] = f'{prefix}/mix-music-only-{ambience["music_only_sha256"]}.mp3'
+    storage().upload_file(str(music_only), bucket, ambience['music_only_key'], ExtraArgs={'ContentType':'audio/mpeg'})
+    return ambience
 
 
 def cleanup_pending_soundtracks():
@@ -198,7 +232,9 @@ def render_segments(segments, sources, audio, destination, seconds, preview_rang
         raise ValueError('Soundtrack shorter than requested video duration')
     if abs(measured - target) > .15 or abs(soundtrack - target) > .15:
         raise ValueError('Final duration mismatch')
-    return {'sha256': file_hash(destination), 'seconds': measured, 'audio_seconds': soundtrack,
+    from .delivery import verify_delivery
+    delivery_check = verify_delivery(destination, target)
+    return {'sha256': file_hash(destination), 'seconds': measured, 'audio_seconds': soundtrack, 'delivery_check': delivery_check,
             'width':report['video']['width'],'height':report['video']['height'],
             'encoding_profile':compiled.get('encoding_profile'), 'local_resources':report['local_resources'],
             'output_resolution_requested':output_resolution, 'contains_upscaled_sources':full_hd and not native_full_hd,
@@ -241,14 +277,23 @@ def tick():
             seconds, _ = measure(final,'audio')
             if abs(seconds-float(p['seconds'])) > .15:
                 raise ValueError('Audio duration does not match request')
+            from .delivery import verify_delivery, tracklist, chapters
+            delivery_check=verify_delivery(final,target,video=False)
+            listing=tracklist(plan.get('timeline_tracks') or [],seconds)
             sha=file_hash(final)
             key=f"audio-deliveries/{p['channel_id']}/{t['id']}/{sha}.mp3"
             storage().upload_file(str(final),os.environ['S3_BUCKET'],key,ExtraArgs={'ContentType':'audio/mpeg'})
             # Keep the final delivery separate from intermediate composition files.
             temporary=[track['key'] for track in plan.get('tracks',[]) if track.get('key')]
             if plan.get('mix_key'):temporary.append(plan['mix_key'])
+            if (plan.get('ambience') or {}).get('music_only_key'):temporary.append(plan['ambience']['music_only_key'])
             plan.update(ephemeral_cleanup='pending',_ephemeral_cleanup_keys=temporary)
-            report={'sha256':sha,'seconds':seconds,'bytes':final.stat().st_size,'format':'mp3'}
+            from .delivery import opening_review_or_error
+            starts=sorted(float(t['start_seconds']) for t in plan.get('timeline_tracks') or [])
+            opening=opening_review_or_error(final,seconds,starts[1] if len(starts)>1 else None)
+            report={'sha256':sha,'seconds':seconds,'bytes':final.stat().st_size,'format':'mp3','opening_review':opening,
+                    'delivery_check':delivery_check,'tracklist':listing,'chapters':chapters(listing),
+                    'program_audio':plan.get('program_audio'),'ambience':plan.get('ambience')}
             with db() as c:
                 c.execute("UPDATE factory_tasks SET status='COMPLETED',payload=payload||%s::jsonb,detail='Áudio completo pronto para ouvir e baixar',updated_at=now() WHERE id=%s",
                           (json.dumps({'audio_key':key,'report':report,'audio_plan':plan}),t['id']))
@@ -303,6 +348,7 @@ def tick():
             sha = segment['asset_sha256']
             if sha in sources: continue
             path = folder / (sha + '.mp4'); fetch(segment['asset_key'], path, sha, 64 * 1024**2); sources[sha] = path
+        originals = dict(sources)  # continuity preparation may replace sources with silent processed copies
         prepared_plan = None
         if p.get('director_contract'):
             from .audiovisual_director import prepare, ContinuityRejected
@@ -341,6 +387,10 @@ def tick():
             # Preserve compatibility with render tasks queued before this hotfix.
             audio_info = p['audio']; audio_plan = {}
             fetch(audio_info['key'], audio, audio_info['sha256'], 1024**3)
+        sound_report = None
+        if p.get('sound_design') and not p.get('reedit_source'):
+            from .sound_design import apply as apply_sound_design
+            audio, sound_report = apply_sound_design(audio, p, originals, folder)
         final = folder / 'final.mp4'
         if p.get('director_proof'):
             from .audiovisual_director import proof_windows
@@ -363,6 +413,8 @@ def tick():
             kwargs={'prepared_plan':prepared_plan} if prepared_plan else {}
             if p.get('output_resolution','auto')=='1080p_upscaled':kwargs['output_resolution']='1080p_upscaled'
             report=render_segments(p['segments'],sources,audio,final,p['seconds'],p.get('preview_range'),**kwargs)
+        if sound_report:
+            report['sound_design']=sound_report
         if p.get('reedit_source'):
             report['audio_reuse']={'parent_task_id':p['reedit_source']['task_id'],
                                   'parent_sha256':p['reedit_source']['sha256'],'paid_calls':0}
@@ -375,13 +427,23 @@ def tick():
                 'template_source':audio_plan.get('template_source','channel_production'),
                 'recipe_id':audio_plan.get('recipe_id'),'recipe_sha256':audio_plan.get('recipe_sha256'),
                 'tracks':audio_plan.get('track_provenance',[]),'mix_report':audio_plan.get('mix_report'),
+                'ambience':audio_plan.get('ambience'),'program_audio':audio_plan.get('program_audio'),
                 'generation_reserved_usd':audio_plan.get('reserved_usd'),
                 'generation_known_cost_usd':audio_plan.get('known_cost_usd'),
                 'source_preserved':False,'temporary_audio_removed_after_render':True})
+        if ephemeral and audio_plan.get('timeline_tracks') and not p.get('director_proof') and not p.get('preview_range'):
+            from .delivery import tracklist, chapters
+            report['tracklist']=tracklist(audio_plan['timeline_tracks'],report['seconds'])
+            report['chapters']=chapters(report['tracklist'])
+        if not p.get('director_proof') and not p.get('preview_range'):
+            from .delivery import opening_review_or_error
+            starts=sorted(float(t['start_seconds']) for t in audio_plan.get('timeline_tracks') or [])
+            report['opening_review']=opening_review_or_error(final,report['seconds'],starts[1] if len(starts)>1 else None)
         key = f'visual-workshop/{p["project_id"]}/renders/{t["id"]}/{report["sha256"]}.mp4'
         storage().upload_file(str(final), os.environ['S3_BUCKET'], key, ExtraArgs={'ContentType': 'video/mp4'})
         ephemeral_keys = [item['key'] for item in audio_plan.get('tracks',[]) if item.get('key')]
         if audio_plan.get('mix_key'): ephemeral_keys.append(audio_plan['mix_key'])
+        if (audio_plan.get('ambience') or {}).get('music_only_key'): ephemeral_keys.append(audio_plan['ambience']['music_only_key'])
         final_audio_plan = dict(audio_plan)
         if ephemeral:
             for hidden in ('tracks','mix_key','template_plan'):

@@ -256,6 +256,13 @@ def analyze_videos(videos,brand,lofi_vocabulary=True):
             if insecure:
                 out.append(finding('insecure_link','low','video',vid,label,'observed',f'Links sem HTTPS: {", ".join(insecure[:5])}.',
                     'Hipótese: navegadores podem alertar quem clica.','Troque por endereços HTTPS equivalentes.',field='description'))
+        from .delivery import reconcile_metadata
+        from .reference_research import iso_seconds
+        claim=reconcile_metadata(title,description,iso_seconds(v.get('duration')))
+        if claim['claims'] and claim['issues']:
+            out.append(finding('duration_claim_mismatch','high','video',vid,label,'observed',' '.join(claim['issues']),
+                'Hipótese: uma promessa de duração que o vídeo não cumpre frustra quem escolheu o vídeo por ela.',
+                'Corrija o texto para a duração real do vídeo.',field='title' if any(c['text'] in title for c in claim['claims']) else 'description'))
     for group in by_title.values():
         if len(group)>1 and group[0].get('title'):
             ids=[v['id'] for v in group]
@@ -421,6 +428,8 @@ def channel_summary(item):
     s=item.get('snippet') or {};b=(item.get('brandingSettings') or {}).get('channel') or {};st=item.get('statistics') or {}
     return {'id':item['id'],'title':s.get('title',''),'handle':s.get('customUrl',''),'description':b.get('description',s.get('description','')),
             'keywords':b.get('keywords',''),'country':b.get('country') or s.get('country') or '','published_at':s.get('publishedAt'),
+            'default_language':b.get('defaultLanguage') or s.get('defaultLanguage') or '','trailer':b.get('unsubscribedTrailer') or '',
+            'banner_url':((item.get('brandingSettings') or {}).get('image') or {}).get('bannerExternalUrl') or '',
             'thumbnail':_thumbnail(s),'uploads_playlist':((item.get('contentDetails') or {}).get('relatedPlaylists') or {}).get('uploads',''),
             'public_counts':{'videos':_count(st.get('videoCount')),'views':_count(st.get('viewCount')),
                              'subscribers':None if st.get('hiddenSubscriberCount') else _count(st.get('subscriberCount'))}}
@@ -607,6 +616,21 @@ def channel_metadata_rules(c,cid):
     except HTTPException:recipe=None
     data=(recipe or {}).get('data')
     return {**metadata_rules(data),'source':resolve(data)['source'],'recipe_sha256':(recipe or {}).get('sha256')}
+
+def presentation_checklist(snapshot,brand):
+    """Channel presentation as read through the API; items the API cannot read or change become manual tasks."""
+    ch=snapshot['channel'];captured=lambda key:key in ch
+    def item(key,label,state,evidence,how):return {'id':key,'label':label,'state':state,'evidence':evidence,'how_to_change':how}
+    studio='YouTube Studio → Personalização'
+    out=[item('name','Nome',('ok' if ch.get('title')==brand['official_name'] else 'attention'),f"“{ch.get('title','')}”",studio+' → Informações básicas (manual; a API não altera)'),
+         item('promise','Promessa editorial na descrição',('ok' if ch.get('description','').strip() else 'missing'),f"{len(ch.get('description',''))} caracteres",'Proposta pelo fluxo de alterações desta auditoria (API) ou manualmente.'),
+         item('language','Idioma padrão',('ok' if ch.get('default_language') else 'missing') if captured('default_language') else 'not_captured',ch.get('default_language') or 'não definido','Proposta manual no Studio → Configurações → Canal.'),
+         item('avatar','Avatar',('ok' if ch.get('thumbnail') else 'missing'),'imagem lida pela API' if ch.get('thumbnail') else 'sem imagem',studio+' → Branding (manual).'),
+         item('banner','Banner',('ok' if ch.get('banner_url') else 'not_exposed') if captured('banner_url') else 'not_captured','URL lida' if ch.get('banner_url') else 'a API não retornou banner',studio+' → Branding (manual).'),
+         item('playlists','Playlists',('ok' if snapshot.get('playlists') else 'missing'),f"{len(snapshot.get('playlists') or [])} playlist(s)",'YouTube Studio → Conteúdo → Playlists.'),
+         item('trailer','Trailer para não inscritos',('decision_needed' if not ch.get('trailer') else 'ok') if captured('trailer') else 'not_captured',ch.get('trailer') or 'nenhum','Opcional; decisão editorial. '+studio+' → Layout.'),
+         item('featured','Vídeo em destaque e seções da página inicial','manual','não lido nesta auditoria',studio+' → Layout (manual).')]
+    return {'items':out,'note':'Trailer e vinheta são opcionais e nunca são produzidos automaticamente; itens manuais não são executados pelo aplicativo.'}
 
 def video_catalog(c,cid,run):
     """Every imported video with the observations already saved for it; absent data stays absent, never zero."""
@@ -845,7 +869,7 @@ def get_run(cid:uuid.UUID,rid:uuid.UUID):
         editorial_policy=editorial_for_channel(c,cid)
     return {'run':{k:run[k] for k in ('id','youtube_channel_id','channel_ref','brand','intended_searches','snapshot','snapshot_sha256','analytics',
                                       'findings','diagnosis','provenance','created_by','created_at')},
-            'videos':videos,'changes':[public_change(r)|{'editorial_language':editorial_policy['language']} for r in changes],
+            'videos':videos,'presentation':presentation_checklist(run['snapshot'],run['brand']),'changes':[public_change(r)|{'editorial_language':editorial_policy['language']} for r in changes],
             'editorial_contract':editorial_policy,'events':events,'interpretation_note':CAUTION}
 
 @router.post('/{cid}/channel-audit/runs/{rid}/changes')

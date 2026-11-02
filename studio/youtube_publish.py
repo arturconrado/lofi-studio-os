@@ -67,8 +67,10 @@ def validate_publication_editorial(row):
     from .editorial import require_channel
     prior=(row.get('publication_metadata') or {}).get('editorial_review')
     with db() as c:
-        return require_channel(c,row['channel_id'],row['title'],row['description'],
+        result=require_channel(c,row['channel_id'],row['title'],row['description'],
                                reviewed=bool(prior and prior.get('human_reviewed')),previous=prior)
+        if row.get('pilot_id'):approved_pilot_thumbnail(c,row.get('pilot_report') or {})
+        return result
 
 def validate_growth_receipt(c,channel_id,publication_metadata):
     native=(publication_metadata or {}).get('native_growth') or {}
@@ -231,6 +233,7 @@ def authorize_ready(jid:uuid.UUID,body:ReadyAuthorization):
         body.publication_metadata['editorial_review']=editorial_receipt(c,row['channel_id'],body.title,body.description,body.confirm_review)
         pilot=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(row['pilot_id'],row['channel_id'])).fetchone()
         if not pilot or pilot['status']!='approved' or not ready_pilot(pilot):raise HTTPException(409,'Revise e aprove o vídeo completo antes de publicar.')
+        approved_pilot_thumbnail(c,pilot['report'])
         if pilot['report']['artifact_sha256']['video']!=row['pilot_sha256']:raise HTTPException(409,'O vídeo mudou desde a preparação da publicação.')
         phrase=channel_packaging(c,row['channel_id'],body.title,body.description,body.primary_phrase)
         pilot_intent=(pilot.get('plan') or {}).get('intent','coding_focus')
@@ -319,6 +322,13 @@ def update_metadata(jid:uuid.UUID,body:MetadataUpdate):
         body.publication_metadata=(body.publication_metadata or {})|{'editorial_review':editorial_receipt(c,row['channel_id'],body.title or row['title'],body.description,body.confirm_update)}
         if body.primary_phrase:
             channel_packaging(c,row['channel_id'],body.title or row['title'],body.description,body.primary_phrase)
+        from .delivery import reconcile_metadata
+        measured=(row.get('publication_metadata') or {}).get('seconds')
+        if measured is None and row.get('export_id'):
+            job=c.execute('SELECT seconds FROM export_jobs WHERE id=%s',(row['export_id'],)).fetchone()
+            measured=float(job['seconds']) if job and job.get('seconds') else None
+        check=reconcile_metadata(body.title or row['title'],body.description,measured)
+        if check['issues']:raise HTTPException(422,'O texto não corresponde ao vídeo publicado: '+' '.join(check['issues']))
         credential=c.execute('SELECT token_encrypted FROM channel_credentials WHERE channel_id=%s',(row['channel_id'],)).fetchone()
         if not credential or not manage_allowed(json.loads(cipher().decrypt(credential['token_encrypted'].encode()))):
             raise HTTPException(409,'Reconecte o YouTube em Canais autorizando o gerenciamento de vídeos para editar pela plataforma.')
@@ -631,7 +641,10 @@ def prepare_pilot(pid:uuid.UUID,body:PreparePilot):
             c.commit();return existing
         key=p['report'].get('delivery_assets',{}).get('description')
         from .copywriting import organic
-        description='One hour of warm lofi jazz for coding, studying and quiet focus.\n\nWhat are you working on today? Tell us in the comments.\nIf these sessions help you, subscribe. New places to focus are on the way.'
+        # The fallback only states a duration that the measured file supports.
+        from .delivery import hours_phrase
+        lead=hours_phrase(p['report'].get('duration_seconds'))
+        description=((lead+' of warm lofi jazz' if lead else 'Warm lofi jazz')+' for coding, studying and quiet focus.\n\nWhat are you working on today? Tell us in the comments.\nIf these sessions help you, subscribe. New places to focus are on the way.')
         if key:
             obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=key)
             try:description=organic(obj['Body'].read(20000).decode('utf-8'),p['title'])[:5000] or description
@@ -671,11 +684,15 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
         p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(pid,body.channel_id)).fetchone()
         if not p:raise HTTPException(404,'Vídeo inexistente neste canal.')
         if p['status']!='approved':raise HTTPException(409,'Aprove o vídeo na revisão antes de publicar.')
+        approved_pilot_thumbnail(c,p['report'])
         growth_receipt=validate_growth_receipt(c,body.channel_id,body.publication_metadata)
         primary_phrase=channel_packaging(c,body.channel_id,body.title,body.description,body.primary_phrase)
         pilot_intent=(p.get('plan') or {}).get('intent','coding_focus')
         if body.intent!=pilot_intent:raise HTTPException(409,'A intenção deste vídeo mudou. Atualize a intenção e gere novamente a sugestão antes de publicar.')
         if not ready_pilot(p):raise HTTPException(409,'Vídeo completo de uma hora ainda não validado tecnicamente.')
+        from .delivery import reconcile_metadata
+        check=reconcile_metadata(body.title,body.description,p['report'].get('duration_seconds'),(p['report'].get('tracklist') or {}).get('entries'))
+        if check['issues']:raise HTTPException(422,'O texto não corresponde ao vídeo entregue: '+' '.join(check['issues']))
         from .provenance import publication_gate
         publication_gate(c,pilot=p)
         old=c.execute('SELECT '+FIELDS+' FROM youtube_publications WHERE request_id=%s OR pilot_id=%s',(body.request_id,pid)).fetchone()
@@ -686,8 +703,13 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
         cred=c.execute('SELECT * FROM channel_credentials WHERE channel_id=%s FOR UPDATE',(body.channel_id,)).fetchone()
         if not cred or not upload_allowed(json.loads(cipher().decrypt(cred['token_encrypted'].encode()))):raise HTTPException(409,'Autorize o envio pelo Google no menu Canais.')
         jid=uuid.uuid4()
+        # Carry the direction and brief that produced the approved render, when it came from the Workshop.
+        trace={'metadata_check':check}
+        if p['report'].get('workshop_render_id'):
+            source=c.execute('SELECT payload FROM factory_tasks WHERE id::text=%s',(str(p['report']['workshop_render_id']),)).fetchone()
+            if source:trace.update({k:source['payload'].get(k) for k in ('direction_sha256','episode_brief_sha256')})
         c.execute('''INSERT INTO youtube_publications(id,request_id,channel_id,pilot_id,youtube_channel_id,title,description,intent,primary_phrase,privacy,made_for_kids,pilot_sha256,publication_metadata)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)''',(jid,body.request_id,body.channel_id,pid,cred['youtube_channel_id'],body.title.strip(),body.description,body.intent,primary_phrase,body.privacy,body.made_for_kids,p['report']['artifact_sha256']['video'],json.dumps(body.publication_metadata)))
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)''',(jid,body.request_id,body.channel_id,pid,cred['youtube_channel_id'],body.title.strip(),body.description,body.intent,primary_phrase,body.privacy,body.made_for_kids,p['report']['artifact_sha256']['video'],json.dumps((body.publication_metadata or {})|{'trace':trace},default=str)))
         audit(c,'PILOT_PUBLICATION_AUTHORIZED',str(jid),json.dumps({'pilot_id':str(pid),'primary_phrase':primary_phrase,'growth_metadata':growth_receipt}));c.commit()
     return {'id':jid,'state':'queued','pilot_id':pid}
 
@@ -701,16 +723,34 @@ def verify_pilot_media(row):
     finally:obj['Body'].close()
     if h.hexdigest()!=expected:raise ValueError('Pilot integrity changed')
 
+def approved_pilot_thumbnail(c,report):
+    """Check the current brief/policy before any video upload, never only afterwards."""
+    render=report.get('workshop_render_id')
+    if not render:return None
+    from .thumbnails import approved_for_project
+    task=c.execute('SELECT payload FROM factory_tasks WHERE id::text=%s',(str(render),)).fetchone()
+    if not task:raise HTTPException(409,'Não foi possível recuperar o projeto da miniatura. Revise antes de publicar.')
+    return approved_for_project(c,task['payload']['project_id'])
+
+
+def approved_workshop_thumbnail(row):
+    """The approved thumbnail of the Workshop project that produced this pilot, if any."""
+    with db() as c:
+        return approved_pilot_thumbnail(c,row.get('pilot_report') or {})
+
+
 def set_pilot_thumbnail(client,row,video_id):
     try:
-        key=row['pilot_report']['delivery_assets']['thumbnail1']
+        approved=approved_workshop_thumbnail(row)
+        key=approved['key'] if approved else row['pilot_report']['delivery_assets']['thumbnail1']
+        content_type='image/jpeg' if approved else 'image/png'
         obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=key)
         try:
             if obj['ContentLength']>50*1024*1024:raise ValueError('Thumbnail too large')
             data=obj['Body'].read()
         finally:obj['Body'].close()
-        r=client.post('https://www.googleapis.com/upload/youtube/v3/thumbnails/set',params={'videoId':video_id},headers={'Authorization':'Bearer '+access_token(client,row),'Content-Type':'image/png'},content=data)
-        r.raise_for_status();progress(row['id'],thumbnail_detail='Capa do episódio enviada ao YouTube.')
+        r=client.post('https://www.googleapis.com/upload/youtube/v3/thumbnails/set',params={'videoId':video_id},headers={'Authorization':'Bearer '+access_token(client,row),'Content-Type':content_type},content=data)
+        r.raise_for_status();progress(row['id'],thumbnail_detail='Miniatura aprovada do episódio enviada ao YouTube.' if approved else 'Capa do episódio enviada ao YouTube.')
     except Exception:progress(row['id'],thumbnail_detail='Vídeo recebido, mas a capa personalizada não foi confirmada. Confira a permissão de thumbnails do canal.')
 
 if __name__=='__main__':main()

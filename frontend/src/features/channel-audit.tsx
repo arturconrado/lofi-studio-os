@@ -227,6 +227,9 @@ export function ChannelAudit({ cid }: { cid: string }) {
         <p class="faint">Importado em {new Date(run.provenance.data.fetched_at).toLocaleString('pt-BR')} pela YouTube Data API v3 · {videos.length} vídeos · {run.snapshot.playlists.length} playlists · Analytics: {({ ok: 'lido', not_authorized: 'não autorizado', not_requested: 'não solicitado', error: 'falhou' } as any)[run.provenance.analytics.status] || run.provenance.analytics.status} · Captura manual do Studio: {run.provenance.manual.latest_capture_date || 'nenhuma'} · Sem ferramentas de terceiros.</p>
         {run.snapshot.limits.videos_truncated && <p>Foram lidos os {run.snapshot.limits.max_videos} vídeos mais recentes; os demais não entram nesta auditoria.</p>}
         <div class="card flat" role="note"><b>Diagnóstico de visibilidade:</b> {run.diagnosis.message}</div>
+        {detail.data.presentation && <details><summary>Apresentação do canal ({detail.data.presentation.items.filter((i: any) => i.state === 'ok').length}/{detail.data.presentation.items.length} conferidos)</summary>
+          <ul>{detail.data.presentation.items.map((i: any) => <li><Pill tone={i.state === 'ok' ? 'ok' : ['manual', 'decision_needed', 'not_exposed', 'not_captured'].includes(i.state) ? '' : 'warn'}>{({ ok: 'Ok', attention: 'Atenção', missing: 'Ausente', manual: 'Tarefa manual', decision_needed: 'Decidir', not_exposed: 'Não exposto pela API', not_captured: 'Não lido nesta auditoria' } as any)[i.state] || i.state}</Pill> <b>{i.label}</b>: {i.evidence}. <small class="faint">{i.how_to_change}</small></li>)}</ul>
+          <small class="faint">{detail.data.presentation.note}</small></details>}
         <small class="faint">{detail.data.interpretation_note}</small>
       </section>
       <section class="card stack" aria-labelledby="yt-findings">
