@@ -96,6 +96,7 @@ function ChangeCard({ c, selected, onSelect, onReload, base }: { c: Change; sele
   return <article class="card flat stack" aria-label={`${FIELD[c.field] || c.field} de ${c.target_label}`}>
     <div class="row tight"><Pill tone={tone}>{label}</Pill><b>{FIELD[c.field] || c.field} · {c.target_label}</b><small class="faint">{c.target_kind} · {c.origin === 'brand_rule' ? 'regra de marca' : 'proposta manual'}</small></div>
     {c.rationale && <p class="muted">{c.rationale}</p>}
+    {open && <p class="faint">Ao aprovar, confira o idioma editorial do canal ({(c as Change & { editorial_language?: string }).editorial_language || 'perfil do canal'}), inclusive nomes próprios e textos curtos. A conversa pode usar outro idioma; a publicação segue o perfil.</p>}
     <div class="grid auto">
       <div><b>Valor atual</b><pre style={pre}>{c.current_value || '(vazio)'}</pre></div>
       <div><b>Valor sugerido</b>{open ? <textarea class="textarea" aria-label="Valor sugerido" rows={c.field === 'description' ? 8 : 2} value={draft} onInput={e => setDraft((e.target as HTMLTextAreaElement).value)} /> : <pre style={pre}>{c.suggested_value}</pre>}</div>

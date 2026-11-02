@@ -22,8 +22,16 @@ def editorial_phrase(intent):
     return EDITORIAL_PHRASES.get(intent, EDITORIAL_PHRASES['coding_focus'])
 
 
-def metadata_guidelines(intent, phrase):
+def metadata_guidelines(intent, phrase, policy=None):
     """Prompt contract shared by new-plan generation, the harness, and Growth packaging."""
+    if policy is not None:
+        from .editorial import prompt
+        return (prompt(policy)+' Return only requested JSON fields. Title under 100 characters. '
+                'Use the supplied primary phrase naturally, with the supported distinctive episode setting. '
+                'The description opens with an inviting, scene-specific hook and explains the real listening experience. '
+                'Keep the editorial body concise; chapters, a contextual question, subscription CTA and relevant hashtags are separate blocks. '
+                'Only use supplied facts. Preserve the actual chapter offsets; never invent a tracklist or duration. '
+                'Proofread the complete title and description in the channel publication language. ')
     return (
         'You write accurate YouTube metadata for the LoFi Vibe Coding channel. '
         'Write polished, natural English for viewers and proofread spelling, grammar, and punctuation. '
@@ -45,7 +53,7 @@ def metadata_guidelines(intent, phrase):
     )
 
 
-def metadata_issues(title, description, phrase=None, *, min_description=450, max_description=5000, phrase_first=True):
+def metadata_issues(title, description, phrase=None, *, min_description=450, max_description=5000, phrase_first=True, opening_phrase_required=True):
     """Every rule of the shared contract, in order; a missing phrase skips only the phrase rules.
 
     phrase_first and min_description are editorial choices of a channel profile, not growth laws.
@@ -70,7 +78,10 @@ def metadata_issues(title, description, phrase=None, *, min_description=450, max
             issues.append(('title_complement_long', 'O complemento do título está longo ou empilha palavras-chave; use um cenário ou benefício em poucas palavras.'))
     if len(description) < min_description or len(description) > max_description:
         issues.append(('description_length', f'A descrição precisa ter entre {min_description} e {max_description} caracteres e contexto específico do vídeo.'))
-    paragraphs = [part.strip() for part in re.split(r'\n\s*\n', description) if part.strip()]
+    # Chapters, CTA and hashtags are not paragraphs of the editorial introduction.
+    body=re.split(r'(?im)^\s*(?:[^\w\n]*\s*)?(?:TRACKLIST|CHAPTERS|TIMESTAMPS)\b|^\s*00:00\s',description,maxsplit=1)[0]
+    paragraphs = [part.strip() for part in re.split(r'\n\s*\n', body) if part.strip()
+                  and not re.match(r'^(?:[^\w\n]*\s*)?(?:subscribe|what (?:are|language)|#)',part.strip(),re.I)]
     if min_description >= 450 and not 2 <= len(paragraphs) <= 3:
         issues.append(('description_paragraphs', 'A descrição deve ter 2 ou 3 parágrafos curtos, com contexto específico do vídeo.'))
     if '<' in title + description or '>' in title + description:
@@ -79,19 +90,20 @@ def metadata_issues(title, description, phrase=None, *, min_description=450, max
         if phrase_first and not title.casefold().startswith(phrase.casefold()):
             issues.append(('title_phrase_start', f'O título deve começar com a frase principal “{phrase}”. Revise a frase ou gere o pacote novamente.'))
         opening = re.split(r'[.!?](?:\s|$)', description, maxsplit=1)[0]
-        if phrase.casefold() not in opening.casefold():
+        if opening_phrase_required and phrase.casefold() not in opening.casefold():
             issues.append(('description_phrase_opening', f'A primeira frase da descrição deve incluir “{phrase}” naturalmente. Revise o texto ou gere o pacote novamente.'))
     return issues
 
 
-def validate_metadata(title, description, phrase, *, min_description=450, max_description=5000):
+def validate_metadata(title, description, phrase, *, min_description=450, max_description=5000, phrase_first=True, opening_phrase_required=True):
     """Normalize and enforce the same title/opening/description contract on every path."""
     phrase = ' '.join(str(phrase or '').split())
     title = ' '.join(str(title or '').split())
     description = str(description or '').strip()
     if len(phrase) < 2 or len(phrase) > 50:
         raise ValueError('Escolha uma frase principal curta e específica para este vídeo.')
-    issues = metadata_issues(title, description, phrase, min_description=min_description, max_description=max_description)
+    issues = metadata_issues(title, description, phrase, min_description=min_description, max_description=max_description,
+                             phrase_first=phrase_first,opening_phrase_required=opening_phrase_required)
     if issues:
         raise ValueError(issues[0][1])
     return {'title': title, 'description': description, 'primary_phrase': phrase}

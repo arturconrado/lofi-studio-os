@@ -58,6 +58,17 @@ Pedido do proprietário: uma camada de orquestração entre os agentes e o harne
 
 ## Validação
 
+### Complemento editorial e idioma (PR #106)
+
+- `studio/editorial.py` resolve a política da receita do canal e verifica o texto final com identificação estatística local (`langid`, sem chamada paga). Inglês do LoFi independe do idioma do operador; texto curto, nome próprio ou resultado inconclusivo requer a revisão humana existente. Não é certificação linguística universal.
+- Tom, exemplos aprovados/rejeitados e nomes preservados ficam em `MetadataRules`, na receita versionada, com edição na tela de receitas. Campos novos vazios não mudam a serialização de perfis antigos. Feedback editorial não é métrica de audiência.
+- Growth e Criador recebem o contrato; auditoria verifica na aprovação e antes de aplicar. Publicação/edição verificam o texto e guardam recibo ligado ao conteúdo e à política; o worker confere novamente antes de enviar/retomar. Mudança da política invalida essa revisão sem regenerar mídia.
+- Corpo editorial separado de capítulos, CTA e hashtags. A descrição pode começar com um convite contextual em vez de repetir obrigatoriamente a frase principal. Notas de render e alegações de produtividade sem fundamento são recusadas.
+- A inicialização de receitas pela consulta de canal usa a transação do chamador, evitando espera circular entre DDL e publicação no primeiro uso.
+- Migração aditiva: `channel_audit_changes.approved_editorial_sha256`, criada sob demanda. Propostas antigas precisam de nova aprovação editorial antes de aplicar. Nenhum texto publicado é traduzido em lote.
+- Casos de regressão em `tests/test_editorial.py`; fluxos existentes de auditoria/publicação, Growth e perfis incluídos na validação. Integração da escolha de mensagem, briefing e OCR fica no PR #107.
+- Estado: implementado localmente; contagens finais de validação serão registradas no PR após a suíte. Implantado: não; nenhuma chamada paga ou publicação real nesta implementação.
+
 - `tests/test_orchestration.py` (4) e `frontend/src/__tests__/orchestration.test.tsx` (1): plano, próximo passo, bloqueios e painel somente leitura.
 - `tests/test_niche_profiles.py`: 8 testes. Inclui um teste com PostgreSQL em que um canal com o perfil "Piano e Natureza" é bloqueado por capacidade ausente (narração) sem chamada nem reserva, e depois gera um pedido pago real (mock do provedor) contendo a linguagem do perfil e sem termos LoFi.
 - Suítes existentes de receitas, música, Workshop, produções, Growth, Criador e auditoria seguem passando. Os números finais estão no relatório da sessão.

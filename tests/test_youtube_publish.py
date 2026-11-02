@@ -46,6 +46,7 @@ class Lock:
 
 
 def test_completed_resumable_session_is_checked_without_new_upload(monkeypatch):
+    monkeypatch.setattr(yp,'validate_publication_editorial',lambda row:None)
     import os
     from cryptography.fernet import Fernet
     monkeypatch.setenv('STUDIO_MASTER_KEY',Fernet.generate_key().decode())

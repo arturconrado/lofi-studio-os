@@ -316,7 +316,9 @@ def public(row):
 
 def for_channel(c,cid,rid=None):
     """Recipe revision a production on this channel may use; default when none is named."""
-    ready()
+    # Initialize on the caller's transaction: a second DDL connection can wait on
+    # radio_channels locks already held by publication, while publication waits on it.
+    if not c.execute("SELECT to_regclass('channel_recipes') t").fetchone()['t']:ensure(c)
     allowed=c.execute('SELECT recipe_id,pinned_sha256,is_default FROM channel_recipes WHERE channel_id=%s',(cid,)).fetchall()
     if rid is None:
         chosen=next((a for a in allowed if a['is_default']),None)

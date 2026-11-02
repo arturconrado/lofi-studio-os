@@ -63,6 +63,8 @@ def resolved_direction(c,row,draft,recipe=None,identity=None):
     from .episode_brief import latest_data,capability_blockers as brief_blockers
     episode=latest_data(c,row['id'])
     profile=resolve((recipe or {}).get('data'))
+    from .editorial import contract
+    editorial=contract((recipe or {}).get('data'))
     brief={'theme':draft.theme,'scene':draft.scene,'scene_motion':draft.scene_motion,'music_brief':draft.music_brief,
            'characters':[{'name':ch.name,'description':ch.description} for ch in draft.characters],
            'actions':[{'name':cl.name,'motion':cl.motion,'action_goal':cl.action_goal} for cl in draft.clips]}
@@ -80,7 +82,7 @@ def resolved_direction(c,row,draft,recipe=None,identity=None):
                'episode_brief':{'sha256':(episode or {}).get('sha256'),'revision':(episode or {}).get('revision'),'blockers':brief_blockers(episode)},
                'references':{'selected':sorted({str(t['reference_id']) for t in (episode or {}).get('transformations') or []}),
                              'status':'cited_in_brief' if (episode or {}).get('transformations') else 'none_cited'},
-               'project_budget_usd':budget}
+               'project_budget_usd':budget,'editorial':editorial}
     return direction|{'sha256':digest(direction)}
 
 
