@@ -2419,6 +2419,11 @@ def render(pid: uuid.UUID, body: Render):
         if flagged: raise HTTPException(409,'A conferência do áudio gerado apontou música, fala ou som diferente do pedido em: '+', '.join(flagged)+'. Ouça e aceite, ou gere de novo. Nada foi reservado.')
         gaps=brief_blockers(episode_brief_for(c,row))
         if gaps: raise HTTPException(409,'O briefing pede algo que o estúdio não executa: '+' '.join(g['reason'] for g in gaps)+' Nada foi reservado.')
+        from .episode_brief import wants_channel_vignette
+        from .channel_vignette import approved_for_channel
+        vignette=approved_for_channel(c,row['channel_id']) if wants_channel_vignette(episode_brief_for(c,row)) else None
+        if wants_channel_vignette(episode_brief_for(c,row)) and not vignette:
+            raise HTTPException(409,'O briefing abre com a vinheta do canal, mas este canal ainda não tem vinheta aprovada. Gere e aprove em Canais. Nada foi reservado.')
         template = music_template(c, row, draft)
         quote = soundtrack_quote(int(segments[-1]['end'] + .999))
         if not body.confirm_cost:
@@ -2441,6 +2446,7 @@ def render(pid: uuid.UUID, body: Render):
         payload = {'project_id': str(pid), 'operation': 'render', 'draft_sha256': digest(row['data']),
                    'direction_sha256': direction['sha256'], 'episode_brief_sha256': (template['plan'].get('episode_brief') or {}).get('sha256'),
                    'sound_design': sound_design,
+                   'vignette': {'id':str(vignette['id']),'key':vignette['key'],'sha256':vignette['sha256'],'seconds':float(vignette['seconds'])} if vignette else None,
                    'output_resolution': body.output_resolution,
                    'seconds': segments[-1]['end'], 'segments': segments,
                    'director_contract': director, 'editorial_memory': editorial_meta,

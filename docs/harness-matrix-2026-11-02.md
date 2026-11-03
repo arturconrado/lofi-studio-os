@@ -169,3 +169,12 @@ Limites declarados: o áudio gerado pelo Veo pode conter música ou fala apesar 
 | Plano aceito por uma pessoa vira a direção sonora do vídeo | **Implementado e testado** | `POST .../sound-plan/{id}/apply` com controle de versão. Os itens aceitos viram `generated_ambience` e o `sound_effect` de cada trecho, e o relatório de impacto mostra o que precisa ser gerado de novo com som. Um plano feito para outra versão do projeto é recusado. |
 | Conferência do som gerado | **Implementado e testado** | `POST .../media/{id}/audio-check`: o avaliador ouve o áudio do clipe (entrada de áudio, confirmada no catálogo do OpenRouter) e aponta música, fala ou canto, ou som diferente do pedido. Um clipe sinalizado bloqueia a montagem até uma pessoa ouvir e aceitar aqueles bytes. |
 | Orquestração | **Atualizado** | Agente `sound_designer` com etapa própria no plano do projeto. |
+
+## Vinheta de abertura única por canal
+
+| Requisito | Estado | Evidência |
+|---|---|---|
+| O harness do canal continua sendo a base | **Mantido** | Perfil, receita, identidade e política editorial são do canal; briefing, plano de som e miniatura são decisões por vídeo dentro dele. |
+| Uma vinheta única por canal, com características próprias | **Implementado e testado** | `studio/channel_vignette.py`. Definição versionada por canal: conceito, motivo visual, assinatura sonora, 4, 6 ou 8 s e nome opcional. Gerada pelo Veo com áudio, partindo do still de identidade aprovado do canal, com cotação pelo preço com áudio, confirmação e envio único. |
+| Não repetir a abertura de outro canal | **Implementado e testado** | Assinatura de quadros (average hash em três pontos) comparada com as vinhetas aprovadas dos outros canais do workspace. Uma vinheta parecida demais fica "too_similar" e não pode ser aprovada. Sem áudio, também não. |
+| Aprovação e uso por vídeo | **Implementado e testado** | Aprovação humana presa aos bytes e à definição atual, depois de assistir e ouvir. O briefing escolhe "vinheta do canal"; sem vinheta aprovada, a montagem e o plano de agentes acusam o bloqueio antes de qualquer custo. A montagem coloca a vinheta antes do programa, normalizando resolução, fps e áudio. A união é feita por cópia de streams, com conferência de decodificação na junção; se falhar, há recodificação. O arquivo final é verificado e a tracklist e os capítulos são deslocados, com o primeiro capítulo em 0:00. |

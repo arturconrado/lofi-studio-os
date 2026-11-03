@@ -423,6 +423,8 @@ from .thumbnails import router as thumbnails_router
 router.include_router(thumbnails_router)
 from .sound_planner import router as sound_planner_router
 router.include_router(sound_planner_router)
+from .channel_vignette import router as channel_vignette_router
+router.include_router(channel_vignette_router)
 
 
 @router.get('/pose-library')

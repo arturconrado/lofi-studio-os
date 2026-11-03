@@ -3,8 +3,8 @@
 Each transformation records evidence → principle → original choice → review criterion and cites a
 reference saved for this channel with its observation type. A perceptual criterion needs a
 reference that was listened to, watched or legitimately analysed; metadata or a thumbnail is
-not enough. Opening and thumbnail decisions are explicit and optional; a requested capability
-the studio lacks (a vignette) blocks the render instead of being silently dropped.
+not enough. Opening and thumbnail decisions are explicit and optional; an episode that opens
+with the channel vignette needs that channel's approved vignette before the render.
 """
 import hashlib,json,uuid
 from typing import Literal
@@ -14,7 +14,6 @@ from .core import db,audit,ensure_once
 
 router=APIRouter(prefix='/workshop')
 PERCEPTUAL_OBSERVATIONS=('human_listening','human_viewing','media_analysis')
-CAPABILITY_GAPS={'vignette':'O estúdio não tem gerador de vinheta; remova o pedido ou produza a vinheta fora e envie como ativo próprio.'}
 
 
 def ensure(c):
@@ -51,7 +50,7 @@ class Opening(BaseModel):
     ambience_fade_in_seconds:float=Field(default=0,ge=0,le=15)
     opening_image:str=text(400)
     opening_motion:str=text(400)
-    vignette:Literal['none','requested']='none'
+    vignette:Literal['none','channel','requested']='none'  # 'requested' = legacy spelling of 'channel'
     title_thumbnail_coherence:str=text(400)
 
 
@@ -145,7 +144,7 @@ def validate_references(c,channel_id,brief):
 
 def capability_blockers(brief):
     out=[]
-    if brief and (brief.get('opening') or {}).get('vignette')=='requested':out.append({'field':'opening.vignette','reason':CAPABILITY_GAPS['vignette']})
+    # The channel vignette is a channel asset now; its availability is checked against the channel at render time.
     return out
 
 
@@ -276,3 +275,7 @@ def review_opening(pid:uuid.UUID,tid:uuid.UUID,body:OpeningReview,request:Reques
         audit(c,'WORKSHOP_OPENING_REVIEWED',str(tid),json.dumps({'approved':body.approve,'brief_sha256':brief['sha256']}))
         c.commit()
     return {'approved':body.approve,'brief_sha256':brief['sha256']}
+
+
+def wants_channel_vignette(brief):
+    return bool(brief) and (brief.get('opening') or {}).get('vignette') in ('channel','requested')

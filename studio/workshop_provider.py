@@ -254,7 +254,12 @@ def refresh(tid):
                 if p.get('resolution') == '1080p' and (info['width'] < 1920 or info['height'] < 1080):
                     raise ValueError('Provider did not deliver requested 1080p')
                 if seconds + .05 < p['seconds'] or seconds > 61: raise ValueError('Unexpected video duration')
-                complete(c, t, path.read_bytes(), 'video/mp4', seconds); c.commit()
+                if p.get('operation') == 'vignette':
+                    from .channel_vignette import complete_vignette
+                    complete_vignette(c, t, path.read_bytes(), seconds)
+                else:
+                    complete(c, t, path.read_bytes(), 'video/mp4', seconds)
+                c.commit()
 
 
 def capabilities():

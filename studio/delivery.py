@@ -130,8 +130,11 @@ def stamp(seconds):
     return f'{n//3600}:{n%3600//60:02}:{n%60:02}' if n>=3600 else f'{n//60}:{n%60:02}'
 
 
-def tracklist(tracks,delivered_seconds):
-    """Entries from the measured timeline (start offsets already account for crossfades); trimmed tracks drop out."""
+def tracklist(tracks,delivered_seconds,intro_seconds=0):
+    """Entries from the measured timeline (start offsets already account for crossfades); trimmed tracks drop out.
+
+    intro_seconds: a channel vignette before the program; the first track's chapter still starts at 0:00.
+    """
     out=[]
     for track in sorted(tracks,key=lambda t:float(t['start_seconds'])):
         start=float(track['start_seconds'])
@@ -139,7 +142,7 @@ def tracklist(tracks,delivered_seconds):
         title=str(track.get('title') or '').strip()
         if not title:return {'available':False,'reason':'Faixa sem título registrado; a tracklist não é inventada.','entries':[]}
         out.append({'start_seconds':round(start,3),'stamp':stamp(start),'title':title})
-    return {'available':bool(out),'entries':out,'basis':'measured_mix_timeline','delivered_seconds':float(delivered_seconds)}
+    return {'available':bool(out),'entries':out,'basis':'measured_mix_timeline','delivered_seconds':float(delivered_seconds),'intro_seconds':float(intro_seconds)}
 
 
 def chapters(listing):
@@ -148,7 +151,8 @@ def chapters(listing):
     if not (listing or {}).get('available'):return {'available':False,'reason':(listing or {}).get('reason','Sem tracklist medida.')}
     ends=[e['start_seconds'] for e in entries[1:]]+[listing['delivered_seconds']]
     if len(entries)<CHAPTER_MIN_COUNT:return {'available':False,'reason':f'Menos de {CHAPTER_MIN_COUNT} trechos reais.'}
-    if entries[0]['start_seconds']>0.5:return {'available':False,'reason':'O primeiro trecho não começa em 0:00.'}
+    intro=float(listing.get('intro_seconds') or 0)
+    if entries[0]['start_seconds']>intro+0.5:return {'available':False,'reason':'O primeiro trecho não começa em 0:00.'}
     short=[e['title'] for e,end in zip(entries,ends) if end-e['start_seconds']<CHAPTER_MIN_SECONDS]
     if short:return {'available':False,'reason':'Trechos com menos de 10 s: '+', '.join(short[:3])+'.'}
     lines=['0:00 '+entries[0]['title']]+[e['stamp']+' '+e['title'] for e in entries[1:]]

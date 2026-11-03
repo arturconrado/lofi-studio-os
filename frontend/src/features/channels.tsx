@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
+import { ChannelVignette } from './channel-vignette';
 import { useResource } from '../lib/resource';
 import { api, post, put, uuid } from '../lib/api';
 import { channels, channel, selectChannel, loadChannels, canAdmin } from '../lib/store';
@@ -113,6 +114,7 @@ export function Channels() {
           </button>))}</div>
         {current && <div class="stack lg">
           <section class="card stack"><h3>Receitas</h3><ChannelRecipes key={current.id} cid={current.id} /></section>
+          <section class="card stack"><h3>Vinheta de abertura do canal</h3><ChannelVignette key={current.id} cid={current.id} /></section>
           <section class="card stack"><h3>YouTube</h3><YouTube key={current.id} cid={current.id} /></section>
           <section class="card stack"><h3>Conexão de transmissão</h3><Connection key={current.id} cid={current.id} /></section>
         </div>}

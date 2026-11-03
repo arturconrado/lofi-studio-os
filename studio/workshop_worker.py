@@ -413,6 +413,9 @@ def tick():
             kwargs={'prepared_plan':prepared_plan} if prepared_plan else {}
             if p.get('output_resolution','auto')=='1080p_upscaled':kwargs['output_resolution']='1080p_upscaled'
             report=render_segments(p['segments'],sources,audio,final,p['seconds'],p.get('preview_range'),**kwargs)
+            if p.get('vignette') and not p.get('preview_range'):
+                from .channel_vignette import prepend_to
+                report=prepend_to(final,report,p['vignette'],folder)
         if sound_report:
             report['sound_design']=sound_report
         if p.get('reedit_source'):
@@ -433,7 +436,8 @@ def tick():
                 'source_preserved':False,'temporary_audio_removed_after_render':True})
         if ephemeral and audio_plan.get('timeline_tracks') and not p.get('director_proof') and not p.get('preview_range'):
             from .delivery import tracklist, chapters
-            report['tracklist']=tracklist(audio_plan['timeline_tracks'],report['seconds'])
+            intro=float((report.get('vignette') or {}).get('program_offset_seconds') or 0)
+            report['tracklist']=tracklist([t|{'start_seconds':float(t['start_seconds'])+intro} for t in audio_plan['timeline_tracks']],report['seconds'],intro_seconds=intro)
             report['chapters']=chapters(report['tracklist'])
         if not p.get('director_proof') and not p.get('preview_range'):
             from .delivery import opening_review_or_error
