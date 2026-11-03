@@ -232,7 +232,11 @@ def refresh(tid):
                             if state['status'] == 'cancelled' else
                             'O pedido original terminou no provedor (' + state['status'] + '); a reserva permanece registrada até conciliar a cobrança.')
                 c.execute("UPDATE factory_tasks SET status='FAILED',actual_cost=COALESCE(actual_cost,%s),payload=%s,detail=%s,updated_at=now() WHERE id=%s",
-                          (actual,json.dumps(p, ensure_ascii=False), detail, tid)); c.commit(); return
+                          (actual,json.dumps(p, ensure_ascii=False), detail, tid))
+                if p.get('operation')=='vignette':
+                    from .channel_vignette import fail_vignette
+                    fail_vignette(c,tid)
+                c.commit(); return
             if state['status'] != 'completed': return
             if state.get('usage') is not None:
                 p['provider_usage']=state['usage']
@@ -254,7 +258,12 @@ def refresh(tid):
                 if p.get('resolution') == '1080p' and (info['width'] < 1920 or info['height'] < 1080):
                     raise ValueError('Provider did not deliver requested 1080p')
                 if seconds + .05 < p['seconds'] or seconds > 61: raise ValueError('Unexpected video duration')
-                complete(c, t, path.read_bytes(), 'video/mp4', seconds); c.commit()
+                if p.get('operation') == 'vignette':
+                    from .channel_vignette import complete_vignette
+                    complete_vignette(c, t, path.read_bytes(), seconds)
+                else:
+                    complete(c, t, path.read_bytes(), 'video/mp4', seconds)
+                c.commit()
 
 
 def capabilities():

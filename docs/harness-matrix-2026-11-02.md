@@ -170,6 +170,24 @@ Limites declarados: o áudio gerado pelo Veo pode conter música ou fala apesar 
 | Conferência do som gerado | **Implementado e testado** | `POST .../media/{id}/audio-check`: o avaliador ouve o áudio do clipe (entrada de áudio, confirmada no catálogo do OpenRouter) e aponta música, fala ou canto, ou som diferente do pedido. Um clipe sinalizado bloqueia a montagem até uma pessoa ouvir e aceitar aqueles bytes. |
 | Orquestração | **Atualizado** | Agente `sound_designer` com etapa própria no plano do projeto. |
 
+## Vinheta de abertura única por canal
+
+| Requisito | Estado | Evidência |
+|---|---|---|
+| O harness do canal continua sendo a base | **Mantido** | Perfil, receita, identidade e política editorial são do canal; briefing, plano de som e miniatura são decisões por vídeo dentro dele. |
+| Uma vinheta única por canal, com características próprias | **Implementado e testado** | `studio/channel_vignette.py`. Definição versionada por canal: conceito, motivo visual, assinatura sonora, 4, 6 ou 8 s e nome opcional. Gerada pelo Veo com áudio, partindo do still de identidade aprovado do canal, com cotação pelo preço com áudio, confirmação e envio único. |
+| Não repetir a abertura de outro canal | **Implementado e testado** | Assinatura de quadros (average hash em três pontos) comparada com as vinhetas aprovadas dos outros canais do workspace. Uma vinheta parecida demais fica "too_similar" e não pode ser aprovada. Sem áudio, também não. |
+| Aprovação e uso por vídeo | **Implementado e testado** | Aprovação humana presa aos bytes e à definição atual, depois de assistir e ouvir. O briefing escolhe "vinheta do canal"; sem vinheta aprovada, a montagem e o plano de agentes acusam o bloqueio antes de qualquer custo. A montagem coloca a vinheta antes do programa, normalizando resolução, fps e áudio. A união é feita por cópia de streams, com conferência de decodificação na junção; se falhar, há recodificação. O arquivo final é verificado e a tracklist e os capítulos são deslocados, com o primeiro capítulo em 0:00. |
+
+### Correções da revisão do PR #110
+
+- Geração de vinheta exige permissão administrativa de gasto. IDs de pedidos não atravessam canais e a definição é reconferida sob lock antes da reserva.
+- Falha, cancelamento e expiração confirmados pelo provedor sincronizam a vinheta com a tarefa, tanto na consulta quanto no callback. A consulta também recupera registros antigos que ficaram presos em geração; resultado incerto não é reenviado.
+- A seleção para montagem/orquestração aceita somente a vinheta aprovada para a definição atual. A aprovação compara novamente os quadros dos outros canais sob lock compartilhado, incluindo resultados prontos antes da primeira aprovação. Evidência incompleta bloqueia a aprovação.
+- O recibo separa duração e alinhamento do programa da duração total. Reedição recorta apenas a trilha do programa em PCM, preserva a vinheta original uma única vez, tracklist e capítulos, e não gera música. A amostra de continuidade usa a trilha sem o áudio da vinheta; o arquivo completo volta a incluí-la.
+- Testes usam PostgreSQL descartável, provedores simulados e mídia sintética: callbacks/consulta dos três estados terminais, permissão, mudança da definição, comparação na aprovação, reedição de recibos antigos/novos e execução do montador até o arquivo final.
+- Limite: a comparação de três quadros é uma triagem visual, não uma certificação de originalidade. A revisão humana de imagem, nome e som continua obrigatória. Sem merge, implantação ou geração paga nesta correção.
+
 ### Correções da revisão do PR #109
 
 - Leitura paga de imagem e conferência de áudio exigem permissão de gasto; o plano gratuito por texto permanece disponível ao criador.

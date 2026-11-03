@@ -59,6 +59,14 @@ def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False,default=str).encode()).hexdigest()
 
 
+def vignette_blockers(c,row,episode):
+    from .episode_brief import wants_channel_vignette
+    if not wants_channel_vignette(episode):return []
+    from .channel_vignette import approved_for_channel
+    if approved_for_channel(c,row['channel_id']):return []
+    return [{'field':'opening.vignette','reason':'O briefing abre com a vinheta do canal, mas o canal ainda não tem vinheta aprovada (Canais → Vinheta de abertura).'}]
+
+
 def resolved_direction(c,row,draft,recipe=None,identity=None):
     """Single direction every agent of this project works from; changes produce a new hash."""
     from .niche_profiles import resolve,capability_blockers
@@ -82,7 +90,7 @@ def resolved_direction(c,row,draft,recipe=None,identity=None):
                           'language':profile['profile']['language'],'blockers':capability_blockers(profile)},
                'identity':{'profile_id':(identity or {}).get('id'),'reference_sha256s':sorted({r['sha256'] for r in refs if r.get('sha256')})},
                'brief_sha256':digest(brief),
-               'episode_brief':{'sha256':(episode or {}).get('sha256'),'revision':(episode or {}).get('revision'),'blockers':brief_blockers(episode)},
+               'episode_brief':{'sha256':(episode or {}).get('sha256'),'revision':(episode or {}).get('revision'),'blockers':brief_blockers(episode)+vignette_blockers(c,row,episode)},
                'references':{'selected':sorted({str(t['reference_id']) for t in (episode or {}).get('transformations') or []}),
                              'status':'cited_in_brief' if (episode or {}).get('transformations') else 'none_cited'},
                'project_budget_usd':budget,'editorial':editorial}

@@ -17,6 +17,17 @@ from .workshop_shorts import ShortSpec, render_short
 logger = logging.getLogger(__name__)
 
 
+def extract_reedit_audio(original,destination,source):
+    offset=float(source.get('program_offset_seconds',0))
+    crop=[]
+    if offset:
+        seconds=float(source['program_seconds'])
+        if not 0<offset<offset+seconds<=measure(original,'audio')[0]+.15:raise ValueError('Invalid original program audio range')
+        crop=['-af',f'asetpts=N/SR/TB,atrim=start={offset}:duration={seconds},asetpts=PTS-STARTPTS']
+    subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-i',str(original),*crop,'-map','0:a:0',
+                    '-vn','-c:a','pcm_s24le' if offset else 'copy',str(destination)],check=True,timeout=600,stderr=subprocess.PIPE)
+
+
 def _save_task_audio_plan(task_id, audio_plan, actual_cost=None):
     with db() as c:
         c.execute('UPDATE factory_tasks SET payload=jsonb_set(payload,\'{audio_plan}\',%s::jsonb),'
@@ -369,12 +380,12 @@ def tick():
         if p.get('reedit_source'):
             source=p['reedit_source']; original=folder/'original-final.mp4'
             source_size=storage().head_object(Bucket=os.environ['S3_BUCKET'],Key=source['key'])['ContentLength']
-            if shutil.disk_usage(folder).free < source_size + 1024**3:
+            decoded_audio=int(float(source.get('program_seconds',0))*48000*2*3) if source.get('program_offset_seconds') else 0
+            if shutil.disk_usage(folder).free < source_size + decoded_audio + 1024**3:
                 raise ValueError('Insufficient space to safely reuse the existing video')
             fetch(source['key'],original,source['sha256'],32*1024**3)
-            audio=folder/'original-audio.m4a'
-            subprocess.run(['ffmpeg','-nostdin','-v','error','-y','-i',str(original),'-map','0:a:0',
-                            '-vn','-c:a','copy',str(audio)],check=True,timeout=600,stderr=subprocess.PIPE)
+            audio=folder/('original-audio.wav' if source.get('program_offset_seconds') else 'original-audio.m4a')
+            extract_reedit_audio(original,audio,source)
             audio_info={'source_type':'same_video_reedit','sha256':file_hash(audio),'parent_sha256':source['sha256']}
             audio_plan={}
         ephemeral = bool(p.get('audio_plan'))
@@ -413,11 +424,19 @@ def tick():
             kwargs={'prepared_plan':prepared_plan} if prepared_plan else {}
             if p.get('output_resolution','auto')=='1080p_upscaled':kwargs['output_resolution']='1080p_upscaled'
             report=render_segments(p['segments'],sources,audio,final,p['seconds'],p.get('preview_range'),**kwargs)
+            if p.get('vignette') and not p.get('preview_range'):
+                from .channel_vignette import prepend_to
+                report=prepend_to(final,report,p['vignette'],folder)
         if sound_report:
             report['sound_design']=sound_report
         if p.get('reedit_source'):
             report['audio_reuse']={'parent_task_id':p['reedit_source']['task_id'],
                                   'parent_sha256':p['reedit_source']['sha256'],'paid_calls':0}
+            if not p.get('director_proof') and not p.get('preview_range'):
+                with db() as c:
+                    parent=c.execute('SELECT payload FROM factory_tasks WHERE id=%s',(p['reedit_source']['task_id'],)).fetchone()
+                for field in ('tracklist','chapters'):
+                    if field in parent['payload']['report']:report[field]=parent['payload']['report'][field]
         if p.get('director_contract'):
             report['channel_memory_sha256']=p['director_contract']['memory_sha256']
         if ephemeral:
@@ -433,11 +452,14 @@ def tick():
                 'source_preserved':False,'temporary_audio_removed_after_render':True})
         if ephemeral and audio_plan.get('timeline_tracks') and not p.get('director_proof') and not p.get('preview_range'):
             from .delivery import tracklist, chapters
-            report['tracklist']=tracklist(audio_plan['timeline_tracks'],report['seconds'])
+            intro=float((report.get('vignette') or {}).get('program_offset_seconds') or 0)
+            report['tracklist']=tracklist([t|{'start_seconds':float(t['start_seconds'])+intro} for t in audio_plan['timeline_tracks']],report['seconds'],intro_seconds=intro)
             report['chapters']=chapters(report['tracklist'])
         if not p.get('director_proof') and not p.get('preview_range'):
             from .delivery import opening_review_or_error
-            starts=sorted(float(t['start_seconds']) for t in audio_plan.get('timeline_tracks') or [])
+            intro=float((report.get('vignette') or {}).get('program_offset_seconds') or 0)
+            starts=sorted(float(t['start_seconds'])+intro for t in audio_plan.get('timeline_tracks') or [])
+            if p.get('reedit_source'):starts=[float(t['start_seconds']) for t in (report.get('tracklist') or {}).get('entries',[])]
             report['opening_review']=opening_review_or_error(final,report['seconds'],starts[1] if len(starts)>1 else None)
         key = f'visual-workshop/{p["project_id"]}/renders/{t["id"]}/{report["sha256"]}.mp4'
         storage().upload_file(str(final), os.environ['S3_BUCKET'], key, ExtraArgs={'ContentType': 'video/mp4'})

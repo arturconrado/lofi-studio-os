@@ -119,7 +119,7 @@ export function EpisodeBriefPanel({ projectId, channelId, renders, revision = 1 
       <Field label="Fade de entrada da ambiência (s)"><input class="input" type="number" min={0} max={15} value={data.opening.ambience_fade_in_seconds} onInput={e => setIn('opening', 'ambience_fade_in_seconds', Number((e.target as HTMLInputElement).value))} /></Field>
       <Field label="Imagem inicial"><input class="input" value={data.opening.opening_image} onInput={e => setIn('opening', 'opening_image', (e.target as HTMLInputElement).value)} /></Field>
       <Field label="Movimento inicial"><input class="input" value={data.opening.opening_motion} onInput={e => setIn('opening', 'opening_motion', (e.target as HTMLInputElement).value)} /></Field>
-      <Field label="Vinheta" hint="O estúdio não gera vinhetas; pedir uma bloqueia a montagem"><select class="select" value={data.opening.vignette} onChange={e => setIn('opening', 'vignette', (e.target as HTMLSelectElement).value)}><option value="none">Sem vinheta</option><option value="requested">Quero uma vinheta</option></select></Field>
+      <Field label="Vinheta" hint="Usa a vinheta aprovada do canal (em Canais); sem ela, a montagem fica bloqueada"><select class="select" value={data.opening.vignette} onChange={e => setIn('opening', 'vignette', (e.target as HTMLSelectElement).value)}><option value="none">Sem vinheta</option><option value="channel">Vinheta do canal</option></select></Field>
       <Field label="Coerência com título e miniatura"><input class="input" value={data.opening.title_thumbnail_coherence} onInput={e => setIn('opening', 'title_thumbnail_coherence', (e.target as HTMLInputElement).value)} /></Field>
     </div>}
     <h3>Miniatura</h3>

@@ -34,7 +34,9 @@ def test_thumbnail_and_vignette_are_explicit_decisions_and_missing_capabilities_
     assert brief.thumbnail.text_policy=='short_text' and brief.thumbnail.base_art_has_text is False
     with pytest.raises(ValueError):EpisodeBrief.model_validate(BRIEF|{'thumbnail':BRIEF['thumbnail']|{'base_art_has_text':True}})
     assert capability_blockers(BRIEF)==[]
-    assert capability_blockers(BRIEF|{'opening':BRIEF['opening']|{'vignette':'requested'}})[0]['field']=='opening.vignette'
+    from studio.episode_brief import wants_channel_vignette
+    assert capability_blockers(BRIEF|{'opening':BRIEF['opening']|{'vignette':'channel'}})==[]  # a channel asset, checked at render time
+    assert wants_channel_vignette(BRIEF|{'opening':BRIEF['opening']|{'vignette':'requested'}}) and not wants_channel_vignette(BRIEF)
 
 
 def test_iso_durations_from_the_data_api():

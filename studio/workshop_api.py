@@ -1679,7 +1679,11 @@ async def provider_callback(workspace: str, token: str, request: Request):
             if terminal!='completed' and actual is not None:
                 detail='O provedor encerrou o pedido: '+terminal+'. Custo final conciliado: US$'+format(actual,'.6f')+'.'
             c.execute('UPDATE factory_tasks SET status=%s,actual_cost=COALESCE(actual_cost,%s),payload=%s,detail=%s,updated_at=now() WHERE id=%s',
-                      (status,actual,json.dumps(payload,ensure_ascii=False),detail,row['id']));c.commit()
+                      (status,actual,json.dumps(payload,ensure_ascii=False),detail,row['id']))
+            if status=='FAILED' and payload.get('operation')=='vignette':
+                from .channel_vignette import fail_vignette
+                fail_vignette(c,row['id'])
+            c.commit()
         return {'received':True,'duplicate':False}
     finally:WORKSPACE.reset(scope)
 
@@ -2419,6 +2423,11 @@ def render(pid: uuid.UUID, body: Render):
         if flagged: raise HTTPException(409,'A conferência do áudio gerado apontou música, fala ou som diferente do pedido em: '+', '.join(flagged)+'. Ouça e aceite, ou gere de novo. Nada foi reservado.')
         gaps=brief_blockers(episode_brief_for(c,row))
         if gaps: raise HTTPException(409,'O briefing pede algo que o estúdio não executa: '+' '.join(g['reason'] for g in gaps)+' Nada foi reservado.')
+        from .episode_brief import wants_channel_vignette
+        from .channel_vignette import approved_for_channel
+        vignette=approved_for_channel(c,row['channel_id']) if wants_channel_vignette(episode_brief_for(c,row)) else None
+        if wants_channel_vignette(episode_brief_for(c,row)) and not vignette:
+            raise HTTPException(409,'O briefing abre com a vinheta do canal, mas este canal ainda não tem vinheta aprovada. Gere e aprove em Canais. Nada foi reservado.')
         template = music_template(c, row, draft)
         quote = soundtrack_quote(int(segments[-1]['end'] + .999))
         if not body.confirm_cost:
@@ -2441,6 +2450,7 @@ def render(pid: uuid.UUID, body: Render):
         payload = {'project_id': str(pid), 'operation': 'render', 'draft_sha256': digest(row['data']),
                    'direction_sha256': direction['sha256'], 'episode_brief_sha256': (template['plan'].get('episode_brief') or {}).get('sha256'),
                    'sound_design': sound_design,
+                   'vignette': {'id':str(vignette['id']),'key':vignette['key'],'sha256':vignette['sha256'],'seconds':float(vignette['seconds'])} if vignette else None,
                    'output_resolution': body.output_resolution,
                    'seconds': segments[-1]['end'], 'segments': segments,
                    'director_contract': director, 'editorial_memory': editorial_meta,
@@ -2615,12 +2625,20 @@ def reedit(pid: uuid.UUID, tid: uuid.UUID, body: ReeditRequest):
         try:segments=assemble(draft,media)
         except ValueError as exc:raise HTTPException(409,str(exc)) from None
         seconds=segments[-1]['end']
-        if abs(seconds-float(original['report'].get('audio_seconds',0)))>.15:
+        report=original['report'];intro=report.get('vignette') or {}
+        program_seconds=float(report.get('program_seconds',float(report['seconds'])-float(intro.get('seconds',0)))) if intro else float(report.get('audio_seconds',0))
+        if abs(seconds-program_seconds)>.15:
             raise HTTPException(409,'Esta reedição preserva a duração da trilha original')
+        vignette=original.get('vignette') if intro else None
+        if intro and (not vignette or any(str(vignette.get(k))!=str(intro.get(k)) for k in ('id','sha256')) or abs(float(vignette['seconds'])-float(intro['seconds']))>.001):
+            raise HTTPException(409,'A origem não tem o vínculo íntegro da vinheta; restaure o registro antes de reeditar.')
+        if intro and abs(float(intro.get('program_offset_seconds',0))-float(intro['seconds']))>.001:
+            raise HTTPException(409,'O deslocamento da trilha original não corresponde à vinheta.')
         if not worker_online(c):raise HTTPException(503,'O montador está offline')
         evidence,metadata=visual_editorial_memory(c,profile(c,row['channel_id']),draft,draft.base)
         direction=contract(row['channel_id'],draft,identity,{'research':evidence,'human_reviews':channel_reviews(c,row['channel_id'])})
         source={'task_id':str(tid),'key':original['video_key'],'sha256':original['report']['sha256']}
+        if intro:source.update(program_offset_seconds=float(intro['program_offset_seconds']),program_seconds=program_seconds)
         binding=digest({'source':source,'draft':row['data'],'segments':segments,
                         'identity':direction['channel_memory']['reference_sha256s'],
                         'identity_profile':draft.identity_profile,'version':direction['version']})
@@ -2637,6 +2655,7 @@ def reedit(pid: uuid.UUID, tid: uuid.UUID, body: ReeditRequest):
                  'draft_sha256':digest(row['data']),'segments':segments,'seconds':seconds,
                  'output_resolution':original.get('output_resolution','auto'),
                  'reedit_source':source,'reedit_binding':binding,'director_contract':direction,
+                 'vignette':vignette,
                  'semantic_reviews':semantic_receipts,
                  'approved_plan_sha256':p['report']['director']['plan_sha256'] if body.proof_id else None,
                  'editorial_memory':metadata,'approved':False}
