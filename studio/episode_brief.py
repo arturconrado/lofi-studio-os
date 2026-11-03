@@ -57,7 +57,7 @@ class Opening(BaseModel):
 
 class Thumbnail(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    text_policy:Literal['no_text','short_text']='no_text'
+    text_policy:Literal['no_text','short_text']|None=None
     message:str=text(120)
     language:str=Field(default='',max_length=5)
     hierarchy:str=text(300)
@@ -79,6 +79,9 @@ class EpisodeBrief(BaseModel):
     music_direction:str=text(800)
     visual_direction:str=text(800)
     presentation:str=text(600)
+    presentation_title:str=text(100)
+    presentation_description:str=text(5000)
+    presentation_rationale:str=text(1000)
     transformations:list[Transformation]=Field(default_factory=list,max_length=8)
     opening:Opening|None=None
     thumbnail:Thumbnail|None=None
@@ -92,6 +95,37 @@ class EpisodeBrief(BaseModel):
 
 
 def digest(data):return hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+
+
+def production_direction(data):
+    return {k:data.get(k) for k in ('audience_intent','permanent_identity','temporary_theme','original_concept',
+                                   'music_direction','visual_direction','transformations','opening','acceptance_criteria')}
+
+
+def thumbnail_direction(data,*,include_title=True):
+    keys=['thumbnail','original_concept','permanent_identity','temporary_theme','visual_direction','transformations']
+    if include_title:keys.append('presentation_title')
+    return {k:data.get(k) or ('' if k=='presentation_title' else None) for k in keys}
+
+
+def same_direction(c,pid,old_sha,current,projection):
+    if old_sha==current['sha256']:return True
+    original=c.execute('SELECT data FROM episode_briefs WHERE project_id=%s AND sha256=%s',(pid,old_sha)).fetchone()
+    return bool(original and projection(original['data'])==projection(current))
+
+
+def thumbnail_decision(data,policy):
+    """Resolve the channel language before cost, without replacing an undecided text policy."""
+    spec=Thumbnail.model_validate(data).model_dump(mode='json')
+    if spec['text_policy'] is None:raise HTTPException(422,'Decida explicitamente se a miniatura terá texto antes de salvar/gerar.')
+    if spec['language'] and spec['language']!=policy['language']:raise HTTPException(422,'O idioma da miniatura deve seguir o perfil do canal: '+policy['language'])
+    spec['language']=policy['language']
+    if spec['text_policy']=='short_text':
+        if not spec['message']:raise HTTPException(422,'Defina a mensagem da miniatura.')
+        from .editorial import assess
+        if assess({'thumbnail':spec['message']},policy)['failures']:raise HTTPException(422,'A mensagem da miniatura está fora do idioma do canal.')
+    elif spec['message']:raise HTTPException(422,'A decisão sem texto não pode carregar uma mensagem ignorada.')
+    return spec
 
 
 def validate_references(c,channel_id,brief):
@@ -165,7 +199,9 @@ def get_brief(pid:uuid.UUID):
         project(c,pid)
         history=c.execute('SELECT revision,sha256,created_by,created_at FROM episode_briefs WHERE project_id=%s ORDER BY revision DESC LIMIT 30',(pid,)).fetchall()
         row=latest(c,pid)
-    return {'brief':row,'history':history,'capability_blockers':capability_blockers(row['data']) if row else []}
+        from .editorial import for_channel
+        policy=for_channel(c,project(c,pid)['channel_id'])
+    return {'brief':row,'history':history,'editorial_contract':policy,'capability_blockers':capability_blockers(row['data']) if row else []}
 
 
 @router.put('/projects/{pid}/brief')
@@ -173,10 +209,16 @@ def save_brief(pid:uuid.UUID,body:BriefBody,request:Request):
     """A new revision per change; saving never starts generation or spends."""
     from .workshop_api import project
     ready()
-    data=body.data.model_dump(mode='json');sha=digest(data)
+    data=body.data.model_dump(mode='json')
     identity=getattr(request.state,'identity',None) or {}
     with db() as c:
         row=project(c,pid,True)
+        from .editorial import for_channel,assess
+        policy=for_channel(c,row['channel_id'])
+        if data.get('thumbnail'):data['thumbnail']=thumbnail_decision(data['thumbnail'],policy)
+        if assess({'title':data['presentation_title'],'description':data['presentation_description']},policy)['failures']:
+            raise HTTPException(422,'Revise o idioma e as afirmações da apresentação antes de salvar.')
+        sha=digest(data)
         validate_references(c,row['channel_id'],body.data)
         prior=c.execute('SELECT revision,sha256,data FROM episode_briefs WHERE project_id=%s AND sha256=%s',(pid,sha)).fetchone()
         current=latest(c,pid)
@@ -196,10 +238,10 @@ def require_opening_approval(c,project_id,payload,render_sha256):
     """When the brief decides the opening, final approval needs an opening review of these exact bytes and brief."""
     brief=latest_data(c,project_id)
     if not brief or not brief.get('opening'):return None
-    if payload.get('episode_brief_sha256')!=brief['sha256']:
+    if not same_direction(c,project_id,payload.get('episode_brief_sha256'),brief,production_direction):
         raise HTTPException(409,'O briefing mudou depois desta montagem; monte novamente para que a abertura corresponda à decisão atual.')
     review=payload.get('opening_approval') or {}
-    if not (review.get('approved') and review.get('render_sha256')==render_sha256 and review.get('brief_sha256')==brief['sha256']):
+    if not (review.get('approved') and review.get('render_sha256')==render_sha256 and same_direction(c,project_id,review.get('brief_sha256'),brief,production_direction)):
         raise HTTPException(409,'Revise e aprove a abertura deste vídeo (primeiros 15/30/60/90 s e primeira transição) antes da aprovação final.')
     return review
 
@@ -223,7 +265,7 @@ def review_opening(pid:uuid.UUID,tid:uuid.UUID,body:OpeningReview,request:Reques
         if (p.get('report') or {}).get('sha256')!=body.sha256:raise HTTPException(409,'Arquivo mudou')
         brief=latest_data(c,pid)
         if not brief or not brief.get('opening'):raise HTTPException(409,'O briefing deste projeto não tem decisão de abertura.')
-        if p.get('episode_brief_sha256')!=brief['sha256']:raise HTTPException(409,'O briefing mudou depois desta montagem; monte novamente.')
+        if not same_direction(c,pid,p.get('episode_brief_sha256'),brief,production_direction):raise HTTPException(409,'A direção de produção mudou depois desta montagem; monte novamente.')
         if body.approve and (not body.confirm_watched_opening or len(body.note.strip())<12):
             raise HTTPException(422,'Assista e ouça a abertura e descreva o que conferiu (mínimo 12 caracteres).')
         identity=getattr(request.state,'identity',None) or {}

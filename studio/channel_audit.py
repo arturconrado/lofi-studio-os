@@ -70,6 +70,7 @@ def ensure(c):
       approved_by TEXT,approved_at TIMESTAMPTZ,approved_sha256 TEXT,applied_at TIMESTAMPTZ,observed_value TEXT,
       verified_at TIMESTAMPTZ,detail TEXT NOT NULL DEFAULT '',created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
     c.execute('CREATE INDEX IF NOT EXISTS channel_audit_changes_run ON channel_audit_changes(run_id,state)')
+    c.execute('ALTER TABLE channel_audit_changes ADD COLUMN IF NOT EXISTS approved_editorial_sha256 TEXT')
     c.execute('''CREATE TABLE IF NOT EXISTS channel_audit_events(
       id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,change_id UUID NOT NULL REFERENCES channel_audit_changes(id),
       action TEXT NOT NULL,actor TEXT NOT NULL,detail JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
@@ -727,6 +728,12 @@ PUBLIC_CHANGE=('id','run_id','target_kind','target_id','target_label','field','c
 def public_change(row):
     return {k:row.get(k) for k in PUBLIC_CHANGE}|{'suggested_sha256':digest(row['suggested_value'])}
 
+
+def review_editorial_change(c,cid,row):
+    if row['field'] not in ('title','description'):return None
+    from .editorial import for_channel,require
+    return require({row['field']:row['suggested_value']},for_channel(c,cid),reviewed=True)
+
 # ---------------------------------------------------------------- routes
 
 class ChannelRef(BaseModel):
@@ -858,10 +865,12 @@ def get_run(cid:uuid.UUID,rid:uuid.UUID):
         events=c.execute('''SELECT e.change_id,e.action,e.actor,e.detail,e.created_at FROM channel_audit_events e JOIN channel_audit_changes x ON x.id=e.change_id
                             WHERE x.run_id=%s ORDER BY e.id''',(rid,)).fetchall()
         videos=video_catalog(c,cid,run)
+        from .editorial import for_channel as editorial_for_channel
+        editorial_policy=editorial_for_channel(c,cid)
     return {'run':{k:run[k] for k in ('id','youtube_channel_id','channel_ref','brand','intended_searches','snapshot','snapshot_sha256','analytics',
                                       'findings','diagnosis','provenance','created_by','created_at')},
-            'videos':videos,'presentation':presentation_checklist(run['snapshot'],run['brand']),
-            'changes':[public_change(r) for r in changes],'events':events,'interpretation_note':CAUTION}
+            'videos':videos,'presentation':presentation_checklist(run['snapshot'],run['brand']),'changes':[public_change(r)|{'editorial_language':editorial_policy['language']} for r in changes],
+            'editorial_contract':editorial_policy,'events':events,'interpretation_note':CAUTION}
 
 @router.post('/{cid}/channel-audit/runs/{rid}/changes')
 def propose_change(cid:uuid.UUID,rid:uuid.UUID,body:ChangeProposal,request:Request):
@@ -910,13 +919,16 @@ def decide(cid:uuid.UUID,chid:uuid.UUID,body:Decision,request:Request):
         if row['state'] not in OPEN_STATES:raise HTTPException(409,'Esta alteração já saiu da revisão.')
         if body.suggested_sha256!=digest(row['suggested_value']):raise HTTPException(409,'O texto mudou desde que você o revisou. Revise de novo antes de decidir.')
         who=actor(request)
+        editorial=None
         if body.decision=='approve':
             issues=brand_issues(row['suggested_value'],run_row(c,cid,row['run_id'])['brand'])
             if issues:raise HTTPException(409,'A sugestão ainda contém grafia proibida ('+', '.join(issues)+'). Reescreva antes de aprovar.')
+            editorial=review_editorial_change(c,cid,row)
+            c.execute('UPDATE channel_audit_changes SET approved_editorial_sha256=%s WHERE id=%s',((editorial or {}).get('contract_sha256'),chid))
             c.execute("UPDATE channel_audit_changes SET state='approved',approved_by=%s,approved_at=now(),approved_sha256=%s,updated_at=now() WHERE id=%s",(who,body.suggested_sha256,chid))
         else:
             c.execute("UPDATE channel_audit_changes SET state='rejected',approved_by=NULL,approved_at=NULL,approved_sha256=NULL,updated_at=now() WHERE id=%s",(chid,))
-        event(c,chid,'approved' if body.decision=='approve' else 'rejected',who,suggested_sha256=body.suggested_sha256)
+        event(c,chid,'approved' if body.decision=='approve' else 'rejected',who,suggested_sha256=body.suggested_sha256,editorial_review=editorial)
         c.commit();row=change_row(c,cid,chid)
     return public_change(row)
 
@@ -937,6 +949,10 @@ def apply_changes(cid:uuid.UUID,rid:uuid.UUID,body:ApplyRequest,request:Request)
         if blocked:raise HTTPException(409,f'{len(blocked)} alteração(ões) não estão aprovadas com o texto atual. Nada foi enviado.')
         manual=[r for r in rows if not r['api_supported']]
         if manual:raise HTTPException(409,'Alterações manuais (nome, identificador) são feitas no YouTube Studio e confirmadas com “Reler no YouTube”.')
+        for r in rows:
+            editorial=review_editorial_change(c,cid,r)
+            if editorial and r.get('approved_editorial_sha256')!=editorial['contract_sha256']:
+                raise HTTPException(409,'O perfil editorial mudou ou a aprovação é anterior a esta validação. Revise e aprove novamente antes de publicar.')
         for r in rows:
             c.execute("UPDATE channel_audit_changes SET state='applying',updated_at=now() WHERE id=%s",(r['id'],))
             event(c,r['id'],'apply_requested',who,confirmed_count=body.confirmed_count)

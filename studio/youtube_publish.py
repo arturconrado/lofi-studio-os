@@ -46,10 +46,31 @@ def secure_session(url):
     if u.scheme!='https' or u.hostname!='www.googleapis.com' or u.port not in (None,443) or u.username or u.password or u.path!='/upload/youtube/v3/videos':raise ValueError('Invalid resumable endpoint')
     return url
 
-def validate_growth_packaging(title,description,primary_phrase):
+def validate_growth_packaging(title,description,primary_phrase,policy=None):
     from .youtube_metadata import validate_metadata
-    try:return validate_metadata(title,description,primary_phrase,min_description=0,max_description=5000)['primary_phrase']
+    try:return validate_metadata(title,description,primary_phrase,min_description=0,max_description=5000,
+                                 phrase_first=(policy or {}).get('phrase_first',True),opening_phrase_required=policy is None)['primary_phrase']
     except ValueError as error:raise HTTPException(422,str(error)) from None
+
+
+def editorial_receipt(c,cid,title,description,confirmed):
+    from .editorial import require_channel
+    return require_channel(c,cid,title,description,reviewed=confirmed)
+
+
+def channel_packaging(c,cid,title,description,phrase):
+    from .editorial import for_channel
+    return validate_growth_packaging(title,description,phrase,for_channel(c,cid))
+
+
+def validate_publication_editorial(row):
+    from .editorial import require_channel
+    prior=(row.get('publication_metadata') or {}).get('editorial_review')
+    with db() as c:
+        result=require_channel(c,row['channel_id'],row['title'],row['description'],
+                               reviewed=bool(prior and prior.get('human_reviewed')),previous=prior)
+        if row.get('pilot_id'):approved_pilot_thumbnail(c,row.get('pilot_report') or {})
+        return result
 
 def validate_growth_receipt(c,channel_id,publication_metadata):
     native=(publication_metadata or {}).get('native_growth') or {}
@@ -155,9 +176,10 @@ def create(body:Publication):
     if not body.title.strip() or any(x in body.title+body.description for x in '<>'):raise HTTPException(422,'Título ou descrição inválidos.')
     with db() as c:
         ensure(c);profile(c,body.channel_id)
+        body.publication_metadata['editorial_review']=editorial_receipt(c,body.channel_id,body.title,body.description,body.confirm_review)
         e=c.execute('SELECT e.*,m.channel_id FROM export_jobs e JOIN production_batches m ON m.id=e.program_id WHERE e.id=%s',(body.export_id,)).fetchone()
         if not e or e['channel_id']!=body.channel_id:raise HTTPException(404,'MP4 indisponível neste canal.')
-        growth_receipt=validate_growth_receipt(c,body.channel_id,body.publication_metadata);primary_phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(body.export_id),))
+        growth_receipt=validate_growth_receipt(c,body.channel_id,body.publication_metadata);primary_phrase=channel_packaging(c,body.channel_id,body.title,body.description,body.primary_phrase);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(body.export_id),))
         old=c.execute('SELECT '+FIELDS+',made_for_kids FROM youtube_publications WHERE request_id=%s OR export_id=%s',(body.request_id,body.export_id)).fetchone()
         if old:
             if any(old[k]!=v for k,v in {'channel_id':body.channel_id,'export_id':body.export_id,'title':body.title.strip(),'description':body.description,'intent':body.intent,'primary_phrase':primary_phrase,'privacy':body.privacy,'made_for_kids':body.made_for_kids}.items()):raise HTTPException(409,'Este MP4 já tem um envio registrado. Confira o histórico.')
@@ -208,10 +230,12 @@ def authorize_ready(jid:uuid.UUID,body:ReadyAuthorization):
         ensure(c)
         row=c.execute("SELECT * FROM youtube_publications WHERE id=%s FOR UPDATE",(jid,)).fetchone()
         if not row or row['state']!='ready':raise HTTPException(409,'Este item não está pronto para publicação.')
+        body.publication_metadata['editorial_review']=editorial_receipt(c,row['channel_id'],body.title,body.description,body.confirm_review)
         pilot=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(row['pilot_id'],row['channel_id'])).fetchone()
         if not pilot or pilot['status']!='approved' or not ready_pilot(pilot):raise HTTPException(409,'Revise e aprove o vídeo completo antes de publicar.')
+        approved_pilot_thumbnail(c,pilot['report'])
         if pilot['report']['artifact_sha256']['video']!=row['pilot_sha256']:raise HTTPException(409,'O vídeo mudou desde a preparação da publicação.')
-        phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase)
+        phrase=channel_packaging(c,row['channel_id'],body.title,body.description,body.primary_phrase)
         pilot_intent=(pilot.get('plan') or {}).get('intent','coding_focus')
         if body.intent!=pilot_intent:raise HTTPException(409,'A intenção do vídeo mudou. Gere novamente a sugestão com a intenção atual.')
         growth_receipt=validate_growth_receipt(c,row['channel_id'],body.publication_metadata)
@@ -295,8 +319,9 @@ def update_metadata(jid:uuid.UUID,body:MetadataUpdate):
         row=c.execute('SELECT * FROM youtube_publications WHERE id=%s',(jid,)).fetchone()
         if not row:raise HTTPException(404,'Publicação não encontrada.')
         if row['state']!='uploaded' or not row['video_id']:raise HTTPException(409,'Só um vídeo já recebido pelo YouTube pode ser editado.')
+        body.publication_metadata=(body.publication_metadata or {})|{'editorial_review':editorial_receipt(c,row['channel_id'],body.title or row['title'],body.description,body.confirm_update)}
         if body.primary_phrase:
-            validate_growth_packaging(body.title or row['title'],body.description,body.primary_phrase)
+            channel_packaging(c,row['channel_id'],body.title or row['title'],body.description,body.primary_phrase)
         from .delivery import reconcile_metadata
         measured=(row.get('publication_metadata') or {}).get('seconds')
         if measured is None and row.get('export_id'):
@@ -487,6 +512,7 @@ def run_one():
         progress(row['id'],state='uploading');starting=False
         try:
             if row['export_state']!='completed':raise ValueError('Export unavailable')
+            validate_publication_editorial(row)
             total=storage().head_object(Bucket=os.environ['S3_BUCKET'],Key=row['object_key'])['ContentLength'];row['total_bytes']=total;progress(row['id'],total_bytes=total)
             if row.get('pilot_id'):verify_pilot_media(row)
             with httpx.Client(timeout=120,follow_redirects=False) as client:
@@ -654,11 +680,13 @@ def create_pilot(pid:uuid.UUID,body:PilotPublication):
     if body.privacy not in ('public','private','unlisted') or not body.title.strip() or any(x in body.title+body.description for x in '<>'):raise HTTPException(422,'Texto ou visibilidade inválidos.')
     with db() as c:
         ensure(c);profile(c,body.channel_id);c.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(str(pid),))
+        body.publication_metadata['editorial_review']=editorial_receipt(c,body.channel_id,body.title,body.description,body.confirm_publication)
         p=c.execute('SELECT * FROM ambient_pilots WHERE id=%s AND channel_id=%s',(pid,body.channel_id)).fetchone()
         if not p:raise HTTPException(404,'Vídeo inexistente neste canal.')
         if p['status']!='approved':raise HTTPException(409,'Aprove o vídeo na revisão antes de publicar.')
+        approved_pilot_thumbnail(c,p['report'])
         growth_receipt=validate_growth_receipt(c,body.channel_id,body.publication_metadata)
-        primary_phrase=validate_growth_packaging(body.title,body.description,body.primary_phrase)
+        primary_phrase=channel_packaging(c,body.channel_id,body.title,body.description,body.primary_phrase)
         pilot_intent=(p.get('plan') or {}).get('intent','coding_focus')
         if body.intent!=pilot_intent:raise HTTPException(409,'A intenção deste vídeo mudou. Atualize a intenção e gere novamente a sugestão antes de publicar.')
         if not ready_pilot(p):raise HTTPException(409,'Vídeo completo de uma hora ainda não validado tecnicamente.')
@@ -695,14 +723,20 @@ def verify_pilot_media(row):
     finally:obj['Body'].close()
     if h.hexdigest()!=expected:raise ValueError('Pilot integrity changed')
 
-def approved_workshop_thumbnail(row):
-    """The approved thumbnail of the Workshop project that produced this pilot, if any."""
-    render=(row.get('pilot_report') or {}).get('workshop_render_id')
+def approved_pilot_thumbnail(c,report):
+    """Check the current brief/policy before any video upload, never only afterwards."""
+    render=report.get('workshop_render_id')
     if not render:return None
     from .thumbnails import approved_for_project
+    task=c.execute('SELECT payload FROM factory_tasks WHERE id::text=%s',(str(render),)).fetchone()
+    if not task:raise HTTPException(409,'Não foi possível recuperar o projeto da miniatura. Revise antes de publicar.')
+    return approved_for_project(c,task['payload']['project_id'])
+
+
+def approved_workshop_thumbnail(row):
+    """The approved thumbnail of the Workshop project that produced this pilot, if any."""
     with db() as c:
-        task=c.execute('SELECT payload FROM factory_tasks WHERE id::text=%s',(str(render),)).fetchone()
-        return approved_for_project(c,task['payload']['project_id']) if task else None
+        return approved_pilot_thumbnail(c,row.get('pilot_report') or {})
 
 
 def set_pilot_thumbnail(client,row,video_id):

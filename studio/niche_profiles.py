@@ -8,7 +8,7 @@ as informative instead of being presented as enforced.
 """
 import hashlib,json
 from typing import Literal
-from pydantic import BaseModel,ConfigDict,Field,field_validator,model_validator
+from pydantic import BaseModel,ConfigDict,Field,field_validator,model_validator,model_serializer
 
 SUPPORTED_FORMATS={'long_form_16_9'}
 FORMAT_GAPS={'short_9_16':'Shorts do Workshop ainda partem de um episódio longo aprovado; não há geração nativa 9:16 por perfil.',
@@ -43,6 +43,23 @@ class MetadataRules(BaseModel):
     language:str=Field(default='en',pattern=r'^[a-z]{2}(-[A-Z]{2})?$')
     phrase_first:bool=True
     description_min_chars:int=Field(default=450,ge=0,le=5000)
+    tone:str=Field(default='',max_length=600)
+    approved_examples:list[str]=Field(default_factory=list,max_length=12)
+    rejected_examples:list[str]=Field(default_factory=list,max_length=12)
+    proper_names:list[str]=Field(default_factory=list,max_length=30)
+
+    @field_validator('approved_examples','rejected_examples','proper_names')
+    @classmethod
+    def bounded_examples(cls,values):
+        if any(not x.strip() or len(x)>1000 for x in values):raise ValueError('Exemplo ou nome precisa ter de 1 a 1000 caracteres')
+        return list(dict.fromkeys(x.strip() for x in values))
+
+    @model_serializer(mode='wrap')
+    def preserve_existing_hashes(self,handler):
+        data=handler(self)
+        for name in ('tone','approved_examples','rejected_examples','proper_names'):
+            if not data[name]:data.pop(name)
+        return data
 
 
 class QualityCriterion(BaseModel):
@@ -104,7 +121,10 @@ ENFORCEMENT={
     'visual.style_language':'prompt:workshop recipe_visual_direction',
     'metadata.phrase_first':'rule:youtube_metadata.metadata_issues (auditoria do catálogo)',
     'metadata.description_min_chars':'rule:youtube_metadata.metadata_issues (auditoria do catálogo)',
-    'metadata.language':'preflight: Criador e Produções legados só geram inglês LoFi',
+    'metadata.language':'editorial.require: saída textual, revisão, edição e publicação; texto curto exige revisão humana',
+    'metadata.tone':'prompt: contrato editorial; exemplos versionados na receita, revisão humana',
+    'metadata.approved_examples':'prompt: exemplos aprovados deste canal, sem inferir desempenho',
+    'metadata.rejected_examples':'prompt: feedback editorial deste canal, sem inferir desempenho',
     'formats':'preflight: geração bloqueada para formato sem compositor',
     'niche':'informative','audience':'informative','consumption_intent':'informative','editorial_promise':'informative',
     'quality':'informative (critérios exibidos; aplicação nos gates na etapa 3)','creativity_limits':'informative',

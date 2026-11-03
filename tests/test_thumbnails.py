@@ -3,6 +3,7 @@ import base64,io,json,os,uuid
 import httpx
 import pytest
 from PIL import Image
+from fastapi import HTTPException
 from studio import thumbnails
 
 
@@ -96,7 +97,7 @@ def test_complete_thumbnail_is_verified_bounded_and_approved_before_publication(
     thumbs=client.get(url+'/thumbnails').json()['thumbnails']
     good=next(t for t in thumbs if t['id']==first['id'])
     failed=next(t for t in thumbs if t['state']=='failed')
-    review=lambda t,**kw:client.post(url+f"/thumbnails/{t['id']}/review",json={'sha256':t['sha256'],'approve':True,'confirm_small_size_checked':True,'note':'Conferi em 320x180 e 168x94'}|kw)
+    review=lambda t,**kw:client.post(url+f"/thumbnails/{t['id']}/review",json={'sha256':t['sha256'],'approve':True,'confirm_small_size_checked':True,'confirm_language_checked':True,'note':'Conferi em 320x180 e 168x94 e no idioma do canal'}|kw)
     assert review(failed).status_code==409
     assert review(good).json()['approved']
     marker=WORKSPACE.set(identity['workspace_id'])
@@ -110,3 +111,23 @@ def test_complete_thumbnail_is_verified_bounded_and_approved_before_publication(
         chosen=approved_workshop_thumbnail({'pilot_report':{'workshop_render_id':str(render)}})
     finally:WORKSPACE.reset(marker)
     assert chosen['sha256']==good['sha256'] and float(cost)==pytest.approx(.039+.0006)
+    from studio import editorial
+    with monkeypatch.context() as changed:
+        changed.setattr(editorial,'for_channel',lambda *args:editorial.contract()|{'tone':'Updated channel voice'})
+        marker=WORKSPACE.set(identity['workspace_id'])
+        try:
+            with pytest.raises(HTTPException,match='perfil editorial'):
+                approved_workshop_thumbnail({'pilot_report':{'workshop_render_id':str(render)}})
+        finally:WORKSPACE.reset(marker)
+    # Editing only description preserves the approved image; changing title requires a new coherence review.
+    assert client.put(url+'/brief',json={'data':brief|{'presentation_description':'Find your flow for coding, studying, and getting things done.'}}).status_code==200
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:assert approved_workshop_thumbnail({'pilot_report':{'workshop_render_id':str(render)}})['sha256']==good['sha256']
+    finally:WORKSPACE.reset(marker)
+    assert client.put(url+'/brief',json={'data':brief|{'presentation_title':'Lofi music for coding in a rainy greenhouse'}}).status_code==200
+    marker=WORKSPACE.set(identity['workspace_id'])
+    try:
+        with pytest.raises(HTTPException,match='briefing de apresentação'):
+            approved_workshop_thumbnail({'pilot_report':{'workshop_render_id':str(render)}})
+    finally:WORKSPACE.reset(marker)
+    assert review(good).status_code==200  # same bytes can be reviewed with the new title, without paying for another image

@@ -58,6 +58,17 @@ Pedido do proprietário: uma camada de orquestração entre os agentes e o harne
 
 ## Validação
 
+### Complemento editorial e idioma (PR #106)
+
+- `studio/editorial.py` resolve a política da receita do canal e verifica o texto final com identificação estatística local (`langid`, sem chamada paga). Inglês do LoFi independe do idioma do operador; texto curto, nome próprio ou resultado inconclusivo requer a revisão humana existente. Não é certificação linguística universal.
+- Tom, exemplos aprovados/rejeitados e nomes preservados ficam em `MetadataRules`, na receita versionada, com edição na tela de receitas. Campos novos vazios não mudam a serialização de perfis antigos. Feedback editorial não é métrica de audiência.
+- Growth e Criador recebem o contrato; auditoria verifica na aprovação e antes de aplicar. Publicação/edição verificam o texto e guardam recibo ligado ao conteúdo e à política; o worker confere novamente antes de enviar/retomar. Mudança da política invalida essa revisão sem regenerar mídia.
+- Corpo editorial separado de capítulos, CTA e hashtags. A descrição pode começar com um convite contextual em vez de repetir obrigatoriamente a frase principal. Notas de render e alegações de produtividade sem fundamento são recusadas.
+- A inicialização de receitas pela consulta de canal usa a transação do chamador, evitando espera circular entre DDL e publicação no primeiro uso.
+- Migração aditiva: `channel_audit_changes.approved_editorial_sha256`, criada sob demanda. Propostas antigas precisam de nova aprovação editorial antes de aplicar. Nenhum texto publicado é traduzido em lote.
+- Casos de regressão em `tests/test_editorial.py`; fluxos existentes de auditoria/publicação, Growth e perfis incluídos na validação. Integração da escolha de mensagem, briefing e OCR fica no PR #107.
+- Estado: implementado localmente; suíte completa com 399 testes Python, 47 de interface, TypeScript e build aprovados; teste adicional da API de idioma/aprovação desatualizada também aprovado. Implantado: não; nenhuma chamada paga ou publicação real nesta implementação.
+
 - `tests/test_orchestration.py` (4) e `frontend/src/__tests__/orchestration.test.tsx` (1): plano, próximo passo, bloqueios e painel somente leitura.
 - `tests/test_niche_profiles.py`: 8 testes. Inclui um teste com PostgreSQL em que um canal com o perfil "Piano e Natureza" é bloqueado por capacidade ausente (narração) sem chamada nem reserva, e depois gera um pedido pago real (mock do provedor) contendo a linguagem do perfil e sem termos LoFi.
 - Suítes existentes de receitas, música, Workshop, produções, Growth, Criador e auditoria seguem passando. Os números finais estão no relatório da sessão.
@@ -119,6 +130,18 @@ Validação deste complemento: `tests/test_delivery.py` (10 testes com FFmpeg re
 | Diagnóstico de crescimento por gargalo (etapa 5) | **Pendente** | Não iniciado nesta rodada. |
 
 ## Pendências finais incorporadas ao desenvolvimento (PR #107)
+
+### Complemento nativo: apresentação, idioma e revisão editorial
+
+- A tela de briefing reaproveita `growth.package_suggestion` para propor título, descrição, mensagem exata da thumb, hierarquia, relação com o título e justificativa. A proposta usa o projeto do próprio canal, perfil, referências/memória e feedback humano de thumbs aprovadas/rejeitadas. Não salva o briefing nem gera imagem automaticamente.
+- A sugestão exige a confirmação de até US$ 0,10, permissão de gasto e reserva do gerador existente. `project_id` e `direction_sha256` acompanham a tarefa; a reserva também respeita o teto do projeto sob lock. Repetir um ID não dispara nova cobrança. Nenhuma chamada paga foi executada nesta implementação.
+- `Thumbnail.text_policy` começa sem decisão, e a interface exige escolher texto/sem texto. O idioma vazio herda o perfil; um conflito explícito ou texto claramente fora do idioma é recusado antes do custo. Não há inglês nem slogan universal imposto a outros perfis.
+- O texto efetivamente lido da imagem passa pela triagem linguística local, além da fidelidade OCR e leitura reduzida já existentes. Idioma incorreto bloqueia; texto curto, nome próprio ou resultado incerto requer confirmação humana específica do idioma na imagem. Legibilidade não aprova automaticamente a pertinência da mensagem.
+- Aprovação de thumb guarda recibo do texto e da política. A publicação/reentrada confere briefing, perfil e arte-base atuais **antes** de iniciar o upload. Se o briefing exige thumb e não há uma aprovada, não usa silenciosamente a capa padrão.
+- Revisão editorial não é resultado de audiência. O feedback é isolado por canal; exemplos de slogans anteriores não são vencedores. Duração e capítulos não são inventados na proposta anterior à montagem; o gate de mídia continua a conciliar a publicação final.
+- Mudança só da descrição preserva a aprovação da imagem e a revisão da abertura; mudança só do título exige nova revisão de coerência, podendo reaproveitar os mesmos bytes. Mudança da direção de produção continua a invalidar a abertura. Não é necessário refazer áudio/vídeo por uma revisão textual.
+- Testes de backend: proposta nativa, consentimento/canal/direção, capítulos/duração fictícios, OCR fiel em idioma errado, herança/conflito de idioma, falta de thumb aprovada, alteração de perfil e reuso de mídia em edição textual. Teste de interface: consentimento e prévia antes de salvar/gerar imagem. Resultados finais registrados no PR.
+- Estado: implementado; validação final em execução na sessão. Implantado: não. Revisão com provedores pagos e aplicação no YouTube real permanecem sem execução nesta implementação. Testes A/B do YouTube Studio continuam manuais; esta alteração não cria nem exclui experimentos externos.
 
 | Pendência | Estado | Evidência |
 |---|---|---|

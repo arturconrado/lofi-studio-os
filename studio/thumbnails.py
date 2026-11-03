@@ -44,7 +44,7 @@ def expected_text(spec):
     return ' '.join(str(spec.get('message') or '').split()) if spec.get('text_policy')=='short_text' else ''
 
 
-def art_prompt(draft,brief):
+def art_prompt(draft,brief,policy=None):
     """The complete thumbnail in one generation: composition, identity and, if decided, the exact title."""
     t=(brief or {}).get('thumbnail') or {}
     message=expected_text(t)
@@ -60,6 +60,7 @@ def art_prompt(draft,brief):
         parts.append('Absolutely no text, letters, numbers, logos or watermarks.')
     if t.get('hierarchy'):parts.append('Visual hierarchy: '+t['hierarchy']+'.')
     if t.get('title_relation'):parts.append('Relation to the video title: '+t['title_relation']+'.')
+    if policy:parts.append('Publication language: '+policy['language']+'. Editorial tone: '+policy['tone']+'. The operator language does not change the publication language.')
     return ' '.join(parts)
 
 
@@ -117,9 +118,17 @@ def evaluate(encoded,spec,full=None,small=None):
     checks=[{'id':'dimensions','label':'1280×720 (16:9)','state':'pass' if (width,height)==SIZE else 'fail','evidence':f'{width}×{height}'},
             {'id':'file_size','label':'Até 2 MB','state':'pass' if len(encoded)<=MAX_BYTES else 'fail','evidence':f'{len(encoded)/1024:.0f} KB'}]
     checks+=text_check(expected_text(spec),full,small)
+    policy=spec.get('editorial_contract')
+    language=None
+    if policy and full is not None:
+        from .editorial import language_check
+        language=language_check(full['text'],policy['language'],policy['proper_names'])
+        checks.append({'id':'publication_language','label':'Idioma editorial '+policy['language'],'state':language['state'],
+                       'evidence':language['reason']})
     checks.append({'id':'human','label':'Coerência com título, idioma e vídeo','state':'pending','evidence':'revisão humana em tamanho reduzido'})
     return {'checks':checks,'blocking_failures':[c['id'] for c in checks if c['state']=='fail'],
-            'needs_text_confirmation':any(c['state']=='uncertain' for c in checks),'reader_model':READER_MODEL}
+            'needs_text_confirmation':any(c['state']=='uncertain' for c in checks),
+            'needs_language_confirmation':bool(language and language['state']=='review'),'reader_model':READER_MODEL}
 
 
 def reader_quote():
@@ -230,7 +239,7 @@ def thumbnail_quote(pid:uuid.UUID):
 @router.post('/projects/{pid}/thumbnail')
 def generate(pid:uuid.UUID,body:Generate):
     """Reserve and send one complete-thumbnail request, then verify its text; no automatic retries."""
-    from .workshop_api import project,assets,KIND,ready as workshop_ready,identity_profile_for_channel,project_generation_usage
+    from .workshop_api import project,assets,KIND,ready as workshop_ready,identity_profile_for_channel,project_generation_usage,project_recipe
     from .workshop_provider import submit,IMAGE_MODEL
     from .visual_workshop import Draft
     from .episode_brief import latest_data
@@ -249,6 +258,10 @@ def generate(pid:uuid.UUID,body:Generate):
         draft=Draft.model_validate(row['data']);media=assets(c,pid)
         brief=latest_data(c,pid)
         if not brief or not brief.get('thumbnail'):raise HTTPException(409,'Registre no briefing a decisão de miniatura (texto, mensagem, hierarquia) antes de gerar.')
+        from .editorial import for_channel
+        from .episode_brief import thumbnail_decision
+        policy=for_channel(c,row['channel_id'])
+        brief=brief|{'thumbnail':thumbnail_decision(brief['thumbnail'],policy)}
         if brief['thumbnail'].get('text_policy')=='short_text' and not expected_text(brief['thumbnail']):
             raise HTTPException(422,'Defina no briefing a mensagem exata da miniatura.')
         attempts=c.execute('SELECT count(*) n FROM workshop_thumbnails WHERE project_id=%s AND brief_sha256=%s',(pid,brief['sha256'])).fetchone()['n']
@@ -268,12 +281,14 @@ def generate(pid:uuid.UUID,body:Generate):
         refs+=[{'key':a['key'],'sha256':a['sha256'],'mime':a['mime']} for a in media.values()
                if identity and a.get('source')=='channel_identity_reference' and a.get('identity_profile')==identity['id']][:3]
         from .orchestration import resolved_direction,remember
-        direction=resolved_direction(c,row,draft,None,identity);remember(c,row,direction)
-        payload={'project_id':str(pid),'operation':'thumbnail','prompt':art_prompt(draft,brief),'references':refs,
-                 'thumbnail_spec':brief['thumbnail'],'episode_brief_sha256':brief['sha256'],'direction_sha256':direction['sha256'],
+        recipe=project_recipe(c,row,draft) if draft.recipe_id else None
+        direction=resolved_direction(c,row,draft,recipe,identity);remember(c,row,direction)
+        spec=brief['thumbnail']|{'editorial_contract':policy}
+        payload={'project_id':str(pid),'operation':'thumbnail','prompt':art_prompt(draft,brief,policy),'references':refs,
+                 'thumbnail_spec':spec,'episode_brief_sha256':brief['sha256'],'direction_sha256':direction['sha256'],
                  'reserved':{'image_usd':str(image_usd),'text_check_usd':str(reader_usd)}}
         c.execute('''INSERT INTO workshop_thumbnails(id,project_id,channel_id,state,brief_sha256,base_image_sha256,spec) VALUES(%s,%s,%s,'generating',%s,%s,%s::jsonb)''',
-                  (body.request_id,pid,row['channel_id'],brief['sha256'],base['sha256'],json.dumps(brief['thumbnail'])))
+                  (body.request_id,pid,row['channel_id'],brief['sha256'],base['sha256'],json.dumps(spec)))
         c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'SUBMITTING','Miniatura reservada; envio único')",
                   (body.request_id,KIND,IMAGE_MODEL,json.dumps(payload),total))
         audit(c,'THUMBNAIL_GENERATION_RESERVED',str(body.request_id),str(total));c.commit()
@@ -321,6 +336,7 @@ class Review(BaseModel):
     approve:bool
     confirm_small_size_checked:bool=False
     confirm_text_matches:bool=False
+    confirm_language_checked:bool=False
     note:str=Field(default='',max_length=1000)
 
 
@@ -337,20 +353,51 @@ def review(pid:uuid.UUID,tid:uuid.UUID,body:Review,request:Request):
         if row['sha256']!=body.sha256:raise HTTPException(409,'Arquivo mudou')
         brief=latest_data(c,pid)
         if body.approve:
-            if not brief or brief['sha256']!=row['brief_sha256']:raise HTTPException(409,'O briefing mudou depois desta miniatura; gere outra para a decisão atual.')
+            from .episode_brief import same_direction,thumbnail_direction
+            if not brief or not same_direction(c,pid,row['brief_sha256'],brief,lambda data:thumbnail_direction(data,include_title=False)):
+                raise HTTPException(409,'A cena ou mensagem mudou depois desta miniatura; ajuste a arte para a decisão atual.')
             if not body.confirm_small_size_checked or len(body.note.strip())<12:
                 raise HTTPException(422,'Confira a miniatura em 320×180 e 168×94 e descreva o que verificou (mínimo 12 caracteres).')
             if (row['evaluation'] or {}).get('needs_text_confirmation') and not body.confirm_text_matches:
                 raise HTTPException(422,'A leitura automática do texto foi inconclusiva: confirme que o texto está exatamente como no briefing.')
+            from .editorial import for_channel,require
+            policy=for_channel(c,row['channel_id'])
+            text=((row['evaluation'] or {}).get('readings') or {}).get('full')
+            if text is None and not body.confirm_text_matches:raise HTTPException(422,'Confira o texto real da imagem antes de aprovar.')
+            result=require({'thumbnail':text['text'] if text else expected_text(row['spec'])},policy,reviewed=body.confirm_language_checked)
         identity=getattr(request.state,'identity',None) or {}
         review={'approved':body.approve,'sha256':body.sha256,'by':str(identity.get('email') or identity.get('user_id') or 'unknown')[:200],
-                'note':body.note.strip(),'text_confirmed_by_person':body.confirm_text_matches}
+                'note':body.note.strip(),'text_confirmed_by_person':body.confirm_text_matches,
+                'editorial_review':result if body.approve else None}
         if body.approve:c.execute("UPDATE workshop_thumbnails SET state='rejected',updated_at=now() WHERE project_id=%s AND state='approved' AND id<>%s",(pid,tid))
-        c.execute('UPDATE workshop_thumbnails SET state=%s,review=%s::jsonb,updated_at=now() WHERE id=%s',('approved' if body.approve else 'rejected',json.dumps(review),tid))
+        c.execute('UPDATE workshop_thumbnails SET state=%s,review=%s::jsonb,brief_sha256=%s,updated_at=now() WHERE id=%s',
+                  ('approved' if body.approve else 'rejected',json.dumps(review),brief['sha256'] if body.approve else row['brief_sha256'],tid))
         audit(c,'THUMBNAIL_REVIEWED',str(tid),json.dumps({'approved':body.approve,'sha256':body.sha256}));c.commit()
     return {'approved':body.approve}
 
 
 def approved_for_project(c,project_id):
-    if not c.execute("SELECT to_regclass('workshop_thumbnails') t").fetchone()['t']:return None
-    return c.execute("SELECT key,sha256 FROM workshop_thumbnails WHERE project_id=%s AND state='approved' ORDER BY updated_at DESC LIMIT 1",(project_id,)).fetchone()
+    from .episode_brief import latest_data
+    brief=latest_data(c,project_id)
+    exists=c.execute("SELECT to_regclass('workshop_thumbnails') t").fetchone()['t']
+    row=c.execute("SELECT * FROM workshop_thumbnails WHERE project_id=%s AND state='approved' ORDER BY updated_at DESC LIMIT 1",(project_id,)).fetchone() if exists else None
+    if not row:
+        if brief and brief.get('thumbnail'):raise HTTPException(409,'A miniatura decidida no briefing ainda não foi aprovada. Não será substituída silenciosamente por uma capa padrão.')
+        return None
+    from .episode_brief import same_direction,thumbnail_direction
+    if not brief or not same_direction(c,project_id,row['brief_sha256'],brief,thumbnail_direction):
+        raise HTTPException(409,'O briefing de apresentação mudou depois da aprovação da miniatura. Revise antes de publicar.')
+    from .workshop_api import project
+    from .visual_workshop import Draft
+    draft=Draft.model_validate(project(c,project_id)['data'])
+    base=c.execute('SELECT data FROM visual_media WHERE id=%s AND project_id=%s',(draft.base.image_id,project_id)).fetchone() if draft.base.image_id else None
+    if not base or not base['data'].get('approved') or base['data'].get('sha256')!=row['base_image_sha256']:
+        raise HTTPException(409,'A arte-base mudou ou perdeu aprovação depois desta miniatura. Revise a identidade visual.')
+    from .editorial import for_channel,require
+    policy=for_channel(c,row['channel_id'])
+    prior=(row.get('review') or {}).get('editorial_review')
+    if not prior:raise HTTPException(409,'A miniatura precisa de revisão no contrato editorial atual.')
+    text=((row.get('evaluation') or {}).get('readings') or {}).get('full')
+    require({'thumbnail':text['text'] if text else expected_text(row['spec'])},policy,
+            reviewed=bool(prior.get('human_reviewed')),previous=prior)
+    return {'key':row['key'],'sha256':row['sha256']}
