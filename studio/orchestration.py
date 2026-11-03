@@ -24,7 +24,7 @@ AGENTS=[
      'produces':'Tema, cena e ações originais do episódio'},
     {'id':'identity','label':'Identidade visual do canal','kind':'harness','cost':'free','module':'studio/workshop_api.py (identity_profile_for_channel)',
      'produces':'Referências aprovadas vinculadas ao projeto'},
-    {'id':'sound_designer','label':'Plano de som do vídeo','kind':'ai_agent','cost':'free','module':'studio/sound_planner.py',
+    {'id':'sound_designer','label':'Plano de som do vídeo','kind':'ai_agent','cost':'paid','module':'studio/sound_planner.py',
      'produces':'Ambiência e efeitos com evidência da cena, aceitos por uma pessoa e gerados com o vídeo'},
     {'id':'visual_generator','label':'Gerador visual','kind':'ai_agent','cost':'paid','module':'studio/workshop_provider.py',
      'produces':'Imagem inicial, vídeo-base e clipes de ação'},

@@ -51,6 +51,7 @@ def test_paid_routes_declare_backend_spend_permission():
         ('productions', 'advance_now'),
         ('productions', 'resume'),
         ('workshop_api', 'generate'),
+        ('sound_planner', 'audio_check'),
     }
     guarded_handlers = {
         (route.endpoint.__module__.rsplit('.', 1)[-1], route.endpoint.__name__)

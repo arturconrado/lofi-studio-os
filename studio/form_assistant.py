@@ -99,8 +99,8 @@ SYSTEM=('You assist with creative audiovisual proposals, not operations. Return 
 MAX_ASSIST_RESERVATION=Decimal('.10')
 
 
-def bounded_json_call(request_id,channel_id,kind,meta,system,user,transform,result_key='result',label='Sugestão'):
-    """Quoted (<=US$0.10), durably reserved, single-attempt JSON completion.
+def bounded_json_call(request_id,channel_id,kind,meta,system,user,transform,result_key='result',label='Sugestão',*,quote_call=None,completion_call=None,ceiling=MAX_ASSIST_RESERVATION,model=MODEL):
+    """Quoted, durably reserved, single-attempt JSON completion (US$0.10 by default).
 
     A completed request_id is reused without provider work; failures never retry.
     Returns (result, reused, reported_cost).
@@ -117,15 +117,18 @@ def bounded_json_call(request_id,channel_id,kind,meta,system,user,transform,resu
     token=runtime.key()
     if not token:raise HTTPException(409,'Configure o serviço de sugestões nas configurações')
     try:
-        with httpx.Client(timeout=25) as client:
-            r=client.get('https://openrouter.ai/api/v1/models');r.raise_for_status()
-            m=next(x for x in r.json()['data'] if x['id']==MODEL)
-        prices=[Decimal(m['pricing'][k]) for k in ('prompt','completion')]
-        if any(not p.is_finite() or p<0 for p in prices):raise ValueError('Invalid price')
-        bound=prices[0]*Decimal(len(system)+len(user)+1500)+prices[1]*4000
-        reservation=max(Decimal('.01'),bound.quantize(Decimal('.01'),rounding=ROUND_CEILING))
-        if reservation>MAX_ASSIST_RESERVATION:raise ValueError('Quote exceeds cap')
-    except Exception:raise HTTPException(409,'Cotação indisponível ou acima de US$0,10; nenhum pedido pago enviado') from None
+        if quote_call:
+            reservation=Decimal(str(quote_call()))
+        else:
+            with httpx.Client(timeout=25) as client:
+                r=client.get('https://openrouter.ai/api/v1/models');r.raise_for_status()
+                m=next(x for x in r.json()['data'] if x['id']==MODEL)
+            prices=[Decimal(m['pricing'][k]) for k in ('prompt','completion')]
+            if any(not p.is_finite() or p<0 for p in prices):raise ValueError('Invalid price')
+            bound=prices[0]*Decimal(len(system)+len(user)+1500)+prices[1]*4000
+            reservation=max(Decimal('.01'),bound.quantize(Decimal('.01'),rounding=ROUND_CEILING))
+        if not reservation.is_finite() or not 0<reservation<=Decimal(str(ceiling))<=Decimal('.20'):raise ValueError('Quote exceeds cap')
+    except Exception:raise HTTPException(409,f'Cotação indisponível ou acima de US${ceiling}; nenhum pedido pago enviado') from None
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(192837467)')
         if c.execute('SELECT 1 FROM factory_tasks WHERE id=%s',(request_id,)).fetchone():raise HTTPException(409,'Pedido já registrado')
@@ -137,12 +140,17 @@ def bounded_json_call(request_id,channel_id,kind,meta,system,user,transform,resu
                 if budget and project_generation_usage(c,meta['project_id'])+reservation>budget['limit_usd']:
                     raise HTTPException(409,'O teto deste projeto não cobre a apresentação. Nenhum pedido foi enviado.')
         check_available(c,reservation)
-        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'RUNNING',%s)",(request_id,kind,MODEL,json.dumps({'channel_id':str(channel_id),**meta}),reservation,label+'; nenhuma produção autorizada'));c.commit()
+        c.execute("INSERT INTO factory_tasks(id,kind,model,payload,reserved_cost,status,detail) VALUES(%s,%s,%s,%s,%s,'RUNNING',%s)",(request_id,kind,model,json.dumps({'channel_id':str(channel_id),**meta}),reservation,label+'; nenhuma produção autorizada'));c.commit()
     try:
-        with httpx.Client(timeout=90) as client:
-            r=client.post('https://openrouter.ai/api/v1/chat/completions',headers={'Authorization':'Bearer '+token,'X-Title':'Lo-Fi Studio field assistant'},json={'model':MODEL,'max_tokens':4000,'response_format':{'type':'json_object'},'provider':{'allow_fallbacks':False},'messages':[{'role':'system','content':system},{'role':'user','content':user}]});r.raise_for_status();result=r.json()
-        value=transform(json.loads(result['choices'][0]['message']['content']))
-        payload={result_key:value,'actual_cost_usd':result.get('usage',{}).get('cost')}
+        if completion_call:
+            raw,cost=completion_call()
+            if isinstance(cost,Decimal):cost=str(cost)
+        else:
+            with httpx.Client(timeout=90) as client:
+                r=client.post('https://openrouter.ai/api/v1/chat/completions',headers={'Authorization':'Bearer '+token,'X-Title':'Lo-Fi Studio field assistant'},json={'model':MODEL,'max_tokens':4000,'response_format':{'type':'json_object'},'provider':{'allow_fallbacks':False},'messages':[{'role':'system','content':system},{'role':'user','content':user}]});r.raise_for_status();result=r.json()
+            raw=json.loads(result['choices'][0]['message']['content']);cost=result.get('usage',{}).get('cost')
+        value=transform(raw)
+        payload={result_key:value,'actual_cost_usd':cost}
         with db() as c:
             c.execute("UPDATE factory_tasks SET status='COMPLETED',actual_cost=COALESCE(actual_cost,%s),payload=payload||%s::jsonb,detail=%s,updated_at=now() WHERE id=%s",(payload['actual_cost_usd'],json.dumps(payload,ensure_ascii=False),label+' pronta para revisão',request_id));audit(c,kind.upper()+'_CREATED',str(request_id),json.dumps(meta,ensure_ascii=False)[:200]);c.commit()
         return value,False,payload['actual_cost_usd']
