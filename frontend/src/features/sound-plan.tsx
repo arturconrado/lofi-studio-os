@@ -15,7 +15,7 @@ export function SoundPlanPanel({ projectId, revision, media, onApplied }: { proj
   const [notes, setNotes] = useState<Record<string, string>>({});
   const plan = res.data?.plan;
   const propose = async () => {
-    const r = await attempt(() => post(`${base}/sound-plan`, { request_id: crypto.randomUUID(), use_image: useImage, confirm_cost: useImage, max_usd: useImage ? 0.05 : 0 }), 'Plano de som proposto; nada foi gerado');
+    const r = await attempt(() => post(`${base}/sound-plan`, { request_id: crypto.randomUUID(), use_image: useImage, confirm_cost: useImage, max_usd: useImage ? 0.20 : 0 }), 'Plano de som proposto; nada foi gerado');
     if (r) { setContinuous(r.plan.continuous.map((_: any, i: number) => i)); setEffects(r.plan.effects.map((e: any) => e.clip_id)); res.reload(); }
   };
   const apply = async () => {
@@ -23,12 +23,12 @@ export function SoundPlanPanel({ projectId, revision, media, onApplied }: { proj
     if (r) { setImpact(r.impact); onApplied(); }
   };
   const generated = Object.entries(media || {}).filter(([, a]: any) => a.kind === 'video' && a.audio_stream);
-  const check = async (aid: string) => { if (await attempt(() => post(`${base}/media/${aid}/audio-check`, { confirm_cost: true }), 'Áudio conferido')) onApplied(); };
+  const check = async (aid: string) => { if (await attempt(() => post(`${base}/media/${aid}/audio-check`, { request_id: crypto.randomUUID(), confirm_cost: true, max_usd: 0.20 }), 'Áudio conferido')) onApplied(); };
   const accept = async (aid: string) => { if (await attempt(() => post(`${base}/media/${aid}/audio-check/accept`, { confirm_listened: true, note: notes[aid] || '' }), 'Áudio aceito após escuta')) onApplied(); };
   return <section class="card stack" aria-labelledby="sound-plan-title">
     <h2 id="sound-plan-title">Som deste vídeo</h2>
     <p class="faint">O estúdio lê a cena, o ambiente e as ações deste episódio para propor a ambiência e os efeitos. O som é gerado junto com o vídeo depois que você aceitar.</p>
-    <Check checked={useImage} onChange={setUseImage} hint="Leitura da imagem-base aprovada pelo avaliador visual (custo de centavos)">Ler também a imagem aprovada (alguns centavos)</Check>
+    <Check checked={useImage} onChange={setUseImage} hint="Reserva conservadora; o custo confirmado é conciliado no orçamento do projeto">Ler também a imagem aprovada (até US$ 0,20)</Check>
     <button class="btn secondary" style={{ alignSelf: 'flex-start' }} onClick={propose}>{plan ? 'Ler o ambiente de novo' : 'Ler o ambiente e propor o som'}</button>
     {res.data?.stale && <div class="notice warn">O projeto mudou depois deste plano; leia o ambiente de novo.</div>}
     {plan && <div class="stack">
@@ -46,7 +46,7 @@ export function SoundPlanPanel({ projectId, revision, media, onApplied }: { proj
     {generated.length > 0 && <div class="stack"><b>Áudio gerado</b>{generated.map(([aid, a]: any) => <div class="card flat stack">
       <span>{a.audio_request || 'som gerado'}</span>
       {a.audio_check ? <small>{a.audio_check.flagged ? 'Alerta' : 'Sem alerta'}: {a.audio_check.heard}{a.audio_check.contains_music ? ' · música' : ''}{a.audio_check.contains_speech_or_singing ? ' · fala/canto' : ''}{!a.audio_check.matches_request ? ' · diferente do pedido' : ''}</small>
-        : <button class="btn ghost sm" style={{ alignSelf: 'flex-start' }} onClick={() => check(aid)}>Conferir o áudio (centavos)</button>}
+        : <button class="btn ghost sm" style={{ alignSelf: 'flex-start' }} onClick={() => check(aid)}>Conferir o áudio (reserva de até US$ 0,20)</button>}
       {a.audio_check?.flagged && !a.audio_check_accepted && <><Field label="O que você ouviu"><input class="input" value={notes[aid] || ''} onInput={e => setNotes(n => ({ ...n, [aid]: (e.target as HTMLInputElement).value }))} /></Field>
         <button class="btn ghost sm" style={{ alignSelf: 'flex-start' }} onClick={() => accept(aid)}>Ouvi e aceito este áudio</button></>}
     </div>)}</div>}

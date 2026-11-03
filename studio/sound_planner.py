@@ -9,14 +9,16 @@ generation, the same model can listen to a clip and report music, speech or a mi
 evidence for the listening review, and a flagged clip blocks the render until a person decides.
 """
 import base64,hashlib,io,json,os,re,subprocess,tempfile,uuid
-from decimal import Decimal
+from decimal import Decimal,ROUND_CEILING
 import httpx
-from fastapi import APIRouter,HTTPException,Request
+from fastapi import APIRouter,Depends,HTTPException,Request
 from pydantic import BaseModel,ConfigDict,Field
 from .core import db,audit,ensure_once,storage
+from .permissions import require_spend_permission
 
 router=APIRouter(prefix='/workshop')
 MODEL='google/gemini-2.5-flash-lite'   # the studio's vision reviewer; also accepts audio input
+KIND='sound_review_20261102'
 AVOID=['music','speech','singing','voices']
 
 # Environment words (pt/en) → a continuous ambience; the matched word is quoted as evidence.
@@ -103,7 +105,40 @@ def vision_quote():
         r=client.get(BASE+'/models');r.raise_for_status()
     m=next(x for x in r.json()['data'] if x['id']==MODEL)
     p={k:Decimal(str(m['pricing'].get(k) or 0)) for k in ('prompt','completion','image','request','audio')}
+    if any(not v.is_finite() or v<0 for v in p.values()):raise ValueError('Invalid reviewer price')
     return p
+
+
+def review_quote(content,system):
+    prices=vision_quote()
+    text=system+''.join(p['text'] for p in content if p['type']=='text')
+    bound=prices['prompt']*(len(text.encode('utf-8'))+1500)+prices['completion']*800+prices['request']
+    for part in content:
+        if part['type']=='image_url':
+            from PIL import Image
+            raw=base64.b64decode(part['image_url']['url'].split(',',1)[1])
+            with Image.open(io.BytesIO(raw)) as image:bound+=prices['prompt']*image.width*image.height+prices['image']
+        elif part['type']=='input_audio':
+            # Reserve against the entire encoded sample, not an assumed audio-token compression ratio.
+            raw=base64.b64decode(part['input_audio']['data'])
+            bound+=(prices['audio'] or prices['prompt'])*len(raw)
+    return max(Decimal('.01'),bound.quantize(Decimal('.01'),rounding=ROUND_CEILING))
+
+
+def paid_review(request_id,row,draft,content,system,max_usd,operation,asset_sha256):
+    from .form_assistant import bounded_json_call
+    from .workshop_api import project_recipe,identity_profile_for_channel
+    from .orchestration import resolved_direction,remember
+    with db() as c:
+        recipe=project_recipe(c,row,draft) if draft.recipe_id else None
+        direction=resolved_direction(c,row,draft,recipe,identity_profile_for_channel(c,row['channel_id']))
+        remember(c,row,direction)
+    meta={'project_id':str(row['id']),'operation':operation,'direction_sha256':direction['sha256'],
+          'input_sha256':digest({'content':content,'system':system}),'asset_sha256':asset_sha256}
+    value,_,cost=bounded_json_call(request_id,row['channel_id'],KIND,meta,system,'',lambda raw:raw,
+        label='Conferência sonora',quote_call=lambda:review_quote(content,system),
+        completion_call=lambda:call(content,system),ceiling=max_usd,model=MODEL)
+    return value,cost
 
 
 def call(content,system):
@@ -119,14 +154,14 @@ def call(content,system):
     return json.loads(raw['choices'][0]['message']['content']),provider_usage_cost(raw.get('usage'))
 
 
-def from_image(draft,image_bytes,brief=None):
+def from_image(draft,image_bytes,brief=None,*,send):
     ids={str(c.id):c.name for c in draft.clips}
     context={'scene':draft.scene,'environment_motion':draft.scene_motion,'theme':draft.theme,
              'actions':[{'clip_id':str(c.id),'name':c.name,'motion':c.motion} for c in draft.clips],
              'episode_concept':(brief or {}).get('original_concept')}
-    content=[{'type':'text','text':json.dumps(context,ensure_ascii=False)},
-             {'type':'image_url','image_url':{'url':'data:image/png;base64,'+base64.b64encode(image_bytes).decode()}}]
-    data,cost=call(content,VISION_SYSTEM)
+    from .semantic_review import picture
+    content=[{'type':'text','text':json.dumps(context,ensure_ascii=False)},picture(image_bytes)]
+    data,cost=send(content,VISION_SYSTEM)
     continuous=[{'sound':str(i['sound'])[:120],'evidence':'imagem: '+str(i['evidence'])[:200],'source':'image'}
                 for i in (data.get('continuous') or [])[:3] if isinstance(i,dict) and i.get('sound') and i.get('evidence')]
     effects=[{'clip_id':str(i['clip_id']),'clip':ids[str(i['clip_id'])],'sound':str(i['sound'])[:120],'evidence':'imagem/ação: '+str(i['evidence'])[:200],'source':'image'}
@@ -156,7 +191,10 @@ def _actor(request):
 
 def _object(key):
     obj=storage().get_object(Bucket=os.environ['S3_BUCKET'],Key=key)
-    try:return obj['Body'].read(25*1024*1024)
+    try:
+        raw=obj['Body'].read(64*1024*1024+1)
+        if len(raw)>64*1024*1024:raise HTTPException(409,'O ativo excede o limite de conferência.')
+        return raw
     finally:obj['Body'].close()
 
 
@@ -166,11 +204,15 @@ def plan(pid:uuid.UUID,body:PlanRequest,request:Request):
     from .workshop_api import project,assets,digest as draft_digest
     from .visual_workshop import Draft
     from .episode_brief import latest_data
+    if body.use_image:require_spend_permission(request)
     ready()
     with db() as c:
+        row=project(c,pid)
         old=c.execute('SELECT * FROM sound_plans WHERE id=%s',(body.request_id,)).fetchone()
-        if old:return public(old)
-        row=project(c,pid);draft=Draft.model_validate(row['data']);media=assets(c,pid);brief=latest_data(c,pid)
+        if old:
+            if old['project_id']!=pid or ('image' in old['source'])!=body.use_image:raise HTTPException(409,'Identificador já utilizado em outro pedido.')
+            return public(old)
+        draft=Draft.model_validate(row['data']);media=assets(c,pid);brief=latest_data(c,pid)
         from .workshop_api import project_recipe
         recipe=project_recipe(c,row,draft) if draft.recipe_id else None
     base=media.get(str(draft.base.image_id)) if draft.base.image_id else None
@@ -179,13 +221,8 @@ def plan(pid:uuid.UUID,body:PlanRequest,request:Request):
         if not base or not base.get('approved') or base.get('review_sha256')!=base.get('sha256'):
             raise HTTPException(409,'Aprove a imagem-base antes de pedir a leitura do ambiente pela imagem.')
         if not body.confirm_cost:raise HTTPException(422,'Confirme o custo da leitura da imagem.')
-        try:prices=vision_quote()
-        except Exception:raise HTTPException(409,'Cotação do avaliador indisponível; nada foi enviado.') from None
-        estimate=prices['prompt']*3000+prices['completion']*800+prices['image']+prices['request']
-        if estimate>body.max_usd:raise HTTPException(409,f'A leitura custa até US$ {estimate:.4f}, acima do teto confirmado.')
-        from .financial import check_available
-        with db() as c:check_available(c,estimate)
-        try:image_continuous,image_effects,cost=from_image(draft,_object(base['key']),brief)
+        try:image_continuous,image_effects,cost=from_image(draft,_object(base['key']),brief,
+            send=lambda content,system:paid_review(body.request_id,row,draft,content,system,body.max_usd,'sound_plan',base['sha256']))
         except HTTPException:raise
         except Exception:raise HTTPException(502,'A leitura da imagem falhou; o plano por texto continua disponível.') from None
         continuous=merge(continuous,image_continuous);effects=merge(effects,[e for e in image_effects if e['clip_id'] not in {x['clip_id'] for x in effects}]);source='text+image'
@@ -264,17 +301,20 @@ AUDIO_SYSTEM=('You check one short generated audio track against a sound request
 
 class AudioCheck(BaseModel):
     model_config=ConfigDict(extra='forbid')
+    request_id:uuid.UUID
     confirm_cost:bool=False
+    max_usd:Decimal=Field(default=Decimal('.20'),gt=0,le=Decimal('.20'))
 
 
-@router.post('/projects/{pid}/media/{aid}/audio-check')
+@router.post('/projects/{pid}/media/{aid}/audio-check',dependencies=[Depends(require_spend_permission)])
 def audio_check(pid:uuid.UUID,aid:uuid.UUID,body:AudioCheck):
     """Listen to a generated clip's audio and report music, speech or a mismatch with the requested sound."""
     from .workshop_api import project,assets
+    from .visual_workshop import Draft
     ready()
     if not body.confirm_cost:raise HTTPException(422,'Confirme o custo da conferência do áudio.')
     with db() as c:
-        project(c,pid);asset=assets(c,pid).get(str(aid))
+        row=project(c,pid);draft=Draft.model_validate(row['data']);asset=assets(c,pid).get(str(aid))
     if not asset or asset.get('kind')!='video' or not asset.get('audio_stream'):raise HTTPException(409,'Este vídeo não tem áudio gerado para conferir.')
     with tempfile.TemporaryDirectory() as folder:
         video=os.path.join(folder,'clip.mp4');wav=os.path.join(folder,'clip.wav')
@@ -284,7 +324,7 @@ def audio_check(pid:uuid.UUID,aid:uuid.UUID,body:AudioCheck):
         audio=base64.b64encode(open(wav,'rb').read()).decode()
     content=[{'type':'text','text':'Requested sound: '+(asset.get('audio_request') or '(none)')},
              {'type':'input_audio','input_audio':{'data':audio,'format':'wav'}}]
-    try:data,cost=call(content,AUDIO_SYSTEM)
+    try:data,cost=paid_review(body.request_id,row,draft,content,AUDIO_SYSTEM,body.max_usd,'audio_check',asset['sha256'])
     except HTTPException:raise
     except Exception:raise HTTPException(502,'A conferência do áudio falhou; a escuta humana continua obrigatória.') from None
     result={k:bool(data.get(k)) for k in ('contains_music','contains_speech_or_singing','matches_request')}|{'heard':str(data.get('heard') or '')[:300],

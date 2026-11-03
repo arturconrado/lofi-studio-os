@@ -178,3 +178,10 @@ Limites declarados: o áudio gerado pelo Veo pode conter música ou fala apesar 
 | Uma vinheta única por canal, com características próprias | **Implementado e testado** | `studio/channel_vignette.py`. Definição versionada por canal: conceito, motivo visual, assinatura sonora, 4, 6 ou 8 s e nome opcional. Gerada pelo Veo com áudio, partindo do still de identidade aprovado do canal, com cotação pelo preço com áudio, confirmação e envio único. |
 | Não repetir a abertura de outro canal | **Implementado e testado** | Assinatura de quadros (average hash em três pontos) comparada com as vinhetas aprovadas dos outros canais do workspace. Uma vinheta parecida demais fica "too_similar" e não pode ser aprovada. Sem áudio, também não. |
 | Aprovação e uso por vídeo | **Implementado e testado** | Aprovação humana presa aos bytes e à definição atual, depois de assistir e ouvir. O briefing escolhe "vinheta do canal"; sem vinheta aprovada, a montagem e o plano de agentes acusam o bloqueio antes de qualquer custo. A montagem coloca a vinheta antes do programa, normalizando resolução, fps e áudio. A união é feita por cópia de streams, com conferência de decodificação na junção; se falhar, há recodificação. O arquivo final é verificado e a tracklist e os capítulos são deslocados, com o primeiro capítulo em 0:00. |
+
+### Correções da revisão do PR #109
+
+- Leitura paga de imagem e conferência de áudio exigem permissão de gasto; o plano gratuito por texto permanece disponível ao criador.
+- As duas leituras usam a reserva durável compartilhada, respeitam saldo global e teto do projeto, conciliam o custo confirmado e registram modelo, mídia e `direction_sha256`.
+- O mesmo identificador reaproveita o resultado. Falha de resultado incerto mantém a reserva e bloqueia reenvio automático; a interface envia o identificador e confirma o teto conservador de US$ 0,20.
+- Testes cobrem permissões reais da API, conciliação, reaproveitamento, geração desativada, saldo global, orçamento do projeto e resultado incerto. Provedores simulados; sem geração paga nem implantação nesta correção.
