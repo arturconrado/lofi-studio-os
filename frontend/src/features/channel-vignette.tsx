@@ -7,7 +7,7 @@ import { Check, Field, Pill } from '../ds/ui';
 /* The channel's own opening vignette: defined once, generated with sound, unique across channels, approved before use. */
 const EMPTY = { concept: '', visual_motif: '', sound_signature: '', seconds: 4, include_channel_name: false, name_text: '' };
 const STATES: Record<string, [string, string]> = { approved: ['ok', 'Aprovada'], review_required: ['warn', 'Aguardando você'], generating: ['info', 'Gerando'],
-  failed: ['bad', 'Sem áudio'], too_similar: ['bad', 'Parecida com a de outro canal'], rejected: ['', 'Reprovada'], superseded: ['', 'Substituída'] };
+  failed: ['bad', 'Falha na geração ou conferência'], too_similar: ['bad', 'Parecida com a de outro canal'], rejected: ['', 'Reprovada'], superseded: ['', 'Substituída'] };
 
 export function ChannelVignette({ cid }: { cid: string }) {
   const base = `/api/creator/workshop/channels/${cid}`;

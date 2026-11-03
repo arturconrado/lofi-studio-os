@@ -232,7 +232,11 @@ def refresh(tid):
                             if state['status'] == 'cancelled' else
                             'O pedido original terminou no provedor (' + state['status'] + '); a reserva permanece registrada até conciliar a cobrança.')
                 c.execute("UPDATE factory_tasks SET status='FAILED',actual_cost=COALESCE(actual_cost,%s),payload=%s,detail=%s,updated_at=now() WHERE id=%s",
-                          (actual,json.dumps(p, ensure_ascii=False), detail, tid)); c.commit(); return
+                          (actual,json.dumps(p, ensure_ascii=False), detail, tid))
+                if p.get('operation')=='vignette':
+                    from .channel_vignette import fail_vignette
+                    fail_vignette(c,tid)
+                c.commit(); return
             if state['status'] != 'completed': return
             if state.get('usage') is not None:
                 p['provider_usage']=state['usage']
